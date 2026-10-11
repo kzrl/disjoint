@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{if .PageTitle}}{{.PageTitle}} - {{end}}Disjoint</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/bulma.min.css">
+  <link rel="stylesheet" href="/static/disjoint.css">
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
@@ -19,13 +20,13 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
             <strong>{{.CurrentUser.Username}}</strong>
           </span>
-          <a href="/boards/new" class="btn btn-secondary btn-sm">+ New Board</a>
-          {{if .CurrentUser.IsAdmin}}<a href="/invites" class="btn btn-secondary btn-sm">Invites</a><a href="/admin/users" class="btn btn-secondary btn-sm">Users</a>{{end}}
-          <form method="POST" action="/logout" style="display:inline;">
-            <button type="submit" class="btn btn-secondary btn-sm">Sign Out</button>
+          <a href="/boards/new" class="button is-light is-small">+ New Board</a>
+          {{if .CurrentUser.IsAdmin}}<a href="/invites" class="button is-light is-small">Invites</a><a href="/admin/users" class="button is-light is-small">Users</a>{{end}}
+          <form method="POST" action="/logout">
+            <button type="submit" class="button is-light is-small">Sign Out</button>
           </form>
         {{else}}
-          <a href="/login" class="btn btn-secondary btn-sm">Sign In</a>
+          <a href="/login" class="button is-light is-small">Sign In</a>
         {{end}}
       </div>
     </div>
@@ -33,10 +34,10 @@
 
   <main class="container">
     {{if .FlashError}}
-      <div class="flash-msg error">{{.FlashError}}</div>
+      <div class="notification is-light is-danger">{{.FlashError}}</div>
     {{end}}
     {{if .FlashSuccess}}
-      <div class="flash-msg success">{{.FlashSuccess}}</div>
+      <div class="notification is-light is-success">{{.FlashSuccess}}</div>
     {{end}}
 
     {{template "content" .}}

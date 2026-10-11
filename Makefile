@@ -1,6 +1,8 @@
-.PHONY: all build run test test-race generate fmt vet lint docker-build docker-up docker-down clean help
+.PHONY: all build run test test-race generate fmt vet lint docker-build docker-up docker-down clean help css
 
 BIN_DIR ?= bin
+# Local Bulma checkout used by `make css` (see below).
+BULMA_DIR ?= $(HOME)/src/bulma
 BIN_NAME ?= disjoint
 BINARY := $(BIN_DIR)/$(BIN_NAME)
 MAIN_PKG := ./cmd/disjoint
@@ -30,6 +32,16 @@ test-race:
 ## generate: Regenerate sqlc Go code from db/schema.sql and query.sql
 generate:
 	sqlc generate
+
+## css: Re-vendor Bulma from BULMA_DIR and regenerate web/static/disjoint.css
+##      (dark-first theme override + web/css/site.css). Bump BULMA_DIR when
+##      upgrading Bulma; the vendored copy is the only one the app uses.
+css:
+	@cp "$(BULMA_DIR)/css/bulma.min.css" web/static/bulma.min.css
+	@cp "$(BULMA_DIR)/LICENSE" web/static/bulma-LICENSE
+	@sh web/css/gen-theme.sh "$(BULMA_DIR)/css/bulma.css" > /tmp/disjoint-theme.css
+	@cat /tmp/disjoint-theme.css web/css/site.css > web/static/disjoint.css
+	@echo "Regenerated web/static/disjoint.css ($(BULMA_DIR)/css + web/css/site.css)"
 
 # DB migrations are managed by goose (db/migrations/, single-file format with
 # "-- +goose Up"/"-- +goose Down"). db/schema.sql is the cumulative schema snapshot

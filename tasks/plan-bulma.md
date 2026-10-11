@@ -25,11 +25,24 @@ Copy `~/src/bulma/css/bulma.min.css` into `web/static/bulma.min.css` and vendor 
 - Add a `make css` target that re-copies `~/src/bulma/css/bulma.min.css` → `web/static/bulma.min.css` so upgrades are one command.
 - **Fallback (only if re-tinting proves insufficient):** a `make css` sass compile with `$primary` overridden, committing the generated CSS. Bulma's SCSS `@use "bulma" with (...)` path is the escape hatch, not the default.
 
-### 2. Default scheme: accept Bulma's light-first, dark-on-preference
-Accept Bulma's native direction (light by default; dark when the browser prefers dark). Rationale: it's the framework's first-class behavior, requires zero extra CSS, and the app is a self-hosted personal tool where either default is fine. If the dark-first default is wanted later, it's a one-line `html { color-scheme: dark }`-level experiment or a forced `[data-theme]` — out of scope now. Flag this to the user as the one visible behavior change.
+### 2. Default scheme: dark-first (user decision)
+Keep the current site's behavior: **dark by default, light only when the OS prefers light**.
+Mechanism (plain CSS, no sass): the precompiled `bulma.css` structure is base `:root` (light vars) + `@media (prefers-color-scheme: light)` (light vars) + `@media (prefers-color-scheme: dark)` (dark vars). In `disjoint.css` (loaded after Bulma):
+- copy the **dark** theme variable block verbatim into a plain `:root` (with `color-scheme: dark`) — makes dark the default;
+- copy the **light** block verbatim into `@media (prefers-color-scheme: light) { :root { … } }` (with `color-scheme: light`).
+Both blocks are extracted from `css/bulma.css` at vendor time (scripted in `make css`) and must stay in sync with the vendored min file.
 
-### 3. Re-tint primary to blue via CSS variables, no sass
-In the site stylesheet: `:root { --bulma-primary: hsl(217, 91%, 60%); }` (hover/bold variants are separate `--bulma-primary-*` variables; verify in-browser that button hover still reads as blue, and if a derived shade stays teal, override that specific variable too). Accept small risk of one or two off-family shades; escalate to the sass fallback only if it looks wrong.
+### 3. Re-tint primary to blue via the hue variables, no sass
+Every `--bulma-primary*` shade (base, light, dark, bold, invert, full 00–100 ladder) is computed from `--bulma-primary-h/-s/-l` (+ `--bulma-primary-rgb` for shadows), so one override re-tints the entire family — in both themes, since the override sits in a bare `:root` that loads after all of Bulma's theme blocks:
+```css
+:root {
+  --bulma-primary-h: 217deg;   /* blue, matching the old #3b82f6 accent */
+  --bulma-primary-s: 91%;
+  --bulma-primary-l: 56%;
+  --bulma-primary-rgb: 59, 130, 246;
+}
+```
+Links stay Bulma's default blue (`--bulma-link-h: 233deg`) — no change needed.
 
 ### 4. Layering: Bulma base → site override stylesheet
 `layout.html` loads `bulma.min.css` first, then the shrunk site stylesheet (rename `style.css` → `disjoint.css`). `disjoint.css` keeps only what Bulma cannot express for this app:
@@ -108,7 +121,7 @@ Inline `style=""` attributes across templates get removed in favor of these help
 - [ ] Task 13: Final. Full test suite, `go vet`, byte-size sanity check of the vendored CSS, commit history clean (suggested split: vendor/wire → per-page migrations → sweep/polish).
 
 ## Risks / Watch-outs
-1. **Light/dark default flip** (dark-first → light-first) is the one user-visible behavior change — confirm with the user before Task 2 (Decision 2).
+1. **Dark-first theme blocks are copied CSS** — the extracted light/dark variable blocks in `disjoint.css` must be regenerated together with the vendored min file (`make css` does both); hand-editing only one side desyncs the themes.
 2. **Primary re-tint incompleteness** — a few `--bulma-primary-*` derived shades may stay teal (button hover, link focus). Mitigation: override the specific variables; last resort is the sass fallback in Decision 1.
 3. **`.container` width change** — Bulma's containers are wider (up to 1344px) than the current 1080px cap; decide in Task 2 whether to keep Bulma's or cap it.
 4. **Tests** assert avatar markup strings; Decision 5 avoids touching them. If any other test snapshots HTML classes (check `internal/handlers/handlers_test.go` for `btn`/`form-`/`badge` assertions), update expectations in the same commit as the template change.
