@@ -1,0 +1,83 @@
+{{define "content"}}
+<div class="index-page">
+  <div class="breadcrumb">
+    <span>Home</span> &bull; <span>Board Index</span>
+  </div>
+
+  {{if .Online}}
+    <div class="on-air">
+      <span class="on-air-dot" aria-hidden="true"></span>
+      <span class="on-air-label">On the air:</span>
+      {{range .Online}}
+        <span class="on-air-user">{{userLink .Username}} <span class="on-air-since">{{formatRelative .LastSeenAt}}</span></span>
+      {{end}}
+    </div>
+  {{else}}
+    <div class="on-air on-air-empty">No one else is on the air</div>
+  {{end}}
+
+  {{range .Categories}}
+    <section class="forum-section">
+      <div class="section-header">
+        <h2 class="section-title">{{.Category.Name}}</h2>
+      </div>
+      <div class="board-list">
+        {{range .Boards}}
+          <div class="board-row">
+            <div class="board-main">
+              <div class="board-title">
+                {{if .IsUnread}}
+                  <span class="badge badge-unread">NEW</span>
+                {{end}}
+                <a href="/boards/{{.Board.ID}}">{{.Board.Name}}</a>
+              </div>
+              {{if .Board.Description.Valid}}
+                <div class="board-desc">{{.Board.Description.String}}</div>
+              {{end}}
+            </div>
+            <div class="board-stats">
+              <div><span class="stats-number">{{.ThreadCount}}</span> threads</div>
+              <div><span class="stats-number">{{.PostCount}}</span> posts</div>
+            </div>
+            <div class="board-latest">
+              {{if .LatestThread}}
+                <a href="/threads/{{.LatestThread.ID}}" class="latest-title" title="{{.LatestThread.Title}}">{{.LatestThread.Title}}</a>
+                <div>by <strong>{{authorLink .LatestThread.FirstPostAnonymous .LatestThread.AuthorUsername}}</strong> &bull; <time>{{formatRelative .LatestThread.UpdatedAt.Time}}</time></div>
+              {{else}}
+                <span class="text-dim">No threads yet</span>
+              {{end}}
+            </div>
+          </div>
+        {{else}}
+          <div style="padding: 16px; color: var(--text-dim); font-size: 13px;">No boards in this category yet.</div>
+        {{end}}
+      </div>
+    </section>
+  {{else}}
+    <div class="forum-section" style="padding: 24px; text-align: center;">
+      <p style="color: var(--text-muted); margin-bottom: 12px;">No categories configured yet.</p>
+      <a href="/boards/new" class="btn btn-primary">+ Create First Board</a>
+    </div>
+  {{end}}
+
+  <section class="forum-section">
+    <div class="section-header">
+      <h2 class="section-title">Recent activity</h2>
+    </div>
+    {{if .Activity}}
+      <ul class="activity-list">
+        {{range .Activity}}
+          <li>
+            {{authorLink .IsAnonymous .AuthorUsername}} posted in
+            <a href="/boards/{{.BoardID}}">{{.BoardName}}</a> &bull;
+            <a href="/threads/{{.ThreadID}}">{{.ThreadTitle}}</a>
+            <span class="activity-time">&middot; {{formatRelative .CreatedAt.Time}}</span>
+          </li>
+        {{end}}
+      </ul>
+    {{else}}
+      <p class="activity-empty">No activity yet</p>
+    {{end}}
+  </section>
+</div>
+{{end}}

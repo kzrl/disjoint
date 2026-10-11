@@ -1,0 +1,19 @@
+services:
+  disjoint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: disjoint
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_PATH=/data/disjoint.db
+      - UPLOAD_DIR=/data/uploads
+      - SESSION_SECRET=change-this-to-a-secure-random-secret-key
+    volumes:
+      - disjoint_data:/data
+
+volumes:
+  disjoint_data:

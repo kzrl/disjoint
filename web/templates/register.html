@@ -1,0 +1,31 @@
+{{define "content"}}
+<div class="auth-wrapper">
+  <div class="auth-header">
+    <h1>disjoint<span>_</span></h1>
+    <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Create your account</p>
+  </div>
+
+  <div class="form-panel">
+    <form method="POST" action="/register">
+      <input type="hidden" name="code" value="{{.Code}}">
+      <div class="form-group">
+        <label for="username" class="form-label">Username</label>
+        <input type="text" id="username" name="username" class="form-input" minlength="3" maxlength="32" required autofocus autocomplete="username">
+        <div class="form-hint">At least 3 characters.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" id="password" name="password" class="form-input" minlength="6" required autocomplete="new-password">
+        <div class="form-hint">At least 6 characters.</div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 8px;">Create Account</button>
+    </form>
+  </div>
+
+  <div style="text-align: center; font-size: 13px; color: var(--text-dim);">
+    Already have an account? <a href="/login">Sign in here</a>
+  </div>
+</div>
+{{end}}

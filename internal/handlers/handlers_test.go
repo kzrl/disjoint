@@ -1,0 +1,1974 @@
+package handlers_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"disjoint/internal/auth"
+	"disjoint/internal/database"
+	"disjoint/internal/handlers"
+	"disjoint/internal/worker"
+)
+
+func setupTestApp(t *testing.T) (*handlers.App, *sql.DB, *database.Queries, string) {
+	t.Helper()
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_disjoint.db")
+	uploadDir := filepath.Join(tempDir, "uploads")
+	sessionSecret := "test-secret-key-32-bytes-long!!"
+
+	db, queries, err := database.OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test db: %v", err)
+	}
+
+	app, err := handlers.NewApp(db, queries, uploadDir, sessionSecret)
+	if err != nil {
+		t.Fatalf("failed to create app: %v", err)
+	}
+
+	return app, db, queries, uploadDir
+}
+
+func TestFirstRunSetupAndAuthFlow(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+
+	router := app.Routes()
+
+	// 1. Initial request to / should redirect to /setup because no users exist
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect (303), got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/setup" {
+		t.Fatalf("expected redirect to /setup, got %s", loc)
+	}
+
+	// 2. GET /setup should return 200
+	req = httptest.NewRequest(http.MethodGet, "/setup", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET /setup to return 200, got %d", rr.Code)
+	}
+
+	// 3. POST /setup to create initial admin
+	form := url.Values{}
+	form.Set("username", "admin")
+	form.Set("password", "password123")
+	req = httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after setup, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/" {
+		t.Fatalf("expected redirect to /, got %s", loc)
+	}
+
+	// Extract session cookie
+	var sessionCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("expected session cookie after setup")
+	}
+
+	// 4. Access / with session cookie -> should return 200 OK
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(sessionCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET / with session to return 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "admin") {
+		t.Fatalf("expected rendered index page to contain username 'admin'")
+	}
+
+	// 5. Subsequent request to /setup should redirect to /login
+	req = httptest.NewRequest(http.MethodGet, "/setup", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("expected redirect to /login for /setup when users exist, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 6. Admin generates an invite code
+	req = httptest.NewRequest(http.MethodPost, "/invites", nil)
+	req.AddCookie(sessionCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/invites" {
+		t.Fatalf("expected redirect to /invites after creating invite, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// Retrieve created invite from database
+	invites, err := queries.ListInvites(context.Background())
+	if err != nil || len(invites) == 0 {
+		t.Fatalf("expected created invite in database, got err: %v", err)
+	}
+	inviteCode := invites[0].Code
+
+	// Test Registering a second user with invite code
+	form = url.Values{}
+	form.Set("username", "alice")
+	form.Set("password", "wonderland123")
+	form.Set("code", inviteCode)
+	req = httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected register redirect, got %d", rr.Code)
+	}
+
+	// Verify user exists in database
+	u, err := queries.GetUserByUsername(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("failed to find registered user in DB: %v", err)
+	}
+	if !auth.CheckPassword(u.PasswordHash, "wonderland123") {
+		t.Fatalf("password hash verification failed")
+	}
+
+	// 7. Test Login with incorrect password
+	form = url.Values{}
+	form.Set("username", "alice")
+	form.Set("password", "wrongpass")
+	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("expected redirect back to /login on wrong password, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 8. Test Login with correct password
+	form.Set("password", "wonderland123")
+	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected redirect to / on valid login, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+}
+
+func TestInviteSystem(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	ctx := context.Background()
+
+	// 1. Create Admin user
+	admin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "admin_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create admin user: %v", err)
+	}
+	_ = queries.SetUserAdmin(ctx, admin.ID)
+
+	// Create Non-Admin user
+	regularUser, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "regular_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create regular user: %v", err)
+	}
+
+	adminCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(admin.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	userCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(regularUser.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	// 2. Non-admin accessing /invites should be redirected to /
+	req := httptest.NewRequest(http.MethodGet, "/invites", nil)
+	req.AddCookie(userCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected non-admin GET /invites to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 3. Admin accessing /invites should get 200 OK
+	req = httptest.NewRequest(http.MethodGet, "/invites", nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected admin GET /invites to return 200 OK, got %d", rr.Code)
+	}
+
+	// 4. Admin creates an invite
+	req = httptest.NewRequest(http.MethodPost, "/invites", nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/invites" {
+		t.Fatalf("expected admin POST /invites to redirect to /invites, got %d", rr.Code)
+	}
+
+	invites, err := queries.ListInvites(ctx)
+	if err != nil || len(invites) != 1 {
+		t.Fatalf("expected 1 invite in database, got %d", len(invites))
+	}
+	inv := invites[0]
+
+	// 5. GET /register without code shows invite-closed page
+	req = httptest.NewRequest(http.MethodGet, "/register", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "invite-only") {
+		t.Fatalf("expected GET /register without code to display closed page")
+	}
+
+	// 6. GET /register with valid code shows registration page
+	req = httptest.NewRequest(http.MethodGet, "/register?code="+inv.Code, nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), inv.Code) {
+		t.Fatalf("expected GET /register?code to render register page with code")
+	}
+
+	// 7. Registering user with valid code consumes code
+	form := url.Values{}
+	form.Set("code", inv.Code)
+	form.Set("username", "newmember")
+	form.Set("password", "password123")
+	req = httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected successful registration redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 8. Re-using the same invite code should fail
+	form.Set("username", "anotheruser")
+	req = httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/register" {
+		t.Fatalf("expected failed registration with used code to redirect to /register, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 9. Admin deleting an unused invite
+	inv2, err := queries.CreateInvite(ctx, database.CreateInviteParams{Code: "tempcode999", CreatedBy: admin.ID})
+	if err != nil {
+		t.Fatalf("failed to create invite 2: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/invites/%d/delete", inv2.ID), nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/invites" {
+		t.Fatalf("expected delete invite redirect to /invites, got %d", rr.Code)
+	}
+
+	_, err = queries.GetInviteByCode(ctx, "tempcode999")
+	if err == nil {
+		t.Fatalf("expected deleted invite to no longer exist in DB")
+	}
+}
+
+func TestThreadCreationAndHTMXReply(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	// 1. Setup admin user
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("password123")
+	admin, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "bob",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	sessionSecret := "test-secret-key-32-bytes-long!!"
+	cookieToken := auth.CreateSessionToken(admin.ID, sessionSecret)
+	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: cookieToken, Path: "/"}
+
+	// 2. Fetch seeded board
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+
+	// 3. Create a thread with an attachment
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("title", "My First Discussion")
+	_ = w.WriteField("body", "Hello **world**, this is a test post with `code` formatting.")
+	_ = w.WriteField("expiration", "7d")
+
+	part, err := w.CreateFormFile("files", "test-image.jpg")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = part.Write([]byte("\xFF\xD8\xFF\xE0\x00\x10JFIFfakeimagedata"))
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/boards/"+strings.TrimSpace(string(rune('0'+boardID)))+"/threads/new", &b)
+	req.URL.Path = "/boards/" + strings.TrimSpace(string(rune('0'+boardID))) + "/threads/new"
+	// Use standard route matching
+	req = httptest.NewRequest(http.MethodPost, "/boards/1/threads/new", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/threads/") {
+		t.Fatalf("expected redirect to /threads/{id}, got %s", loc)
+	}
+
+	threadIDStr := strings.TrimPrefix(loc, "/threads/")
+
+	// 4. View thread
+	req = httptest.NewRequest(http.MethodGet, loc, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
+	}
+	bodyContent := rr.Body.String()
+	if !strings.Contains(bodyContent, "<strong>world</strong>") {
+		t.Fatalf("expected markdown bold tag in post body")
+	}
+	if !strings.Contains(bodyContent, "test-image.jpg") {
+		t.Fatalf("expected attachment filename in thread page")
+	}
+
+	// 5. Submit reply via HTMX
+	var replyBuf bytes.Buffer
+	rw := multipart.NewWriter(&replyBuf)
+	_ = rw.WriteField("body", "This is an **HTMX** live reply!")
+	_ = rw.Close()
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/"+threadIDStr+"/posts", &replyBuf)
+	req.Header.Set("Content-Type", rw.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected HTMX reply to return 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	replyResp := rr.Body.String()
+	if !strings.Contains(replyResp, "<strong>HTMX</strong> live reply!") {
+		t.Fatalf("expected rendered reply HTML snippet in HTMX response, got: %s", replyResp)
+	}
+	if !strings.Contains(replyResp, "bob") {
+		t.Fatalf("expected author username in HTMX post component")
+	}
+
+	// Verify uploads directory has the test-image file
+	entries, err := os.ReadDir(uploadDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected uploaded attachment file on disk, got %v", err)
+	}
+	storedFile := entries[0].Name()
+
+	// 6. Test media serving
+	req = httptest.NewRequest(http.MethodGet, "/uploads/"+storedFile, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected media serving to return 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Header().Get("Cache-Control"), "public") {
+		t.Fatalf("expected Cache-Control header on served upload")
+	}
+}
+
+func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
+	_, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create user
+	u, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "charlie",
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	boards, _ := queries.ListBoards(ctx)
+	boardID := boards[0].ID
+
+	// Create a thread that is already expired (expires_at in past)
+	pastTime := time.Now().UTC().Add(-1 * time.Hour).Round(0)
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID:   boardID,
+		UserID:    sql.NullInt64{Int64: u.ID, Valid: true},
+		Title:     "Expired Thread",
+		ExpiresAt: sql.NullTime{Time: pastTime, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("failed to create expired thread: %v", err)
+	}
+
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   sql.NullInt64{Int64: u.ID, Valid: true},
+		Body:     "This post should be purged.",
+	})
+	if err != nil {
+		t.Fatalf("failed to create post: %v", err)
+	}
+
+	// Create dummy attachment file on disk
+	_ = os.MkdirAll(uploadDir, 0755)
+	dummyFilename := "test-purged-file.png"
+	err = os.WriteFile(filepath.Join(uploadDir, dummyFilename), []byte("dummydata"), 0644)
+	if err != nil {
+		t.Fatalf("failed to create dummy file: %v", err)
+	}
+
+	_, err = queries.CreateAttachment(ctx, database.CreateAttachmentParams{
+		PostID:      post.ID,
+		Filename:    "userfile.png",
+		StoragePath: dummyFilename,
+		MimeType:    "image/png",
+		FileSize:    9,
+	})
+	if err != nil {
+		t.Fatalf("failed to create attachment: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(filepath.Join(uploadDir, dummyFilename)); os.IsNotExist(err) {
+		t.Fatalf("expected dummy file to exist before cleanup")
+	}
+
+	// Run cleanup worker
+	cleaner := worker.New(queries, uploadDir, 1*time.Minute)
+	if err := cleaner.CleanupOnce(ctx); err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+
+	// Verify thread is deleted from DB
+	_, err = queries.GetThreadByID(ctx, thread.ID)
+	if err == nil {
+		t.Fatalf("expected thread to be deleted from DB")
+	}
+
+	// Verify file is removed from disk
+	if _, err := os.Stat(filepath.Join(uploadDir, dummyFilename)); !os.IsNotExist(err) {
+		t.Fatalf("expected dummy file to be deleted from disk by worker")
+	}
+}
+
+func TestUnreadIndicators(t *testing.T) {
+	_, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create two users
+	u1, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "user1", PasswordHash: "h1"})
+	u2, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "user2", PasswordHash: "h2"})
+
+	boards, _ := queries.ListBoards(ctx)
+	board := boards[0]
+
+	// User2 marks board as read in the past
+	_, _ = db.Exec("INSERT INTO user_board_reads (user_id, board_id, last_read_at) VALUES (?, ?, datetime('now', '-1 minute'))", u2.ID, board.ID)
+
+	// User1 creates a new thread
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID:   board.ID,
+		UserID:    sql.NullInt64{Int64: u1.ID, Valid: true},
+		Title:     "New unread discussion",
+		ExpiresAt: sql.NullTime{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("failed to create thread: %v", err)
+	}
+	_, _ = queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   sql.NullInt64{Int64: u1.ID, Valid: true},
+		Body:     "Unread post content",
+	})
+
+	// Verify that user2 sees board as unread
+	boardDetails, err := queries.ListBoardsWithDetails(ctx)
+	if err != nil {
+		t.Fatalf("failed to query board details: %v", err)
+	}
+	var targetBoard *database.ListBoardsWithDetailsRow
+	for _, b := range boardDetails {
+		if b.ID == board.ID {
+			targetBoard = &b
+			break
+		}
+	}
+	if targetBoard == nil || targetBoard.LatestUpdatedAt == nil {
+		t.Fatalf("expected latest updated at for board")
+	}
+
+	read, err := queries.GetUserBoardRead(ctx, database.GetUserBoardReadParams{
+		UserID:  u2.ID,
+		BoardID: board.ID,
+	})
+	if err != nil || !read.Valid {
+		t.Fatalf("expected valid last read")
+	}
+
+	latestTime, ok := handlers.ParseTimestamp(targetBoard.LatestUpdatedAt)
+	if !ok {
+		t.Fatalf("failed to parse latest updated timestamp: %#v", targetBoard.LatestUpdatedAt)
+	}
+	if !latestTime.After(read.Time) {
+		t.Fatalf("expected latest updated time %v to be after last read time %v", latestTime, read.Time)
+	}
+}
+
+func TestCategoryAndBoardCreation(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	// Create user & auth cookie
+	ctx := context.Background()
+	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "moderator", PasswordHash: "hash"})
+	token := auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!")
+	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"}
+
+	// 1. Create Category via POST /categories/new
+	form := url.Values{}
+	form.Set("name", "Gaming & Hobbies")
+	form.Set("position", "5")
+	req := httptest.NewRequest(http.MethodPost, "/categories/new", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected redirect to / after category creation, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	cats, err := queries.ListCategories(ctx)
+	if err != nil || len(cats) < 3 {
+		t.Fatalf("expected at least 3 categories, got %d", len(cats))
+	}
+	var newCat database.Category
+	for _, c := range cats {
+		if c.Name == "Gaming & Hobbies" {
+			newCat = c
+			break
+		}
+	}
+	if newCat.ID == 0 {
+		t.Fatalf("category Gaming & Hobbies was not found in DB")
+	}
+
+	// 2. Create Board via POST /boards/new
+	bForm := url.Values{}
+	bForm.Set("category_id", strconv.FormatInt(newCat.ID, 10))
+	bForm.Set("name", "Retro Games")
+	bForm.Set("description", "Talk about NES, SNES, and retro arcade titles.")
+	req = httptest.NewRequest(http.MethodPost, "/boards/new", strings.NewReader(bForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after board creation, got %d", rr.Code)
+	}
+	newBoardLoc := rr.Header().Get("Location")
+	if !strings.HasPrefix(newBoardLoc, "/boards/") {
+		t.Fatalf("expected redirect to /boards/{id}, got %s", newBoardLoc)
+	}
+}
+
+func TestUnauthorizedHTMXRequest(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	// Ensure users exist so first-run doesn't catch it
+	_, _ = queries.CreateUser(context.Background(), database.CreateUserParams{Username: "existing", PasswordHash: "h"})
+
+	// Make an unauthenticated HTMX request
+	req := httptest.NewRequest(http.MethodPost, "/threads/1/posts", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated HTMX request, got %d", rr.Code)
+	}
+	if rr.Header().Get("HX-Redirect") != "/login" {
+		t.Fatalf("expected HX-Redirect header set to /login, got %s", rr.Header().Get("HX-Redirect"))
+	}
+}
+
+func TestStandardFormReplyFallback(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	ctx := context.Background()
+	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "dan", PasswordHash: "h"})
+	token := auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!")
+	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"}
+
+	boards, _ := queries.ListBoards(ctx)
+	thread, _ := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID:   boards[0].ID,
+		UserID:    sql.NullInt64{Int64: user.ID, Valid: true},
+		Title:     "Fallback Test",
+		ExpiresAt: sql.NullTime{Valid: false},
+	})
+
+	// Standard non-HTMX multipart form submit
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("body", "Standard reply without JS")
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", thread.ID), &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect for standard form reply, got %d", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, fmt.Sprintf("/threads/%d#post-", thread.ID)) {
+		t.Fatalf("expected redirect to thread anchoring to post, got %s", loc)
+	}
+}
+
+func TestAnonymousThreadCreation(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_tester", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+
+	newThread := func(anon bool) (threadID int64) {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("title", "Test Thread")
+		_ = w.WriteField("body", "Hello **world**.")
+		_ = w.WriteField("expiration", "7d")
+		if anon {
+			_ = w.WriteField("anonymous", "on")
+		}
+		_ = w.Close()
+
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+		}
+		loc := rr.Header().Get("Location")
+		idStr := strings.TrimPrefix(loc, "/threads/")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			t.Fatalf("expected redirect to /threads/{id}, got %s", loc)
+		}
+		return id
+	}
+
+	// 1. Create an anonymous thread
+	anonThreadID := newThread(true)
+
+	// Verify DB: post flagged anonymous and fully unlinked from its author
+	posts, err := queries.ListPostsByThread(ctx, anonThreadID)
+	if err != nil || len(posts) != 1 {
+		t.Fatalf("expected 1 post in anonymous thread, got %d (err: %v)", len(posts), err)
+	}
+	if posts[0].IsAnonymous != 1 {
+		t.Fatalf("expected post is_anonymous=1, got %d", posts[0].IsAnonymous)
+	}
+	if posts[0].UserID.Valid {
+		t.Fatalf("expected anonymous post.user_id to be NULL, got %d", posts[0].UserID.Int64)
+	}
+	if posts[0].AuthorUsername != "" {
+		t.Fatalf("expected anonymous post to expose no author username, got %q", posts[0].AuthorUsername)
+	}
+	anonThread, err := queries.GetThreadByID(ctx, anonThreadID)
+	if err != nil {
+		t.Fatalf("GetThreadByID: %v", err)
+	}
+	if anonThread.UserID.Valid {
+		t.Fatalf("expected anonymous thread.user_id to be NULL, got %d", anonThread.UserID.Int64)
+	}
+	if anonThread.AuthorUsername != "" {
+		t.Fatalf("expected anonymous thread to expose no author username, got %q", anonThread.AuthorUsername)
+	}
+
+	// 2. Thread page shows Anonymous instead of the username
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", anonThreadID), nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Started by <strong>Anonymous</strong>") {
+		t.Fatalf("expected thread page to show 'Started by Anonymous'")
+	}
+	if !strings.Contains(body, `class="post-author">Anonymous<`) {
+		t.Fatalf("expected opening post author to render as 'Anonymous'")
+	}
+
+	// 3. Board listing shows Anonymous for the thread
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/boards/%d", boardID), nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET board to return 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Started by <strong>Anonymous</strong>") {
+		t.Fatalf("expected board listing to show 'Started by Anonymous'")
+	}
+
+	// 4. Regression: a normal thread still shows the username
+	normalThreadID := newThread(false)
+
+	posts, err = queries.ListPostsByThread(ctx, normalThreadID)
+	if err != nil || len(posts) != 1 || posts[0].IsAnonymous != 0 {
+		t.Fatalf("expected attributed post (is_anonymous=0), got %+v (err: %v)", posts, err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", normalThreadID), nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `Started by <strong><a class="user-link" href="/users/anon_tester">anon_tester</a></strong>`) {
+		t.Fatalf("expected thread page to show a linked 'Started by anon_tester' for attributed thread")
+	}
+}
+
+func TestAnonymousReplies(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_replier", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+
+	// Create a thread (attributed)
+	var threadID int64
+	{
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("title", "Reply Test")
+		_ = w.WriteField("body", "opening post")
+		_ = w.WriteField("expiration", "7d")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected thread create redirect, got %d", rr.Code)
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+		if err != nil {
+			t.Fatalf("bad thread redirect: %v", err)
+		}
+		threadID = id
+	}
+
+	reply := func(anon, htmx bool) *httptest.ResponseRecorder {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("body", "a reply")
+		if anon {
+			_ = w.WriteField("anonymous", "on")
+		}
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", threadID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		if htmx {
+			req.Header.Set("HX-Request", "true")
+		}
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. HTMX anonymous reply → partial renders Anonymous, no username in partial
+	rr := reply(true, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected HTMX reply 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `class="post-author">Anonymous<`) {
+		t.Fatalf("expected HTMX partial to render author 'Anonymous', got: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "anon_replier") {
+		t.Fatalf("anonymous HTMX partial must not contain the real username")
+	}
+
+	// 2. HTMX attributed reply (regression) → partial shows username
+	rr = reply(false, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected HTMX reply 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `class="post-author"><a class="user-link" href="/users/anon_replier">anon_replier</a>`) {
+		t.Fatalf("expected attributed HTMX partial to show linked username, got: %s", rr.Body.String())
+	}
+
+	// 3. Standard (non-HTMX) anonymous reply → redirect, then thread page shows it
+	rr = reply(true, false)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected standard reply redirect, got %d: %s", rr.Code, rr.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", threadID), nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET thread 200, got %d", rr.Code)
+	}
+	page := rr.Body.String()
+	if !strings.Contains(page, `class="post-author">Anonymous<`) {
+		t.Fatalf("expected thread page to show anonymous reply author")
+	}
+	// Per-post semantics: starter (attributed) still shows the username alongside
+	if !strings.Contains(page, `Started by <strong><a class="user-link" href="/users/anon_replier">anon_replier</a></strong>`) {
+		t.Fatalf("expected attributed starter to remain visible")
+	}
+
+	// 4. Per-post semantics: attributed reply inside an anonymous thread shows the replier
+	var anonThreadID int64
+	{
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("title", "Anon Thread")
+		_ = w.WriteField("body", "anon opening")
+		_ = w.WriteField("expiration", "7d")
+		_ = w.WriteField("anonymous", "on")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected anonymous thread redirect, got %d", rr.Code)
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+		if err != nil {
+			t.Fatalf("bad thread redirect: %v", err)
+		}
+		anonThreadID = id
+	}
+
+	// Attributed reply in the anonymous thread
+	{
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("body", "public reply")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", anonThreadID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected reply redirect, got %d", rr.Code)
+		}
+		req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", anonThreadID), nil)
+		req.AddCookie(cookie)
+		rr = httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		page := rr.Body.String()
+		if !strings.Contains(page, `class="post-author"><a class="user-link" href="/users/anon_replier">anon_replier</a>`) {
+			t.Fatalf("expected attributed reply in anonymous thread to show linked username")
+		}
+		// Opening post of that thread must still be anonymous
+		if !strings.Contains(page, "Started by <strong>Anonymous</strong>") {
+			t.Fatalf("expected anonymous thread starter to remain 'Anonymous'")
+		}
+	}
+
+	// DB sanity: anonymous posts = 2 replies in the normal thread (HTMX + standard) + 1 opening post in the anon thread
+	posts1, err := queries.ListPostsByThread(ctx, threadID)
+	if err != nil {
+		t.Fatalf("ListPostsByThread: %v", err)
+	}
+	posts2, err := queries.ListPostsByThread(ctx, anonThreadID)
+	if err != nil {
+		t.Fatalf("ListPostsByThread: %v", err)
+	}
+	total := 0
+	for _, p := range append(append([]database.ListPostsByThreadRow{}, posts1...), posts2...) {
+		if p.IsAnonymous == 1 {
+			total++
+			if p.UserID.Valid {
+				t.Fatalf("anonymous post must not retain a user_id")
+			}
+			if p.AuthorUsername != "" {
+				t.Fatalf("anonymous post must not expose an author username")
+			}
+		}
+	}
+	if total != 3 {
+		t.Fatalf("expected exactly 3 anonymous posts, got %d", total)
+	}
+}
+
+func TestIndexPageAnonymousLatestThread(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "index_anon", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+
+	// Create an anonymous thread; it is the board's latest thread
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("title", "Index Anon Thread")
+	_ = w.WriteField("body", "anon opening")
+	_ = w.WriteField("expiration", "7d")
+	_ = w.WriteField("anonymous", "on")
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Home page must show "by Anonymous" and never the real username
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET / to return 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	// (The nav bar legitimately shows the logged-in user's own name, so
+	// assert on the specific latest-thread attribution rather than the page.)
+	if strings.Contains(body, "by <strong>index_anon</strong>") {
+		t.Fatalf("home page must NOT reveal the anonymous starter's username")
+	}
+	if !strings.Contains(body, "by <strong>Anonymous</strong>") {
+		t.Fatalf("home page should show 'by Anonymous' for the latest thread")
+	}
+}
+
+func TestAnonymousInvisibleToAdmins(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+	sessionSecret := "test-secret-key-32-bytes-long!!"
+
+	poster, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_poster", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("create poster: %v", err)
+	}
+	admin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "admin_viewer", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	if err := queries.SetUserAdmin(ctx, admin.ID); err != nil {
+		t.Fatalf("set admin: %v", err)
+	}
+	bystander, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "bystander", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("create bystander: %v", err)
+	}
+
+	cookie := func(id int64) *http.Cookie {
+		return &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(id, sessionSecret), Path: "/"}
+	}
+
+	// anon_poster creates an anonymous thread
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+	var threadID int64
+	{
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("title", "Anon Thread")
+		_ = w.WriteField("body", "secret opening")
+		_ = w.WriteField("expiration", "7d")
+		_ = w.WriteField("anonymous", "on")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(cookie(poster.ID))
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected thread create redirect, got %d", rr.Code)
+		}
+		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+		if err != nil {
+			t.Fatalf("bad thread redirect: %v", err)
+		}
+		threadID = id
+	}
+
+	getThread := func(id int64) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", threadID), nil)
+		req.AddCookie(cookie(id))
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected GET thread 200 for viewer %d, got %d", id, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// 1. Admin sees plain "Anonymous" — no attribution of any kind
+	adminPage := getThread(admin.ID)
+	if strings.Contains(adminPage, "anon_poster") || strings.Contains(adminPage, "anon-attribution") {
+		t.Fatalf("admin thread page must NOT reveal the anonymous poster's identity")
+	}
+	if !strings.Contains(adminPage, "Anonymous") {
+		t.Fatalf("admin thread page should still show 'Anonymous'")
+	}
+
+	// 2. Non-admin (bystander) never sees the poster's name.
+	//    (The poster themselves also can't see it; the layout header shows their own name only for the poster, so we use a third party.)
+	bystanderPage := getThread(bystander.ID)
+	if strings.Contains(bystanderPage, "anon_poster") {
+		t.Fatalf("non-admin thread page must NOT contain the anonymous poster's username")
+	}
+	if !strings.Contains(bystanderPage, "Anonymous") {
+		t.Fatalf("non-admin thread page should still show 'Anonymous'")
+	}
+
+	// 3. Board listing: admin sees attribution, bystander doesn't
+	getBoard := func(id int64) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/boards/%d", boardID), nil)
+		req.AddCookie(cookie(id))
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected GET board 200, got %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+	if strings.Contains(getBoard(admin.ID), "anon_poster") {
+		t.Fatalf("admin board listing must NOT reveal the anonymous poster's identity")
+	}
+	if strings.Contains(getBoard(bystander.ID), "anon_poster") {
+		t.Fatalf("non-admin board listing must NOT contain the poster's username")
+	}
+
+	// 4. HTMX partial: admin posting an anonymous reply sees their own name; bystander posting one sees none
+	htmxReply := func(id int64) string {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("body", "anon reply")
+		_ = w.WriteField("anonymous", "on")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", threadID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.Header.Set("HX-Request", "true")
+		req.AddCookie(cookie(id))
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected HTMX reply 200, got %d: %s", rr.Code, rr.Body.String())
+		}
+		return rr.Body.String()
+	}
+	adminPartial := htmxReply(admin.ID)
+	if strings.Contains(adminPartial, "admin_viewer") || strings.Contains(adminPartial, "anon-attribution") {
+		t.Fatalf("admin HTMX partial must NOT reveal the anonymous replier's identity, got: %s", adminPartial)
+	}
+	if !strings.Contains(adminPartial, "Anonymous") {
+		t.Fatalf("admin HTMX partial should show 'Anonymous', got: %s", adminPartial)
+	}
+	bystanderPartial := htmxReply(bystander.ID)
+	if strings.Contains(bystanderPartial, "bystander") {
+		t.Fatalf("non-admin HTMX partial must NOT contain the replier's username, got: %s", bystanderPartial)
+	}
+	if !strings.Contains(bystanderPartial, "Anonymous") {
+		t.Fatalf("non-admin HTMX partial should show 'Anonymous'")
+	}
+
+	// 5. The database itself stores no link between the anonymous content
+	//    and its author — even direct DB inspection must not reveal it.
+	thread, err := queries.GetThreadByID(ctx, threadID)
+	if err != nil {
+		t.Fatalf("GetThreadByID: %v", err)
+	}
+	if thread.UserID.Valid {
+		t.Fatalf("anonymous thread.user_id must be NULL, got %d", thread.UserID.Int64)
+	}
+	if thread.AuthorUsername != "" {
+		t.Fatalf("anonymous thread must expose no author username, got %q", thread.AuthorUsername)
+	}
+	posts, err := queries.ListPostsByThread(ctx, threadID)
+	if err != nil {
+		t.Fatalf("ListPostsByThread: %v", err)
+	}
+	if len(posts) != 3 {
+		t.Fatalf("expected 3 posts in anonymous thread, got %d", len(posts))
+	}
+	for _, p := range posts {
+		if p.IsAnonymous != 1 {
+			t.Fatalf("expected all posts in anonymous thread to be anonymous, got %+v", p)
+		}
+		if p.UserID.Valid {
+			t.Fatalf("anonymous post.user_id must be NULL")
+		}
+		if p.AuthorUsername != "" {
+			t.Fatalf("anonymous post must expose no author username, got %q", p.AuthorUsername)
+		}
+	}
+}
+
+func TestUserAdministration(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+	sessionSecret := "test-secret-key-32-bytes-long!!"
+
+	admin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "root_admin", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create admin user: %v", err)
+	}
+	if err := queries.SetUserAdmin(ctx, admin.ID); err != nil {
+		t.Fatalf("failed to set admin: %v", err)
+	}
+
+	regular, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "member_one", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create regular user: %v", err)
+	}
+	secondAdmin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "second_admin", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create second admin: %v", err)
+	}
+	if err := queries.SetUserAdmin(ctx, secondAdmin.ID); err != nil {
+		t.Fatalf("failed to set second admin: %v", err)
+	}
+
+	adminCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(admin.ID, sessionSecret), Path: "/"}
+	userCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(regular.ID, sessionSecret), Path: "/"}
+
+	// 1. Non-admin accessing GET /admin/users is redirected to / with unauthorized error
+	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	req.AddCookie(userCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected non-admin GET /admin/users to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+	if !flashCookieSet(rr, "flash_error", "Unauthorized") {
+		t.Fatalf("expected flash_error 'Unauthorized' cookie for non-admin access")
+	}
+
+	// 2. Non-admin POST /admin/users/{id}/promote is also denied
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/admin/users/%d/promote", regular.ID), nil)
+	req.AddCookie(userCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected non-admin promote to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 3. Admin listing users sees all registered users
+	req = httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected admin GET /admin/users to return 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, name := range []string{"root_admin", "member_one", "second_admin"} {
+		if !strings.Contains(body, name) {
+			t.Fatalf("expected user list to contain %q", name)
+		}
+	}
+
+	// 4. Admin promotes a regular user
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/admin/users/%d/promote", regular.ID), nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/users" {
+		t.Fatalf("expected promote redirect to /admin/users, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+	promoted, err := queries.GetUserByID(ctx, regular.ID)
+	if err != nil || promoted.IsAdmin != 1 {
+		t.Fatalf("expected promoted user to have is_admin=1, got %v (err: %v)", promoted, err)
+	}
+
+	// 5. Admin demoting themselves is prevented with an error flash
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/admin/users/%d/demote", admin.ID), nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/users" {
+		t.Fatalf("expected self-demote redirect to /admin/users, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+	if !flashCookieSet(rr, "flash_error", "You cannot revoke your own admin privileges") {
+		t.Fatalf("expected flash_error cookie preventing self-demote")
+	}
+	stillAdmin, err := queries.GetUserByID(ctx, admin.ID)
+	if err != nil || stillAdmin.IsAdmin != 1 {
+		t.Fatalf("expected admin to retain admin status after blocked self-demote, got %v (err: %v)", stillAdmin, err)
+	}
+
+	// 6. Admin demoting another admin works
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/admin/users/%d/demote", secondAdmin.ID), nil)
+	req.AddCookie(adminCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/users" {
+		t.Fatalf("expected demote redirect to /admin/users, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+	demoted, err := queries.GetUserByID(ctx, secondAdmin.ID)
+	if err != nil || demoted.IsAdmin != 0 {
+		t.Fatalf("expected demoted user to have is_admin=0, got %v (err: %v)", demoted, err)
+	}
+}
+
+func flashCookieSet(rr *httptest.ResponseRecorder, name, value string) bool {
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == name && c.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureAllImportsUsed() {
+	_ = io.EOF
+}
+
+func TestOnTheAirPresence(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "onair_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	getHome := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET / returned %d, body: %s", rr.Code, rr.Body.String())
+		}
+		return rr.Body.String()
+	}
+
+	// 1. An authenticated request writes presence and the homepage lists the user
+	body := getHome()
+	if !strings.Contains(body, "On the air:") || !strings.Contains(body, "onair_user") {
+		t.Fatalf("homepage should list onair_user in the on-air strip, got:\n%s", body)
+	}
+	ts1, err := queries.GetUserPresence(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("expected a presence row after request: %v", err)
+	}
+
+	// 2. Throttle: a second request within 30s must NOT update last_seen_at
+	getHome()
+	ts2, err := queries.GetUserPresence(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ts1.Equal(ts2) {
+		t.Errorf("throttle violated: presence updated within 30s (%v -> %v)", ts1, ts2)
+	}
+
+	// 3. A stale row (40s old) IS refreshed on the next request
+	if _, err := db.Exec("UPDATE user_presence SET last_seen_at = datetime('now','-40 seconds') WHERE user_id = ?", user.ID); err != nil {
+		t.Fatal(err)
+	}
+	var tsBack time.Time
+	if err := db.QueryRow("SELECT last_seen_at FROM user_presence WHERE user_id = ?", user.ID).Scan(&tsBack); err != nil {
+		t.Fatal(err)
+	}
+	getHome()
+	ts3, err := queries.GetUserPresence(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Compare against the backdated value, not ts1: CURRENT_TIMESTAMP has
+	// second granularity, so a refreshed value can coincidentally equal ts1.
+	if ts3.Equal(tsBack) {
+		t.Errorf("stale presence row was not refreshed (still %v)", tsBack)
+	}
+
+	// 4. A user last seen >5 minutes ago is not listed. Use a second user:
+	// the request below refreshes the viewer's own presence before rendering,
+	// so the viewer can never observe their own staleness.
+	stale, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "stale_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO user_presence (user_id, last_seen_at) VALUES (?, datetime('now','-6 minutes'))", stale.ID); err != nil {
+		t.Fatal(err)
+	}
+	body = getHome() // request as onair_user; onair_user is refreshed, stale_user is not
+	if !strings.Contains(body, "onair_user") {
+		t.Errorf("viewer should appear in on-air strip:\n%s", body)
+	}
+	if strings.Contains(body, "stale_user") {
+		t.Errorf("stale user (6m) should not appear in on-air strip:\n%s", body)
+	}
+}
+
+func TestPresenceNotWrittenForPublicPaths(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	// A user must exist to leave first-run mode (else /login redirects to /setup)
+	if _, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "public_path_user", PasswordHash: "hash"}); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	// Unauthenticated request to a public route: no presence write
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /login returned %d", rr.Code)
+	}
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM user_presence").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 presence rows after public request, got %d", n)
+	}
+}
+
+func TestUserCardPageAndProfile(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "card_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	// Seed: 2 attributed posts + 1 anonymous post (anonymous must not count)
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got %v", err)
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: boards[0].ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+		Title: "card thread", ExpiresAt: sql.NullTime{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+			ThreadID: thread.ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+			Body: "attributed", IsAnonymous: 0,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID, UserID: sql.NullInt64{}, Body: "anon", IsAnonymous: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queries.UpdateUserBio(ctx, database.UpdateUserBioParams{
+		Bio: sql.NullString{String: "Hello **bio**", Valid: true}, ID: user.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO user_presence (user_id) VALUES (?)", user.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	getCard := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/users/card_user", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /users/card_user returned %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// 1. Card renders bio (markdown), post count (attributed only), last seen
+	body := getCard()
+	if !strings.Contains(body, "<strong>bio</strong>") {
+		t.Errorf("expected rendered markdown bio, got:\n%s", body)
+	}
+	if !strings.Contains(body, "2 posts") {
+		t.Errorf("expected exactly 2 posts (anonymous excluded), got:\n%s", body)
+	}
+	if !strings.Contains(body, "Last seen") {
+		t.Errorf("expected 'Last seen' line, got:\n%s", body)
+	}
+
+	// 2. Unknown user → 404
+	req := httptest.NewRequest(http.MethodGet, "/users/nosuchuser99", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown user, got %d", rr.Code)
+	}
+
+	// 3. Profile edit round-trips
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", strings.NewReader(url.QueryEscape("bio")+"="+url.QueryEscape("Updated _line_.")))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected profile save redirect, got %d", rr.Code)
+	}
+	body = getCard()
+	if !strings.Contains(body, "<em>line</em>") {
+		t.Errorf("expected updated bio on card, got:\n%s", body)
+	}
+
+	// 4. Over-length bio is rejected and not stored
+	longBio := strings.Repeat("x", 501)
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", strings.NewReader("bio="+url.QueryEscape(longBio)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after rejected bio, got %d", rr.Code)
+	}
+	var foundFlash bool
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "flash_error" {
+			foundFlash = true
+		}
+	}
+	if !foundFlash {
+		t.Errorf("expected flash_error cookie for over-length bio")
+	}
+	body = getCard()
+	if strings.Contains(body, longBio) {
+		t.Errorf("over-length bio was stored")
+	}
+
+	// 5. Bio HTML is escaped (no raw script tag survives)
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", strings.NewReader("bio="+url.QueryEscape("<script>alert(1)</script>")))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	body = getCard()
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Errorf("raw script tag rendered in bio — XSS:\n%s", body)
+	}
+}
+
+func TestUsernameCharsetValidation(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	postSetup := func(username string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader("username="+url.QueryEscape(username)+"&password=secret123"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	for _, bad := range []string{"a/b", "a_b", "a b", "ab", strings.Repeat("a", 33), "üser"} {
+		rr := postSetup(bad)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected redirect for rejected username %q, got %d", bad, rr.Code)
+		}
+		var rejected bool
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == "flash_error" {
+				rejected = true
+			}
+		}
+		if !rejected {
+			t.Errorf("expected flash_error for rejected username %q", bad)
+		}
+	}
+
+	// A valid username succeeds and creates the account
+	rr := postSetup("goodname")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect for valid username, got %d", rr.Code)
+	}
+	n, err := queries.CountUsers(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("expected 1 user after valid setup, got %d (err %v)", n, err)
+	}
+}
+
+func TestRecentActivityTicker(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "ticker_alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(alice.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got %v", err)
+	}
+	board := boards[0]
+
+	// Attributed thread + post
+	attribThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: board.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		Title: "ticker thread", ExpiresAt: sql.NullTime{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: attribThread.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		Body: "hello", IsAnonymous: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Anonymous thread + post (author must never appear)
+	anonThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: board.ID, UserID: sql.NullInt64{},
+		Title: "anon ticker thread", ExpiresAt: sql.NullTime{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: anonThread.ID, UserID: sql.NullInt64{},
+		Body: "ghost", IsAnonymous: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expired thread's post must not appear
+	expiredThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: board.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		Title: "expired thread", ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: expiredThread.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		Body: "gone soon", IsAnonymous: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d", rr.Code)
+	}
+	body := rr.Body.String()
+
+	if !strings.Contains(body, "Recent activity") {
+		t.Fatalf("homepage missing Recent activity section:\n%s", body)
+	}
+	// Attributed entry links the author card and the thread
+	if !strings.Contains(body, `/users/ticker_alice`) || !strings.Contains(body, "posted in") {
+		t.Errorf("expected attributed activity entry with author link:\n%s", body)
+	}
+	if !strings.Contains(body, `/threads/`) {
+		t.Errorf("expected thread links in activity entries:\n%s", body)
+	}
+	// Anonymous entry shows "Anonymous", never the username
+	if strings.Contains(body, "anon ticker thread") && !strings.Contains(body, "Anonymous") {
+		t.Errorf("anonymous activity entry should render 'Anonymous'")
+	}
+	// Expired thread is absent
+	if strings.Contains(body, "expired thread") {
+		t.Errorf("expired thread should not appear in activity ticker:\n%s", body)
+	}
+	// Cap: 10 entries max (only 3 exist here; assert the query honors limit)
+	rows, err := queries.ListRecentActivity(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("ListRecentActivity(limit=2) returned %d rows, want 2", len(rows))
+	}
+}
+
+func TestActivityTickerEmptyState(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	if _, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "empty_home", PasswordHash: "hash"}); err != nil {
+		t.Fatal(err)
+	}
+	// Wipe any seeded posts so the ticker is truly empty
+	if _, err := db.Exec("DELETE FROM posts"); err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(1, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "No activity yet") {
+		t.Errorf("expected 'No activity yet' empty state:\n%s", body)
+	}
+}
+
+// ---- User avatar uploads ----
+
+const testAvatarSecret = "test-secret-key-32-bytes-long!!"
+
+var (
+	pngBytes  = append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, make([]byte, 64)...)
+	jpgBytes  = append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, make([]byte, 64)...)
+	webpBytes = append(append([]byte("RIFF"), make([]byte, 4)...), append([]byte("WEBP"), make([]byte, 32)...)...)
+	gifBytes  = append([]byte("GIF89a"), make([]byte, 32)...)
+	txtBytes  = []byte("this is definitely not an image")
+)
+
+// profileMultipart builds a multipart profile form with the given fields and
+// an optional "avatar" file part.
+func profileMultipart(t *testing.T, fields map[string]string, fileName string, fileBytes []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fileName != "" {
+		fw, err := w.CreateFormFile("avatar", fileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(fileBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &b, w.FormDataContentType()
+}
+
+func TestUserAvatarUploads(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "avatar_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, testAvatarSecret), Path: "/"}
+
+	submitProfile := func(body *bytes.Buffer, contentType string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/users/me/profile", body)
+		req.Header.Set("Content-Type", contentType)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	hasFlash := func(rr *httptest.ResponseRecorder, name string) bool {
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == name && c.Value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	avatarPath := func(t *testing.T) string {
+		t.Helper()
+		u, err := queries.GetUserByUsername(ctx, "avatar_user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !u.AvatarPath.Valid {
+			return ""
+		}
+		return u.AvatarPath.String
+	}
+
+	cardHTML := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/users/avatar_user", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /users/avatar_user returned %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// 1. PNG upload succeeds; file lands in uploadDir; card shows the avatar.
+	body, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", pngBytes)
+	rr := submitProfile(body, ctype)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 after avatar upload, got %d", rr.Code)
+	}
+	if hasFlash(rr, "flash_error") {
+		t.Fatalf("unexpected flash_error on PNG upload")
+	}
+	pngPath := avatarPath(t)
+	if pngPath == "" || !strings.Contains(pngPath, ".png") {
+		t.Fatalf("expected png avatar path stored, got %q", pngPath)
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, pngPath)); err != nil {
+		t.Fatalf("avatar file not saved in uploadDir: %v", err)
+	}
+	if got := cardHTML(); !strings.Contains(got, "avatar avatar-lg") || !strings.Contains(got, "/uploads/"+pngPath) {
+		t.Errorf("user card did not show avatar image:\n%s", got)
+	}
+
+	// 2. Avatar is served back over HTTP.
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+pngPath, nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 serving avatar, got %d", rr.Code)
+	}
+	if !bytes.Equal(rr.Body.Bytes(), pngBytes) {
+		t.Errorf("served avatar bytes differ from uploaded bytes")
+	}
+
+	// 3. JPEG and WEBP uploads replace the previous avatar; old file is removed.
+	for _, tc := range []struct {
+		name string
+		b    []byte
+		ext  string
+	}{
+		{"me.jpg", jpgBytes, ".jpg"},
+		{"me.webp", webpBytes, ".webp"},
+	} {
+		body, ctype = profileMultipart(t, map[string]string{"bio": "hi"}, tc.name, tc.b)
+		rr = submitProfile(body, ctype)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("%s: expected 303, got %d", tc.name, rr.Code)
+		}
+		if hasFlash(rr, "flash_error") {
+			t.Fatalf("%s: unexpected flash_error", tc.name)
+		}
+		p := avatarPath(t)
+		if !strings.Contains(p, tc.ext) {
+			t.Fatalf("%s: expected avatar path with %s, got %q", tc.name, tc.ext, p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, pngPath)); !os.IsNotExist(err) {
+		t.Errorf("old png avatar file should have been removed, stat err=%v", err)
+	}
+
+	// 4. Non-image content is rejected even with a lying filename/content type.
+	body, ctype = profileMultipart(t, map[string]string{"bio": "hi"}, "evil.png", txtBytes)
+	rr = submitProfile(body, ctype)
+	if rr.Code != http.StatusSeeOther || !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected rejected text file with flash_error")
+	}
+	if p := avatarPath(t); !strings.Contains(p, ".webp") {
+		t.Errorf("avatar changed after rejected upload: %q", p)
+	}
+
+	// 5. GIF is an allowed attachment type but NOT a valid avatar format.
+	body, ctype = profileMultipart(t, map[string]string{"bio": "hi"}, "anim.gif", gifBytes)
+	rr = submitProfile(body, ctype)
+	if rr.Code != http.StatusSeeOther || !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected rejected gif with flash_error")
+	}
+	if p := avatarPath(t); !strings.Contains(p, ".webp") {
+		t.Errorf("avatar changed after rejected gif: %q", p)
+	}
+
+	// 6. Avatar renders next to attributed posts on the thread page.
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatal("expected seeded boards")
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: boards[0].ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+		Title: "avatar thread", ExpiresAt: sql.NullTime{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+		Body: "hello", IsAnonymous: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := avatarPath(t)
+	req = httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(thread.ID, 10), nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thread page returned %d", rr.Code)
+	}
+	page := rr.Body.String()
+	if !strings.Contains(page, "avatar avatar-sm") || !strings.Contains(page, "/uploads/"+p) {
+		t.Errorf("thread page did not show post author avatar:\n%s", page)
+	}
+
+	// 7. remove_avatar clears the DB row and deletes the file from disk.
+	body, ctype = profileMultipart(t, map[string]string{"bio": "bye", "remove_avatar": "on"}, "", nil)
+	rr = submitProfile(body, ctype)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected 303 without error after avatar removal")
+	}
+	if got := avatarPath(t); got != "" {
+		t.Errorf("expected avatar cleared, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, p)); !os.IsNotExist(err) {
+		t.Errorf("removed avatar file still on disk, stat err=%v", err)
+	}
+	if got := cardHTML(); strings.Contains(got, "avatar avatar-lg") {
+		t.Errorf("card still shows avatar after removal:\n%s", got)
+	}
+
+	// 8. Plain urlencoded bio-only POST still works (no avatar field at all).
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", strings.NewReader(url.QueryEscape("bio")+"="+url.QueryEscape("plain bio")))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("urlencoded profile save returned %d", rr.Code)
+	}
+	if got := cardHTML(); !strings.Contains(got, "plain bio") {
+		t.Errorf("bio-only save did not persist:\n%s", got)
+	}
+}

@@ -1,0 +1,67 @@
+{{define "content"}}
+<div class="board-view-page">
+  <div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="sep">&gt;</span>
+    <span>{{.Category.Name}}</span>
+    <span class="sep">&gt;</span>
+    <span>{{.Board.Name}}</span>
+  </div>
+
+  <div class="thread-header">
+    <div>
+      <h1 class="thread-heading">{{.Board.Name}}</h1>
+      {{if .Board.Description.Valid}}
+        <p class="board-desc" style="font-size: 13px; margin-top: 4px;">{{.Board.Description.String}}</p>
+      {{end}}
+    </div>
+    <div>
+      <a href="/boards/{{.Board.ID}}/threads/new" class="btn btn-primary">+ New Thread</a>
+    </div>
+  </div>
+
+  <section class="forum-section">
+    <div class="section-header">
+      <span class="section-title">Threads in {{.Board.Name}}</span>
+    </div>
+    <div class="thread-list">
+      {{range .Threads}}
+        <div class="thread-row">
+          <div class="thread-main">
+            <div class="thread-title">
+              {{if .IsUnread}}
+                <span class="badge badge-unread">NEW</span>
+              {{end}}
+              <a href="/threads/{{.Thread.ID}}">{{.Thread.Title}}</a>
+              {{if .Thread.ExpiresAt.Valid}}
+                <span class="badge badge-expires" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
+                  &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
+                </span>
+              {{else}}
+                <span class="badge badge-never">Never expires</span>
+              {{end}}
+            </div>
+            <div class="board-desc">
+              Started by <strong>{{authorLink .Thread.FirstPostAnonymous .Thread.AuthorUsername}}</strong> &bull; {{formatRelative .Thread.CreatedAt.Time}}
+            </div>
+          </div>
+          <div class="thread-stats">
+            <div><span class="stats-number">{{.ReplyCount}}</span> replies</div>
+          </div>
+          <div class="thread-latest">
+            <div>Last active</div>
+            <div>{{formatRelative .Thread.UpdatedAt.Time}}</div>
+          </div>
+        </div>
+      {{else}}
+        <div style="padding: 24px; text-align: center; color: var(--text-dim);">
+          No threads in this board yet.
+          <div style="margin-top: 12px;">
+            <a href="/boards/{{.Board.ID}}/threads/new" class="btn btn-secondary btn-sm">Start the first thread</a>
+          </div>
+        </div>
+      {{end}}
+    </div>
+  </section>
+</div>
+{{end}}

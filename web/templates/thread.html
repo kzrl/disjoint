@@ -1,0 +1,111 @@
+{{define "content"}}
+<div class="thread-view-page">
+  <div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="sep">&gt;</span>
+    <span>{{.Thread.CategoryName}}</span>
+    <span class="sep">&gt;</span>
+    <a href="/boards/{{.Thread.BoardID}}">{{.Thread.BoardName}}</a>
+    <span class="sep">&gt;</span>
+    <span>{{.Thread.Title}}</span>
+  </div>
+
+  <div class="thread-header">
+    <div>
+      <h1 class="thread-heading">{{.Thread.Title}}</h1>
+      <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+        Started by <strong>{{authorAvatar .Thread.AuthorAvatar}}{{authorLink .Thread.FirstPostAnonymous .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
+      </div>
+    </div>
+    <div>
+      {{if .Thread.ExpiresAt.Valid}}
+        <span class="badge badge-expires" style="font-size: 13px; padding: 4px 10px;" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
+          &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
+        </span>
+      {{else}}
+        <span class="badge badge-never" style="font-size: 13px; padding: 4px 10px;">Never expires</span>
+      {{end}}
+    </div>
+  </div>
+
+  <div id="posts-container" class="posts-container">
+    {{range .Posts}}
+      <div class="post-card" id="post-{{.Post.ID}}">
+        <div class="post-sidebar">
+          <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{authorLink .Post.IsAnonymous .Post.AuthorUsername}}</div>
+          <div class="post-date"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
+        </div>
+        <div class="post-content-area">
+          <div class="post-body">
+            {{renderMarkdown .Post.Body}}
+          </div>
+          {{if .Attachments}}
+            <div class="post-attachments">
+              <div class="attachment-title">Attachments ({{len .Attachments}})</div>
+              <div class="attachments-grid">
+                {{range .Attachments}}
+                  {{if isImage .MimeType}}
+                    <div class="attachment-image-card">
+                      <a href="/uploads/{{.StoragePath}}" target="_blank">
+                        <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
+                      </a>
+                    </div>
+                  {{else if isVideo .MimeType}}
+                    <div class="attachment-video-card">
+                      <video controls preload="metadata">
+                        <source src="/uploads/{{.StoragePath}}" type="{{.MimeType}}">
+                        Your browser does not support the video tag.
+                      </video>
+                    </div>
+                  {{else}}
+                    <a href="/uploads/{{.StoragePath}}" class="attachment-file-card" download="{{.Filename}}">
+                      <span class="file-icon">&#x1F4CE;</span>
+                      <div class="file-info">
+                        <div class="file-name">{{.Filename}}</div>
+                        <div class="file-meta">{{formatFileSize .FileSize}}</div>
+                      </div>
+                    </a>
+                  {{end}}
+                {{end}}
+              </div>
+            </div>
+          {{end}}
+        </div>
+      </div>
+    {{end}}
+  </div>
+
+  <!-- Reply box with HTMX -->
+  <div class="form-panel">
+    <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px;">Reply to Thread</h3>
+    <form id="reply-form"
+          hx-post="/threads/{{.Thread.ID}}/posts"
+          hx-target="#posts-container"
+          hx-swap="beforeend"
+          hx-encoding="multipart/form-data"
+          hx-on::after-request="if(event.detail.successful) { this.reset(); }"
+          method="POST"
+          action="/threads/{{.Thread.ID}}/posts"
+          enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="reply-body" class="form-label">Message (Markdown supported)</label>
+        <textarea id="reply-body" name="body" class="form-textarea" placeholder="Write a response..." rows="4" required></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" style="font-size: 12px;">Attach Files (optional)</label>
+        <input type="file" name="files" class="form-input" multiple accept="image/*,video/*,application/pdf,text/*">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;">
+          <input type="checkbox" id="reply-anonymous" name="anonymous" value="on" style="width: auto;">
+          Post this reply anonymously
+        </label>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Post Reply</button>
+    </form>
+  </div>
+</div>
+{{end}}

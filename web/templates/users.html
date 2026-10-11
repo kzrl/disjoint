@@ -1,0 +1,57 @@
+{{define "content"}}
+<div class="container" style="max-width: 720px; margin: 0 auto;">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+    <h2 style="margin: 0;">Registered Users</h2>
+  </div>
+
+  {{if .Users}}
+  <table class="table" style="width: 100%;">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Username</th>
+        <th>Role</th>
+        <th>Joined</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Users}}
+      <tr>
+        <td style="color: var(--text-dim); font-size: 13px;">{{.ID}}</td>
+        <td>
+          <strong>{{.Username}}</strong>
+          {{if eq $.CurrentUser.ID .ID}}<span style="color: var(--text-dim); font-size: 12px;">(you)</span>{{end}}
+        </td>
+        <td>
+          {{if eq .IsAdmin 1}}
+            <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.4); padding: 2px 8px; border-radius: 999px; font-size: 12px;">Admin</span>
+          {{else}}
+            <span style="color: var(--text-dim); font-size: 12px;">Member</span>
+          {{end}}
+        </td>
+        <td style="color: var(--text-dim); font-size: 13px;">{{formatTime .CreatedAt.Time}}</td>
+        <td style="text-align: right;">
+          {{if eq .IsAdmin 1}}
+            {{if ne $.CurrentUser.ID .ID}}
+            <form method="POST" action="/admin/users/{{.ID}}/demote" style="display:inline;">
+              <button type="submit" class="btn btn-secondary btn-sm" style="font-size: 12px;">Revoke Admin</button>
+            </form>
+            {{end}}
+          {{else}}
+          <form method="POST" action="/admin/users/{{.ID}}/promote" style="display:inline;">
+            <button type="submit" class="btn btn-primary btn-sm" style="font-size: 12px;">Promote to Admin</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="form-panel" style="text-align: center; padding: 32px 24px;">
+    <p style="color: var(--text-dim); margin: 0;">No registered users.</p>
+  </div>
+  {{end}}
+</div>
+{{end}}

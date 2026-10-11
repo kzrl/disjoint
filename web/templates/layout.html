@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{if .PageTitle}}{{.PageTitle}} - {{end}}Disjoint</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="logo-area">
+        <a href="/" class="logo">disjoint<span>_</span></a>
+      </div>
+      <div class="nav-actions">
+        {{if .CurrentUser}}
+          <span class="user-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            <strong>{{.CurrentUser.Username}}</strong>
+          </span>
+          <a href="/boards/new" class="btn btn-secondary btn-sm">+ New Board</a>
+          {{if .CurrentUser.IsAdmin}}<a href="/invites" class="btn btn-secondary btn-sm">Invites</a><a href="/admin/users" class="btn btn-secondary btn-sm">Users</a>{{end}}
+          <form method="POST" action="/logout" style="display:inline;">
+            <button type="submit" class="btn btn-secondary btn-sm">Sign Out</button>
+          </form>
+        {{else}}
+          <a href="/login" class="btn btn-secondary btn-sm">Sign In</a>
+        {{end}}
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    {{if .FlashError}}
+      <div class="flash-msg error">{{.FlashError}}</div>
+    {{end}}
+    {{if .FlashSuccess}}
+      <div class="flash-msg success">{{.FlashSuccess}}</div>
+    {{end}}
+
+    {{template "content" .}}
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      Disjoint
+    </div>
+  </footer>
+</body>
+</html>

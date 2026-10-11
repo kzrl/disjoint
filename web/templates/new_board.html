@@ -1,0 +1,56 @@
+{{define "content"}}
+<div class="new-board-page">
+  <div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="sep">&gt;</span>
+    <span>Create Board or Category</span>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <!-- Create Board Form -->
+    <div class="form-panel">
+      <h2 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Create a New Board</h2>
+      <form method="POST" action="/boards/new">
+        <div class="form-group">
+          <label for="category_id" class="form-label">Category</label>
+          <select id="category_id" name="category_id" class="form-select" required>
+            {{range .Categories}}
+              <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="board_name" class="form-label">Board Name</label>
+          <input type="text" id="board_name" name="name" class="form-input" placeholder="e.g. Technology & Code" required>
+        </div>
+
+        <div class="form-group">
+          <label for="board_description" class="form-label">Description (optional)</label>
+          <input type="text" id="board_description" name="description" class="form-input" placeholder="e.g. Discussions about software and projects">
+        </div>
+
+        <button type="submit" class="btn btn-primary">Create Board</button>
+      </form>
+    </div>
+
+    <!-- Create Category Form -->
+    <div class="form-panel">
+      <h2 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">Create a New Category</h2>
+      <form method="POST" action="/categories/new">
+        <div class="form-group">
+          <label for="cat_name" class="form-label">Category Name</label>
+          <input type="text" id="cat_name" name="name" class="form-input" placeholder="e.g. Projects & Gaming" required>
+        </div>
+
+        <div class="form-group">
+          <label for="cat_position" class="form-label">Position / Order</label>
+          <input type="number" id="cat_position" name="position" class="form-input" value="10" min="0">
+        </div>
+
+        <button type="submit" class="btn btn-secondary">Create Category</button>
+      </form>
+    </div>
+  </div>
+</div>
+{{end}}

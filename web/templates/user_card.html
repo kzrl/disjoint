@@ -1,0 +1,63 @@
+{{define "content"}}
+<div class="container" style="max-width: 720px; margin: 0 auto;">
+  <div class="breadcrumb" style="margin-bottom: 16px;">
+    <span><a href="/">Home</a></span> &bull; <span>User Card</span>
+  </div>
+
+  <div class="form-panel" style="padding: 24px;">
+    {{if .CardUser.AvatarPath.Valid}}
+      <div style="margin-bottom: 16px;">
+        <img class="avatar avatar-lg" src="/uploads/{{.CardUser.AvatarPath.String}}" alt="Avatar of {{.CardUser.Username}}">
+      </div>
+    {{end}}
+
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+      <h2 style="margin: 0;">{{.CardUser.Username}}</h2>
+      {{if eq .CardUser.IsAdmin 1}}
+        <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.4); padding: 2px 8px; border-radius: 999px; font-size: 12px;">Admin</span>
+      {{end}}
+    </div>
+
+    <div style="color: var(--text-dim); font-size: 13px; margin-bottom: 20px;">
+      Joined {{if .CardUser.CreatedAt.Valid}}{{formatTime .CardUser.CreatedAt.Time}}{{end}}
+      &bull;
+      Last seen {{if .LastSeen}}{{formatRelative .LastSeen}}{{else}}never{{end}}
+      &bull;
+      {{.PostCount}} {{if eq .PostCount 1}}post{{else}}posts{{end}}
+    </div>
+
+    {{if .CardUser.Bio.Valid}}
+      <div class="post-body" style="margin-bottom: 24px;">
+        {{renderMarkdown .CardUser.Bio.String}}
+      </div>
+    {{end}}
+
+    {{if .IsSelf}}
+      <form method="POST" action="/users/me/profile" enctype="multipart/form-data">
+        <div style="font-weight: 600; margin-bottom: 8px;">Edit profile</div>
+        <label for="bio" style="display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">
+          Bio <span style="color: var(--text-dim);">(markdown, up to 500 characters)</span>
+        </label>
+        <textarea id="bio" name="bio" rows="5" maxlength="500"
+          style="width: 100%; box-sizing: border-box; background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; font-family: inherit; font-size: 14px; resize: vertical;">{{.CardUser.Bio.String}}</textarea>
+
+        <div style="margin-top: 16px;">
+          <label for="avatar" style="display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">
+            Avatar <span style="color: var(--text-dim);">(JPG, PNG, or WEBP, up to 5MB)</span>
+          </label>
+          <input type="file" id="avatar" name="avatar" accept="image/jpeg,image/png,image/webp">
+          {{if .CardUser.AvatarPath.Valid}}
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; margin-top: 8px; color: var(--text-muted);">
+            <input type="checkbox" name="remove_avatar" value="on" style="width: auto;"> Remove current avatar
+          </label>
+          {{end}}
+        </div>
+
+        <div style="margin-top: 12px;">
+          <button type="submit" class="btn btn-primary btn-sm">Save profile</button>
+        </div>
+      </form>
+    {{end}}
+  </div>
+</div>
+{{end}}

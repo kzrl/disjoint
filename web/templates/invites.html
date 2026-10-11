@@ -1,0 +1,49 @@
+{{define "content"}}
+<div class="container" style="max-width: 720px; margin: 0 auto;">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+    <h2 style="margin: 0;">Invite Links</h2>
+    <form method="POST" action="/invites">
+      <button type="submit" class="btn btn-primary btn-sm">+ Generate Invite</button>
+    </form>
+  </div>
+
+  {{if .Invites}}
+  <table class="table" style="width: 100%;">
+    <thead>
+      <tr>
+        <th>Invite Code</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Invites}}
+      <tr>
+        <td><code style="font-size: 12px;">{{.Code}}</code></td>
+        <td>
+          {{if .UsedBy.Valid}}
+            <span style="color: var(--text-dim);">Used by <strong>{{.UsedByUsername.String}}</strong></span>
+          {{else}}
+            <span style="color: var(--accent-green, #4ade80);">● Available</span>
+          {{end}}
+        </td>
+        <td style="color: var(--text-dim); font-size: 13px;">{{formatTime .CreatedAt.Time}}</td>
+        <td style="text-align: right;">
+          {{if not .UsedBy.Valid}}
+          <form method="POST" action="/invites/{{.ID}}/delete" style="display:inline;">
+            <button type="submit" class="btn btn-secondary btn-sm" style="font-size: 12px;">Delete</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="form-panel" style="text-align: center; padding: 32px 24px;">
+    <p style="color: var(--text-dim); margin: 0;">No invites yet. Generate one to invite someone.</p>
+  </div>
+  {{end}}
+</div>
+{{end}}

@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="new-thread-page">
+  <div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="sep">&gt;</span>
+    <a href="/boards/{{.Board.ID}}">{{.Board.Name}}</a>
+    <span class="sep">&gt;</span>
+    <span>New Thread</span>
+  </div>
+
+  <div class="form-panel">
+    <h1 style="font-size: 18px; font-weight: 700; margin-bottom: 16px;">Create a New Thread in {{.Board.Name}}</h1>
+
+    <form method="POST" action="/boards/{{.Board.ID}}/threads/new" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="title" class="form-label">Thread Title</label>
+        <input type="text" id="title" name="title" class="form-input" placeholder="What's on your mind?" required autofocus>
+      </div>
+
+      <div class="form-group">
+        <label for="body" class="form-label">First Post (Markdown supported)</label>
+        <textarea id="body" name="body" class="form-textarea" placeholder="Write your post here... Markdown like **bold**, *italic*, quotes and `code` are supported." rows="8" required></textarea>
+        <div class="form-hint">Tip: Use Markdown for rich formatting, tables, lists, and code blocks.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="expiration" class="form-label">Thread Lifespan / Expiration</label>
+        <select id="expiration" name="expiration" class="form-select">
+          <option value="never">Never (Persistent Thread)</option>
+          <option value="24h">24 Hours (Ephemeral)</option>
+          <option value="3d">3 Days</option>
+          <option value="7d" selected>7 Days</option>
+          <option value="30d">30 Days</option>
+        </select>
+        <div class="form-hint">Expired threads and all their attachments will be permanently deleted automatically.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="anonymous" name="anonymous" value="on" style="width: auto;">
+          Post anonymously <span style="color: var(--text-dim); font-size: 12px;">(your username won't be shown on this thread)</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Attachments (Images, Videos, Files)</label>
+        <input type="file" name="files" class="form-input" multiple accept="image/*,video/*,application/pdf,text/*">
+        <div class="form-hint">Supported media: JPEG, PNG, GIF, WebP, MP4, WebM, and standard documents (up to 50MB per file).</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button type="submit" class="btn btn-primary">Publish Thread</button>
+        <a href="/boards/{{.Board.ID}}" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}
