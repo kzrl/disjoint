@@ -94,31 +94,31 @@ Inline `style=""` attributes across templates get removed in favor of these help
 ## Task List
 
 ### Phase 1: Foundation
-- [ ] Task 1: Vendor Bulma. Copy `~/src/bulma/css/bulma.min.css` → `web/static/bulma.min.css`; add `web/static/bulma-LICENSE`; `make css` target; note version in README.
-- [ ] Task 2: Wire up + prune. `layout.html` links `bulma.min.css` before the site sheet; rename `style.css` → `disjoint.css`; delete all rules now provided by Bulma (reset/body/a/`.container`/`.btn*`/`.breadcrumb`/`.flash-msg`/`.badge*`/form controls/`.form-panel`/`.auth-*`); keep the site-specific rules listed in Decision 4; add primary re-tint + `color-scheme` + app-frame rules. Expect a "broken but building" intermediate state — template migration in Phases 2–3 fixes the visuals.
-- [ ] Task 3: Layout chrome. Migrate `layout.html` (header, nav buttons, flash messages → `.notification`, footer) and `post_partial.html` in one pass so HTMX replies render correctly from the first commit.
+- [x] Task 1: Vendor Bulma. Copy `~/src/bulma/css/bulma.min.css` → `web/static/bulma.min.css`; add `web/static/bulma-LICENSE`; `make css` target; note version in README.
+- [x] Task 2: Wire up + prune. `layout.html` links `bulma.min.css` before the site sheet; rename `style.css` → `disjoint.css`; delete all rules now provided by Bulma (reset/body/a/`.container`/`.btn*`/`.breadcrumb`/`.flash-msg`/`.badge*`/form controls/`.form-panel`/`.auth-*`); keep the site-specific rules listed in Decision 4; add primary re-tint + `color-scheme` + app-frame rules. Expect a "broken but building" intermediate state — template migration in Phases 2–3 fixes the visuals.
+- [x] Task 3: Layout chrome. Migrate `layout.html` (header, nav buttons, flash messages → `.notification`, footer) and `post_partial.html` in one pass so HTMX replies render correctly from the first commit.
 
 ### Checkpoint: Foundation
-- [ ] `go build ./...` + `go test ./...` pass; app boots; index page visually acceptable in light, dark, and 375px width; HTMX reply round-trip renders styled partial.
+- [x] `go build ./...` + `go test ./...` pass; app boots; index page visually acceptable in light, dark, and 375px width; HTMX reply round-trip renders styled partial.
 
 ### Phase 2: Page-by-page migration (one vertical slice each: template + any `disjoint.css` follow-up)
-- [ ] Task 4: Board index (`index.html`): forum sections → cards, board rows (decide columns vs grid), unread/NEW tags, on-air strip, activity list, empty states.
-- [ ] Task 5: Board view (`board.html`): header → box+level, thread rows, expiry/never tags, empty state.
-- [ ] Task 6: Thread view (`thread.html`): breadcrumb, thread-header box, post cards, reply form (field/label/textarea/select/help, file input, checkbox control, HTMX attrs untouched).
-- [ ] Task 7: Auth pages (`login.html`, `register.html`, `setup.html`, `register_closed.html`): centered box, fields, full-width primary buttons, dim footer links.
-- [ ] Task 8: New board / new thread (`new_board.html`, `new_thread.html`): forms, hints, submit/cancel button row.
-- [ ] Task 9: Admin + profile (`users.html`, `invites.html`, `user_card.html`): `.table.is-fullwidth` + tag roles (Admin tag → `is-warning`/`is-primary`), profile form (bio textarea, avatar file field, remove-avatar checkbox), drop the ad-hoc inline purple Admin-badge styles in favor of one tag variant.
-- [ ] Task 10: Sweep. Grep every class used in templates against defined CSS (site + Bulma); delete orphan rules in `disjoint.css`; remove all remaining inline `style=""` referencing `var(--*)`; final pass on `post_partial.html` parity.
+- [x] Task 4: Board index (`index.html`): forum sections → cards, board rows (decide columns vs grid), unread/NEW tags, on-air strip, activity list, empty states.
+- [x] Task 5: Board view (`board.html`): header → box+level, thread rows, expiry/never tags, empty state.
+- [x] Task 6: Thread view (`thread.html`): breadcrumb, thread-header box, post cards, reply form (field/label/textarea/select/help, file input, checkbox control, HTMX attrs untouched).
+- [x] Task 7: Auth pages (`login.html`, `register.html`, `setup.html`, `register_closed.html`): centered box, fields, full-width primary buttons, dim footer links.
+- [x] Task 8: New board / new thread (`new_board.html`, `new_thread.html`): forms, hints, submit/cancel button row.
+- [x] Task 9: Admin + profile (`users.html`, `invites.html`, `user_card.html`): `.table.is-fullwidth` + tag roles (Admin tag → `is-warning`/`is-primary`), profile form (bio textarea, avatar file field, remove-avatar checkbox), drop the ad-hoc inline purple Admin-badge styles in favor of one tag variant.
+- [x] Task 10: Sweep. Grep every class used in templates against defined CSS (site + Bulma); delete orphan rules in `disjoint.css`; remove all remaining inline `style=""` referencing `var(--*)`; final pass on `post_partial.html` parity.
 
 ### Checkpoint: Migration complete
-- [ ] All pages verified in light + dark + mobile (≤768px): index, board, thread, login, register, setup, new board, new thread, users, invites, user card, register-closed.
+- [x] All pages verified in light + dark + mobile (≤768px): index, board, thread, login, register, setup, new board, new thread, users, invites, user card, register-closed.
 - [ ] HTMX reply flow verified (partial styles match the thread page; form resets on success).
 - [ ] No template references a class that is defined in neither Bulma nor `disjoint.css` (grep check).
 
 ### Phase 3: Polish + docs
-- [ ] Task 11: Visual polish. Compare against pre-migration screenshots (capture before Task 2!): row hover states, focus rings, tag density, card rounding/shadows; adjust `disjoint.css` (Bulma modifiers preferred over overrides).
-- [ ] Task 12: Docs. Update `specs/disjoint.md` §2 Styling line ("Bulma v1 (vendored precompiled, MIT) + small site stylesheet"); README note on `make css` for Bulma upgrades.
-- [ ] Task 13: Final. Full test suite, `go vet`, byte-size sanity check of the vendored CSS, commit history clean (suggested split: vendor/wire → per-page migrations → sweep/polish).
+- [x] Task 11: Visual polish. Compare against pre-migration screenshots (capture before Task 2!): row hover states, focus rings, tag density, card rounding/shadows; adjust `disjoint.css` (Bulma modifiers preferred over overrides).
+- [x] Task 12: Docs. Update `specs/disjoint.md` §2 Styling line ("Bulma v1 (vendored precompiled, MIT) + small site stylesheet"); README note on `make css` for Bulma upgrades.
+- [x] Task 13: Final. Full test suite, `go vet`, byte-size sanity check of the vendored CSS, commit history clean (suggested split: vendor/wire → per-page migrations → sweep/polish).
 
 ## Risks / Watch-outs
 1. **Dark-first theme blocks are copied CSS** — the extracted light/dark variable blocks in `disjoint.css` must be regenerated together with the vendored min file (`make css` does both); hand-editing only one side desyncs the themes.

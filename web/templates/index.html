@@ -1,8 +1,11 @@
 {{define "content"}}
-<div class="index-page">
-  <div class="breadcrumb">
-    <span>Home</span> &bull; <span>Board Index</span>
-  </div>
+<div>
+  <nav class="breadcrumb is-small mb-4" aria-label="breadcrumbs">
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li class="is-current" aria-current="page"><span>Board Index</span></li>
+    </ul>
+  </nav>
 
   {{if .Online}}
     <div class="on-air">
@@ -17,17 +20,17 @@
   {{end}}
 
   {{range .Categories}}
-    <section class="forum-section">
-      <div class="section-header">
-        <h2 class="section-title">{{.Category.Name}}</h2>
+    <section class="card forum-section mb-5">
+      <div class="card-header">
+        <p class="card-header-title">{{.Category.Name}}</p>
       </div>
-      <div class="board-list">
+      <div>
         {{range .Boards}}
           <div class="board-row">
             <div class="board-main">
               <div class="board-title">
                 {{if .IsUnread}}
-                  <span class="badge badge-unread">NEW</span>
+                  <span class="tag is-warning">NEW</span>
                 {{end}}
                 <a href="/boards/{{.Board.ID}}">{{.Board.Name}}</a>
               </div>
@@ -44,25 +47,25 @@
                 <a href="/threads/{{.LatestThread.ID}}" class="latest-title" title="{{.LatestThread.Title}}">{{.LatestThread.Title}}</a>
                 <div>by <strong>{{authorLink .LatestThread.FirstPostAnonymous .LatestThread.AuthorUsername}}</strong> &bull; <time>{{formatRelative .LatestThread.UpdatedAt.Time}}</time></div>
               {{else}}
-                <span class="text-dim">No threads yet</span>
+                <span class="has-text-grey">No threads yet</span>
               {{end}}
             </div>
           </div>
         {{else}}
-          <div style="padding: 16px; color: var(--text-dim); font-size: 13px;">No boards in this category yet.</div>
+          <div class="py-4 has-text-centered has-text-grey">No boards in this category yet.</div>
         {{end}}
       </div>
     </section>
   {{else}}
-    <div class="forum-section" style="padding: 24px; text-align: center;">
-      <p style="color: var(--text-muted); margin-bottom: 12px;">No categories configured yet.</p>
-      <a href="/boards/new" class="btn btn-primary">+ Create First Board</a>
+    <div class="card forum-section py-6 has-text-centered">
+      <p class="has-text-grey mb-4">No categories configured yet.</p>
+      <a href="/boards/new" class="button is-primary">+ Create First Board</a>
     </div>
   {{end}}
 
-  <section class="forum-section">
-    <div class="section-header">
-      <h2 class="section-title">Recent activity</h2>
+  <section class="card forum-section">
+    <div class="card-header">
+      <p class="card-header-title">Recent activity</p>
     </div>
     {{if .Activity}}
       <ul class="activity-list">

@@ -2,7 +2,7 @@
 
 **Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums (phpBB) with the casual, private, and ephemeral vibe of modern private chat groups.
 
-Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and pure CSS. Zero external JavaScript frameworks.
+Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-first). Zero external JavaScript frameworks.
 
 ---
 
@@ -19,7 +19,7 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and pure CSS. Zero external J
 - **Unread Indicators**: Retro-modern `NEW` badges highlight active boards and threads updated since your last visit.
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
 - **Zero-CGO Single Binary**: Pure Go SQLite driver (`modernc.org/sqlite`) and `//go:embed` for static assets and templates.
-- **Self-Contained Offline Deployment**: Vendored HTMX and minimal retro-modern CSS; no external CDNs required.
+- **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.
 - **First-Run Setup**: Automatic detection on initial launch to create the administrator account.
 
 ---

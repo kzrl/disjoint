@@ -115,7 +115,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 			if isAnon == 1 || name == "" {
 				return "Anonymous"
 			}
-			return template.HTML(`<a class="user-link" href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
+			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 		// authorAvatar renders a small round avatar image before an author
 		// name, or nothing when the user has no avatar.
@@ -130,7 +130,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 			if name == "" {
 				return ""
 			}
-			return template.HTML(`<a class="user-link" href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
+			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 	}
 

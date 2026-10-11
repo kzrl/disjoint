@@ -796,7 +796,7 @@ func TestAnonymousThreadCreation(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), `Started by <strong><a class="user-link" href="/users/anon_tester">anon_tester</a></strong>`) {
+	if !strings.Contains(rr.Body.String(), `Started by <strong><a href="/users/anon_tester">anon_tester</a></strong>`) {
 		t.Fatalf("expected thread page to show a linked 'Started by anon_tester' for attributed thread")
 	}
 }
@@ -880,7 +880,7 @@ func TestAnonymousReplies(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected HTMX reply 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), `class="post-author"><a class="user-link" href="/users/anon_replier">anon_replier</a>`) {
+	if !strings.Contains(rr.Body.String(), `class="post-author"><a href="/users/anon_replier">anon_replier</a>`) {
 		t.Fatalf("expected attributed HTMX partial to show linked username, got: %s", rr.Body.String())
 	}
 
@@ -901,7 +901,7 @@ func TestAnonymousReplies(t *testing.T) {
 		t.Fatalf("expected thread page to show anonymous reply author")
 	}
 	// Per-post semantics: starter (attributed) still shows the username alongside
-	if !strings.Contains(page, `Started by <strong><a class="user-link" href="/users/anon_replier">anon_replier</a></strong>`) {
+	if !strings.Contains(page, `Started by <strong><a href="/users/anon_replier">anon_replier</a></strong>`) {
 		t.Fatalf("expected attributed starter to remain visible")
 	}
 
@@ -949,7 +949,7 @@ func TestAnonymousReplies(t *testing.T) {
 		rr = httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		page := rr.Body.String()
-		if !strings.Contains(page, `class="post-author"><a class="user-link" href="/users/anon_replier">anon_replier</a>`) {
+		if !strings.Contains(page, `class="post-author"><a href="/users/anon_replier">anon_replier</a>`) {
 			t.Fatalf("expected attributed reply in anonymous thread to show linked username")
 		}
 		// Opening post of that thread must still be anonymous

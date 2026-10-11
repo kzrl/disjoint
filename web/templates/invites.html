@@ -1,48 +1,54 @@
 {{define "content"}}
-<div class="container" style="max-width: 720px; margin: 0 auto;">
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-    <h2 style="margin: 0;">Invite Links</h2>
-    <form method="POST" action="/invites">
-      <button type="submit" class="btn btn-primary btn-sm">+ Generate Invite</button>
-    </form>
+<div class="container is-max-w">
+  <div class="level is-mobile mb-4">
+    <div class="level-left">
+      <h2 class="title is-3">Invite Links</h2>
+    </div>
+    <div class="level-right">
+      <form method="POST" action="/invites">
+        <button type="submit" class="button is-primary is-small">+ Generate Invite</button>
+      </form>
+    </div>
   </div>
 
   {{if .Invites}}
-  <table class="table" style="width: 100%;">
-    <thead>
-      <tr>
-        <th>Invite Code</th>
-        <th>Status</th>
-        <th>Created</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .Invites}}
-      <tr>
-        <td><code style="font-size: 12px;">{{.Code}}</code></td>
-        <td>
-          {{if .UsedBy.Valid}}
-            <span style="color: var(--text-dim);">Used by <strong>{{.UsedByUsername.String}}</strong></span>
-          {{else}}
-            <span style="color: var(--accent-green, #4ade80);">● Available</span>
-          {{end}}
-        </td>
-        <td style="color: var(--text-dim); font-size: 13px;">{{formatTime .CreatedAt.Time}}</td>
-        <td style="text-align: right;">
-          {{if not .UsedBy.Valid}}
-          <form method="POST" action="/invites/{{.ID}}/delete" style="display:inline;">
-            <button type="submit" class="btn btn-secondary btn-sm" style="font-size: 12px;">Delete</button>
-          </form>
-          {{end}}
-        </td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
+  <div class="table-container">
+    <table class="table is-fullwidth is-hoverable">
+      <thead>
+        <tr>
+          <th>Invite Code</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Invites}}
+        <tr>
+          <td><code class="is-size-7">{{.Code}}</code></td>
+          <td>
+            {{if .UsedBy.Valid}}
+              <span class="has-text-grey">Used by <strong>{{.UsedByUsername.String}}</strong></span>
+            {{else}}
+              <span class="has-text-success">&#x25CF; Available</span>
+            {{end}}
+          </td>
+          <td class="is-size-7 has-text-grey">{{formatTime .CreatedAt.Time}}</td>
+          <td class="has-text-right">
+            {{if not .UsedBy.Valid}}
+            <form method="POST" action="/invites/{{.ID}}/delete">
+              <button type="submit" class="button is-light is-small">Delete</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
   {{else}}
-  <div class="form-panel" style="text-align: center; padding: 32px 24px;">
-    <p style="color: var(--text-dim); margin: 0;">No invites yet. Generate one to invite someone.</p>
+  <div class="box py-6 has-text-centered">
+    <p class="has-text-grey">No invites yet. Generate one to invite someone.</p>
   </div>
   {{end}}
 </div>

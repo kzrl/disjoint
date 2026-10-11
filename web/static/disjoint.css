@@ -1112,6 +1112,13 @@ main.container,
 
 /* --- Post cards ----------------------------------------------------------- */
 
+.posts-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
 .post-card {
   display: grid;
   grid-template-columns: 11.25rem minmax(0, 1fr);
@@ -1393,6 +1400,12 @@ main.container,
   color: var(--bulma-text-weak);
   padding: 0.5rem 1rem;
   font-size: 0.85rem;
+}
+
+/* --- Narrow-width pages (users, invites, user card) ------------------------------ */
+
+.is-max-w {
+  max-width: 45rem;
 }
 
 /* --- Auth pages --------------------------------------------------------------- */

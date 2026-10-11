@@ -17,7 +17,7 @@ It is designed for close-knit groups of friends who want an alternative to bloat
 
     Frontend Interactivity: Server-Side Rendered (SSR) HTML templates + HTMX for partial page updates and real-time interactions without a heavy SPA framework.
 
-    Styling: Minimal, clean CSS emphasizing a retro-modern, readable forum feel.
+    Styling: Bulma v1 (vendored precompiled, MIT) with a dark-first theme override and a small site-specific stylesheet (forum rows, post cards, markdown bodies). Regenerate with `make css` (BULMA_DIR points at a local Bulma checkout). See tasks/plan-bulma.md.
 
     File Storage: Local disk storage for uploaded media (images, videos, documents).
 
@@ -181,7 +181,8 @@ disjoint/
 │   └── query.sql            # sqlc query statements
 ├── uploads/                 # Local directory for stored media files (git-ignored)
 ├── web/
-│   ├── static/              # CSS stylesheets and global assets
+│   ├── css/                 # site.css (hand-maintained) + gen-theme.sh (dark-first theme generator)
+│   ├── static/              # Vendored Bulma, generated disjoint.css, HTMX (embedded)
 │   └── templates/           # HTML templates (.html components and layouts)
 ├── sqlc.yaml                # sqlc code generation configuration
 ├── Dockerfile               # Multi-stage Docker build for a single static binary
