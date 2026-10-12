@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -56,11 +55,6 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reply body cannot be empty", http.StatusBadRequest)
 		return
 	}
-	var isAnonymous int64
-	if r.FormValue("anonymous") != "" {
-		isAnonymous = 1
-	}
-
 	// Save attachments
 	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
 	if err != nil {
@@ -68,15 +62,11 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Insert post.
-	// Anonymous posts are stored with user_id = NULL so the author
-	// cannot be identified by anyone, including admins.
-	authorID := sql.NullInt64{Int64: user.ID, Valid: isAnonymous == 0}
+	// 1. Insert post (always attributed to the signed-in user).
 	post, err := app.queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID:    thread.ID,
-		UserID:      authorID,
-		Body:        body,
-		IsAnonymous: isAnonymous,
+		ThreadID: thread.ID,
+		UserID:   user.ID,
+		Body:     body,
 	})
 	if err != nil {
 		http.Error(w, "failed to create post", http.StatusInternalServerError)

@@ -434,7 +434,7 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 	pastTime := time.Now().UTC().Add(-1 * time.Hour).Round(0)
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
 		BoardID:   boardID,
-		UserID:    sql.NullInt64{Int64: u.ID, Valid: true},
+		UserID:    u.ID,
 		Title:     "Expired Thread",
 		ExpiresAt: sql.NullTime{Time: pastTime, Valid: true},
 	})
@@ -444,7 +444,7 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 
 	post, err := queries.CreatePost(ctx, database.CreatePostParams{
 		ThreadID: thread.ID,
-		UserID:   sql.NullInt64{Int64: u.ID, Valid: true},
+		UserID:   u.ID,
 		Body:     "This post should be purged.",
 	})
 	if err != nil {
@@ -511,7 +511,7 @@ func TestUnreadIndicators(t *testing.T) {
 	// User1 creates a new thread
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
 		BoardID:   board.ID,
-		UserID:    sql.NullInt64{Int64: u1.ID, Valid: true},
+		UserID:    u1.ID,
 		Title:     "New unread discussion",
 		ExpiresAt: sql.NullTime{Valid: false},
 	})
@@ -520,7 +520,7 @@ func TestUnreadIndicators(t *testing.T) {
 	}
 	_, _ = queries.CreatePost(ctx, database.CreatePostParams{
 		ThreadID: thread.ID,
-		UserID:   sql.NullInt64{Int64: u1.ID, Valid: true},
+		UserID:   u1.ID,
 		Body:     "Unread post content",
 	})
 
@@ -652,7 +652,7 @@ func TestStandardFormReplyFallback(t *testing.T) {
 	boards, _ := queries.ListBoards(ctx)
 	thread, _ := queries.CreateThread(ctx, database.CreateThreadParams{
 		BoardID:   boards[0].ID,
-		UserID:    sql.NullInt64{Int64: user.ID, Valid: true},
+		UserID:    user.ID,
 		Title:     "Fallback Test",
 		ExpiresAt: sql.NullTime{Valid: false},
 	})
@@ -678,538 +678,6 @@ func TestStandardFormReplyFallback(t *testing.T) {
 	}
 }
 
-func TestAnonymousThreadCreation(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-
-	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_tester", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
-
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-
-	newThread := func(anon bool) (threadID int64) {
-		t.Helper()
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("title", "Test Thread")
-		_ = w.WriteField("body", "Hello **world**.")
-		_ = w.WriteField("expiration", "7d")
-		if anon {
-			_ = w.WriteField("anonymous", "on")
-		}
-		_ = w.Close()
-
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
-		}
-		loc := rr.Header().Get("Location")
-		idStr := strings.TrimPrefix(loc, "/threads/")
-		id, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			t.Fatalf("expected redirect to /threads/{id}, got %s", loc)
-		}
-		return id
-	}
-
-	// 1. Create an anonymous thread
-	anonThreadID := newThread(true)
-
-	// Verify DB: post flagged anonymous and fully unlinked from its author
-	posts, err := queries.ListPostsByThread(ctx, anonThreadID)
-	if err != nil || len(posts) != 1 {
-		t.Fatalf("expected 1 post in anonymous thread, got %d (err: %v)", len(posts), err)
-	}
-	if posts[0].IsAnonymous != 1 {
-		t.Fatalf("expected post is_anonymous=1, got %d", posts[0].IsAnonymous)
-	}
-	if posts[0].UserID.Valid {
-		t.Fatalf("expected anonymous post.user_id to be NULL, got %d", posts[0].UserID.Int64)
-	}
-	if posts[0].AuthorUsername != "" {
-		t.Fatalf("expected anonymous post to expose no author username, got %q", posts[0].AuthorUsername)
-	}
-	anonThread, err := queries.GetThreadByID(ctx, anonThreadID)
-	if err != nil {
-		t.Fatalf("GetThreadByID: %v", err)
-	}
-	if anonThread.UserID.Valid {
-		t.Fatalf("expected anonymous thread.user_id to be NULL, got %d", anonThread.UserID.Int64)
-	}
-	if anonThread.AuthorUsername != "" {
-		t.Fatalf("expected anonymous thread to expose no author username, got %q", anonThread.AuthorUsername)
-	}
-
-	// 2. Thread page shows Anonymous instead of the username
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", anonThreadID), nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
-	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "Started by <strong>Anonymous</strong>") {
-		t.Fatalf("expected thread page to show 'Started by Anonymous'")
-	}
-	if !strings.Contains(body, `class="post-author">Anonymous<`) {
-		t.Fatalf("expected opening post author to render as 'Anonymous'")
-	}
-
-	// 3. Board listing shows Anonymous for the thread
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/boards/%d", boardID), nil)
-	req.AddCookie(cookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected GET board to return 200, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "Started by <strong>Anonymous</strong>") {
-		t.Fatalf("expected board listing to show 'Started by Anonymous'")
-	}
-
-	// 4. Regression: a normal thread still shows the username
-	normalThreadID := newThread(false)
-
-	posts, err = queries.ListPostsByThread(ctx, normalThreadID)
-	if err != nil || len(posts) != 1 || posts[0].IsAnonymous != 0 {
-		t.Fatalf("expected attributed post (is_anonymous=0), got %+v (err: %v)", posts, err)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", normalThreadID), nil)
-	req.AddCookie(cookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), `Started by <strong><a href="/users/anon_tester">anon_tester</a></strong>`) {
-		t.Fatalf("expected thread page to show a linked 'Started by anon_tester' for attributed thread")
-	}
-}
-
-func TestAnonymousReplies(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-
-	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_replier", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
-
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-
-	// Create a thread (attributed)
-	var threadID int64
-	{
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("title", "Reply Test")
-		_ = w.WriteField("body", "opening post")
-		_ = w.WriteField("expiration", "7d")
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("expected thread create redirect, got %d", rr.Code)
-		}
-		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
-		if err != nil {
-			t.Fatalf("bad thread redirect: %v", err)
-		}
-		threadID = id
-	}
-
-	reply := func(anon, htmx bool) *httptest.ResponseRecorder {
-		t.Helper()
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("body", "a reply")
-		if anon {
-			_ = w.WriteField("anonymous", "on")
-		}
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", threadID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		if htmx {
-			req.Header.Set("HX-Request", "true")
-		}
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		return rr
-	}
-
-	// 1. HTMX anonymous reply → partial renders Anonymous, no username in partial
-	rr := reply(true, true)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected HTMX reply 200, got %d: %s", rr.Code, rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), `class="post-author">Anonymous<`) {
-		t.Fatalf("expected HTMX partial to render author 'Anonymous', got: %s", rr.Body.String())
-	}
-	if strings.Contains(rr.Body.String(), "anon_replier") {
-		t.Fatalf("anonymous HTMX partial must not contain the real username")
-	}
-
-	// 2. HTMX attributed reply (regression) → partial shows username
-	rr = reply(false, true)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected HTMX reply 200, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), `class="post-author"><a href="/users/anon_replier">anon_replier</a>`) {
-		t.Fatalf("expected attributed HTMX partial to show linked username, got: %s", rr.Body.String())
-	}
-
-	// 3. Standard (non-HTMX) anonymous reply → redirect, then thread page shows it
-	rr = reply(true, false)
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("expected standard reply redirect, got %d: %s", rr.Code, rr.Body.String())
-	}
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", threadID), nil)
-	req.AddCookie(cookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected GET thread 200, got %d", rr.Code)
-	}
-	page := rr.Body.String()
-	if !strings.Contains(page, `class="post-author">Anonymous<`) {
-		t.Fatalf("expected thread page to show anonymous reply author")
-	}
-	// Per-post semantics: starter (attributed) still shows the username alongside
-	if !strings.Contains(page, `Started by <strong><a href="/users/anon_replier">anon_replier</a></strong>`) {
-		t.Fatalf("expected attributed starter to remain visible")
-	}
-
-	// 4. Per-post semantics: attributed reply inside an anonymous thread shows the replier
-	var anonThreadID int64
-	{
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("title", "Anon Thread")
-		_ = w.WriteField("body", "anon opening")
-		_ = w.WriteField("expiration", "7d")
-		_ = w.WriteField("anonymous", "on")
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("expected anonymous thread redirect, got %d", rr.Code)
-		}
-		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
-		if err != nil {
-			t.Fatalf("bad thread redirect: %v", err)
-		}
-		anonThreadID = id
-	}
-
-	// Attributed reply in the anonymous thread
-	{
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("body", "public reply")
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", anonThreadID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("expected reply redirect, got %d", rr.Code)
-		}
-		req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", anonThreadID), nil)
-		req.AddCookie(cookie)
-		rr = httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		page := rr.Body.String()
-		if !strings.Contains(page, `class="post-author"><a href="/users/anon_replier">anon_replier</a>`) {
-			t.Fatalf("expected attributed reply in anonymous thread to show linked username")
-		}
-		// Opening post of that thread must still be anonymous
-		if !strings.Contains(page, "Started by <strong>Anonymous</strong>") {
-			t.Fatalf("expected anonymous thread starter to remain 'Anonymous'")
-		}
-	}
-
-	// DB sanity: anonymous posts = 2 replies in the normal thread (HTMX + standard) + 1 opening post in the anon thread
-	posts1, err := queries.ListPostsByThread(ctx, threadID)
-	if err != nil {
-		t.Fatalf("ListPostsByThread: %v", err)
-	}
-	posts2, err := queries.ListPostsByThread(ctx, anonThreadID)
-	if err != nil {
-		t.Fatalf("ListPostsByThread: %v", err)
-	}
-	total := 0
-	for _, p := range append(append([]database.ListPostsByThreadRow{}, posts1...), posts2...) {
-		if p.IsAnonymous == 1 {
-			total++
-			if p.UserID.Valid {
-				t.Fatalf("anonymous post must not retain a user_id")
-			}
-			if p.AuthorUsername != "" {
-				t.Fatalf("anonymous post must not expose an author username")
-			}
-		}
-	}
-	if total != 3 {
-		t.Fatalf("expected exactly 3 anonymous posts, got %d", total)
-	}
-}
-
-func TestIndexPageAnonymousLatestThread(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-
-	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "index_anon", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
-
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-
-	// Create an anonymous thread; it is the board's latest thread
-	var b bytes.Buffer
-	w := multipart.NewWriter(&b)
-	_ = w.WriteField("title", "Index Anon Thread")
-	_ = w.WriteField("body", "anon opening")
-	_ = w.WriteField("expiration", "7d")
-	_ = w.WriteField("anonymous", "on")
-	_ = w.Close()
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
-	}
-
-	// Home page must show "by Anonymous" and never the real username
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(cookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected GET / to return 200, got %d", rr.Code)
-	}
-	body := rr.Body.String()
-	// (The nav bar legitimately shows the logged-in user's own name, so
-	// assert on the specific latest-thread attribution rather than the page.)
-	if strings.Contains(body, "by <strong>index_anon</strong>") {
-		t.Fatalf("home page must NOT reveal the anonymous starter's username")
-	}
-	if !strings.Contains(body, "by <strong>Anonymous</strong>") {
-		t.Fatalf("home page should show 'by Anonymous' for the latest thread")
-	}
-}
-
-func TestAnonymousInvisibleToAdmins(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-	sessionSecret := "test-secret-key-32-bytes-long!!"
-
-	poster, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "anon_poster", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("create poster: %v", err)
-	}
-	admin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "admin_viewer", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("create admin: %v", err)
-	}
-	if err := queries.SetUserAdmin(ctx, admin.ID); err != nil {
-		t.Fatalf("set admin: %v", err)
-	}
-	bystander, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "bystander", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("create bystander: %v", err)
-	}
-
-	cookie := func(id int64) *http.Cookie {
-		return &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(id, sessionSecret), Path: "/"}
-	}
-
-	// anon_poster creates an anonymous thread
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-	var threadID int64
-	{
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("title", "Anon Thread")
-		_ = w.WriteField("body", "secret opening")
-		_ = w.WriteField("expiration", "7d")
-		_ = w.WriteField("anonymous", "on")
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.AddCookie(cookie(poster.ID))
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("expected thread create redirect, got %d", rr.Code)
-		}
-		id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
-		if err != nil {
-			t.Fatalf("bad thread redirect: %v", err)
-		}
-		threadID = id
-	}
-
-	getThread := func(id int64) string {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", threadID), nil)
-		req.AddCookie(cookie(id))
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("expected GET thread 200 for viewer %d, got %d", id, rr.Code)
-		}
-		return rr.Body.String()
-	}
-
-	// 1. Admin sees plain "Anonymous" — no attribution of any kind
-	adminPage := getThread(admin.ID)
-	if strings.Contains(adminPage, "anon_poster") || strings.Contains(adminPage, "anon-attribution") {
-		t.Fatalf("admin thread page must NOT reveal the anonymous poster's identity")
-	}
-	if !strings.Contains(adminPage, "Anonymous") {
-		t.Fatalf("admin thread page should still show 'Anonymous'")
-	}
-
-	// 2. Non-admin (bystander) never sees the poster's name.
-	//    (The poster themselves also can't see it; the layout header shows their own name only for the poster, so we use a third party.)
-	bystanderPage := getThread(bystander.ID)
-	if strings.Contains(bystanderPage, "anon_poster") {
-		t.Fatalf("non-admin thread page must NOT contain the anonymous poster's username")
-	}
-	if !strings.Contains(bystanderPage, "Anonymous") {
-		t.Fatalf("non-admin thread page should still show 'Anonymous'")
-	}
-
-	// 3. Board listing: admin sees attribution, bystander doesn't
-	getBoard := func(id int64) string {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/boards/%d", boardID), nil)
-		req.AddCookie(cookie(id))
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("expected GET board 200, got %d", rr.Code)
-		}
-		return rr.Body.String()
-	}
-	if strings.Contains(getBoard(admin.ID), "anon_poster") {
-		t.Fatalf("admin board listing must NOT reveal the anonymous poster's identity")
-	}
-	if strings.Contains(getBoard(bystander.ID), "anon_poster") {
-		t.Fatalf("non-admin board listing must NOT contain the poster's username")
-	}
-
-	// 4. HTMX partial: admin posting an anonymous reply sees their own name; bystander posting one sees none
-	htmxReply := func(id int64) string {
-		t.Helper()
-		var b bytes.Buffer
-		w := multipart.NewWriter(&b)
-		_ = w.WriteField("body", "anon reply")
-		_ = w.WriteField("anonymous", "on")
-		_ = w.Close()
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", threadID), &b)
-		req.Header.Set("Content-Type", w.FormDataContentType())
-		req.Header.Set("HX-Request", "true")
-		req.AddCookie(cookie(id))
-		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("expected HTMX reply 200, got %d: %s", rr.Code, rr.Body.String())
-		}
-		return rr.Body.String()
-	}
-	adminPartial := htmxReply(admin.ID)
-	if strings.Contains(adminPartial, "admin_viewer") || strings.Contains(adminPartial, "anon-attribution") {
-		t.Fatalf("admin HTMX partial must NOT reveal the anonymous replier's identity, got: %s", adminPartial)
-	}
-	if !strings.Contains(adminPartial, "Anonymous") {
-		t.Fatalf("admin HTMX partial should show 'Anonymous', got: %s", adminPartial)
-	}
-	bystanderPartial := htmxReply(bystander.ID)
-	if strings.Contains(bystanderPartial, "bystander") {
-		t.Fatalf("non-admin HTMX partial must NOT contain the replier's username, got: %s", bystanderPartial)
-	}
-	if !strings.Contains(bystanderPartial, "Anonymous") {
-		t.Fatalf("non-admin HTMX partial should show 'Anonymous'")
-	}
-
-	// 5. The database itself stores no link between the anonymous content
-	//    and its author — even direct DB inspection must not reveal it.
-	thread, err := queries.GetThreadByID(ctx, threadID)
-	if err != nil {
-		t.Fatalf("GetThreadByID: %v", err)
-	}
-	if thread.UserID.Valid {
-		t.Fatalf("anonymous thread.user_id must be NULL, got %d", thread.UserID.Int64)
-	}
-	if thread.AuthorUsername != "" {
-		t.Fatalf("anonymous thread must expose no author username, got %q", thread.AuthorUsername)
-	}
-	posts, err := queries.ListPostsByThread(ctx, threadID)
-	if err != nil {
-		t.Fatalf("ListPostsByThread: %v", err)
-	}
-	if len(posts) != 3 {
-		t.Fatalf("expected 3 posts in anonymous thread, got %d", len(posts))
-	}
-	for _, p := range posts {
-		if p.IsAnonymous != 1 {
-			t.Fatalf("expected all posts in anonymous thread to be anonymous, got %+v", p)
-		}
-		if p.UserID.Valid {
-			t.Fatalf("anonymous post.user_id must be NULL")
-		}
-		if p.AuthorUsername != "" {
-			t.Fatalf("anonymous post must expose no author username, got %q", p.AuthorUsername)
-		}
-	}
-}
 
 func TestUserAdministration(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
@@ -1454,13 +922,13 @@ func TestUserCardPageAndProfile(t *testing.T) {
 	}
 	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
 
-	// Seed: 2 attributed posts + 1 anonymous post (anonymous must not count)
+	// Seed: 2 attributed posts
 	boards, err := queries.ListBoards(ctx)
 	if err != nil || len(boards) == 0 {
 		t.Fatalf("expected seeded boards, got %v", err)
 	}
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: boards[0].ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+		BoardID: boards[0].ID, UserID: user.ID,
 		Title: "card thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
@@ -1468,16 +936,11 @@ func TestUserCardPageAndProfile(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-			ThreadID: thread.ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
-			Body: "attributed", IsAnonymous: 0,
+			ThreadID: thread.ID, UserID: user.ID,
+			Body: "attributed",
 		}); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: thread.ID, UserID: sql.NullInt64{}, Body: "anon", IsAnonymous: 1,
-	}); err != nil {
-		t.Fatal(err)
 	}
 	if err := queries.UpdateUserBio(ctx, database.UpdateUserBioParams{
 		Bio: sql.NullString{String: "Hello **bio**", Valid: true}, ID: user.ID,
@@ -1506,7 +969,7 @@ func TestUserCardPageAndProfile(t *testing.T) {
 		t.Errorf("expected rendered markdown bio, got:\n%s", body)
 	}
 	if !strings.Contains(body, "2 posts") {
-		t.Errorf("expected exactly 2 posts (anonymous excluded), got:\n%s", body)
+		t.Errorf("expected exactly 2 posts, got:\n%s", body)
 	}
 	if !strings.Contains(body, "Last seen") {
 		t.Errorf("expected 'Last seen' line, got:\n%s", body)
@@ -1633,45 +1096,30 @@ func TestRecentActivityTicker(t *testing.T) {
 
 	// Attributed thread + post
 	attribThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: board.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		BoardID: board.ID, UserID: alice.ID,
 		Title: "ticker thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: attribThread.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
-		Body: "hello", IsAnonymous: 0,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Anonymous thread + post (author must never appear)
-	anonThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: board.ID, UserID: sql.NullInt64{},
-		Title: "anon ticker thread", ExpiresAt: sql.NullTime{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: anonThread.ID, UserID: sql.NullInt64{},
-		Body: "ghost", IsAnonymous: 1,
+		ThreadID: attribThread.ID, UserID: alice.ID,
+		Body: "hello",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Expired thread's post must not appear
 	expiredThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: board.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
+		BoardID: board.ID, UserID: alice.ID,
 		Title: "expired thread", ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: expiredThread.ID, UserID: sql.NullInt64{Int64: alice.ID, Valid: true},
-		Body: "gone soon", IsAnonymous: 0,
+		ThreadID: expiredThread.ID, UserID: alice.ID,
+		Body: "gone soon",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1695,21 +1143,17 @@ func TestRecentActivityTicker(t *testing.T) {
 	if !strings.Contains(body, `/threads/`) {
 		t.Errorf("expected thread links in activity entries:\n%s", body)
 	}
-	// Anonymous entry shows "Anonymous", never the username
-	if strings.Contains(body, "anon ticker thread") && !strings.Contains(body, "Anonymous") {
-		t.Errorf("anonymous activity entry should render 'Anonymous'")
-	}
 	// Expired thread is absent
 	if strings.Contains(body, "expired thread") {
 		t.Errorf("expired thread should not appear in activity ticker:\n%s", body)
 	}
-	// Cap: 10 entries max (only 3 exist here; assert the query honors limit)
-	rows, err := queries.ListRecentActivity(ctx, 2)
+	// Cap: 10 entries max (only 1 non-expired entry exists; assert the query honors limit)
+	rows, err := queries.ListRecentActivity(ctx, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
-		t.Errorf("ListRecentActivity(limit=2) returned %d rows, want 2", len(rows))
+	if len(rows) != 1 {
+		t.Errorf("ListRecentActivity(limit=5) returned %d rows, want 1", len(rows))
 	}
 }
 
@@ -1918,15 +1362,15 @@ func TestUserAvatarUploads(t *testing.T) {
 		t.Fatal("expected seeded boards")
 	}
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: boards[0].ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
+		BoardID: boards[0].ID, UserID: user.ID,
 		Title: "avatar thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: thread.ID, UserID: sql.NullInt64{Int64: user.ID, Valid: true},
-		Body: "hello", IsAnonymous: 0,
+		ThreadID: thread.ID, UserID: user.ID,
+		Body: "hello",
 	}); err != nil {
 		t.Fatal(err)
 	}

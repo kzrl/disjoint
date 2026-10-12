@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS boards (
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     board_id INTEGER NOT NULL,
-    user_id INTEGER, -- NULL for anonymous threads (author cannot be determined)
+    user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -58,9 +58,8 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id INTEGER NOT NULL,
-    user_id INTEGER, -- NULL for anonymous posts (author cannot be determined)
+    user_id INTEGER NOT NULL,
     body TEXT NOT NULL, -- Stored as raw text/Markdown
-    is_anonymous INTEGER NOT NULL DEFAULT 0, -- Display as "Anonymous" instead of username
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

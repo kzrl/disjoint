@@ -29,8 +29,7 @@ const countPostsByUserID = `-- name: CountPostsByUserID :one
 SELECT COUNT(*) FROM posts WHERE user_id = ?
 `
 
-// Anonymous posts (user_id IS NULL) are intentionally never credited.
-func (q *Queries) CountPostsByUserID(ctx context.Context, userID sql.NullInt64) (int64, error) {
+func (q *Queries) CountPostsByUserID(ctx context.Context, userID int64) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPostsByUserID, userID)
 	var count int64
 	err := row.Scan(&count)
@@ -173,34 +172,26 @@ const createPost = `-- name: CreatePost :one
 INSERT INTO posts (
     thread_id,
     user_id,
-    body,
-    is_anonymous
+    body
 ) VALUES (
-    ?, ?, ?, ?
-) RETURNING id, thread_id, user_id, body, is_anonymous, created_at
+    ?, ?, ?
+) RETURNING id, thread_id, user_id, body, created_at
 `
 
 type CreatePostParams struct {
-	ThreadID    int64
-	UserID      sql.NullInt64
-	Body        string
-	IsAnonymous int64
+	ThreadID int64
+	UserID   int64
+	Body     string
 }
 
 func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, error) {
-	row := q.db.QueryRowContext(ctx, createPost,
-		arg.ThreadID,
-		arg.UserID,
-		arg.Body,
-		arg.IsAnonymous,
-	)
+	row := q.db.QueryRowContext(ctx, createPost, arg.ThreadID, arg.UserID, arg.Body)
 	var i Post
 	err := row.Scan(
 		&i.ID,
 		&i.ThreadID,
 		&i.UserID,
 		&i.Body,
-		&i.IsAnonymous,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -219,7 +210,7 @@ INSERT INTO threads (
 
 type CreateThreadParams struct {
 	BoardID   int64
-	UserID    sql.NullInt64
+	UserID    int64
 	Title     string
 	ExpiresAt sql.NullTime
 }
@@ -413,8 +404,7 @@ SELECT
     t.title,
     t.created_at,
     t.updated_at,
-    COALESCE(u.username, '') AS author_username,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    COALESCE(u.username, '') AS author_username
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
@@ -423,13 +413,12 @@ LIMIT 1
 `
 
 type GetLatestThreadForBoardRow struct {
-	ID                 int64
-	BoardID            int64
-	Title              string
-	CreatedAt          sql.NullTime
-	UpdatedAt          sql.NullTime
-	AuthorUsername     string
-	FirstPostAnonymous int64
+	ID             int64
+	BoardID        int64
+	Title          string
+	CreatedAt      sql.NullTime
+	UpdatedAt      sql.NullTime
+	AuthorUsername string
 }
 
 func (q *Queries) GetLatestThreadForBoard(ctx context.Context, boardID int64) (GetLatestThreadForBoardRow, error) {
@@ -442,7 +431,6 @@ func (q *Queries) GetLatestThreadForBoard(ctx context.Context, boardID int64) (G
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AuthorUsername,
-		&i.FirstPostAnonymous,
 	)
 	return i, err
 }
@@ -453,7 +441,6 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
-    p.is_anonymous,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar
@@ -465,9 +452,8 @@ WHERE p.id = ? LIMIT 1
 type GetPostByIDRow struct {
 	ID             int64
 	ThreadID       int64
-	UserID         sql.NullInt64
+	UserID         int64
 	Body           string
-	IsAnonymous    int64
 	CreatedAt      sql.NullTime
 	AuthorUsername string
 	AuthorAvatar   string
@@ -481,7 +467,6 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 		&i.ThreadID,
 		&i.UserID,
 		&i.Body,
-		&i.IsAnonymous,
 		&i.CreatedAt,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
@@ -502,8 +487,7 @@ SELECT
     COALESCE(u.avatar_path, '') AS author_avatar,
     b.name AS board_name,
     b.category_id,
-    c.name AS category_name,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    c.name AS category_name
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 JOIN boards b ON t.board_id = b.id
@@ -513,19 +497,18 @@ LIMIT 1
 `
 
 type GetThreadByIDRow struct {
-	ID                 int64
-	BoardID            int64
-	UserID             sql.NullInt64
-	Title              string
-	CreatedAt          sql.NullTime
-	UpdatedAt          sql.NullTime
-	ExpiresAt          sql.NullTime
-	AuthorUsername     string
-	AuthorAvatar       string
-	BoardName          string
-	CategoryID         int64
-	CategoryName       string
-	FirstPostAnonymous int64
+	ID             int64
+	BoardID        int64
+	UserID         int64
+	Title          string
+	CreatedAt      sql.NullTime
+	UpdatedAt      sql.NullTime
+	ExpiresAt      sql.NullTime
+	AuthorUsername string
+	AuthorAvatar   string
+	BoardName      string
+	CategoryID     int64
+	CategoryName   string
 }
 
 func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow, error) {
@@ -544,7 +527,6 @@ func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow
 		&i.BoardName,
 		&i.CategoryID,
 		&i.CategoryName,
-		&i.FirstPostAnonymous,
 	)
 	return i, err
 }
@@ -772,8 +754,7 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    MAX(t.updated_at) AS latest_updated_at,
-    CAST(COALESCE(MAX((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1)), 0) AS INTEGER) AS first_post_anonymous
+    MAX(t.updated_at) AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -782,15 +763,14 @@ ORDER BY b.position ASC, b.id ASC
 `
 
 type ListBoardsWithDetailsRow struct {
-	ID                 int64
-	CategoryID         int64
-	Name               string
-	Description        sql.NullString
-	Position           int64
-	ThreadCount        int64
-	PostCount          int64
-	LatestUpdatedAt    interface{}
-	FirstPostAnonymous int64
+	ID              int64
+	CategoryID      int64
+	Name            string
+	Description     sql.NullString
+	Position        int64
+	ThreadCount     int64
+	PostCount       int64
+	LatestUpdatedAt interface{}
 }
 
 func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDetailsRow, error) {
@@ -811,7 +791,6 @@ func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDe
 			&i.ThreadCount,
 			&i.PostCount,
 			&i.LatestUpdatedAt,
-			&i.FirstPostAnonymous,
 		); err != nil {
 			return nil, err
 		}
@@ -987,7 +966,6 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
-    p.is_anonymous,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar
@@ -1000,9 +978,8 @@ ORDER BY p.created_at ASC, p.id ASC
 type ListPostsByThreadRow struct {
 	ID             int64
 	ThreadID       int64
-	UserID         sql.NullInt64
+	UserID         int64
 	Body           string
-	IsAnonymous    int64
 	CreatedAt      sql.NullTime
 	AuthorUsername string
 	AuthorAvatar   string
@@ -1022,7 +999,6 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 			&i.ThreadID,
 			&i.UserID,
 			&i.Body,
-			&i.IsAnonymous,
 			&i.CreatedAt,
 			&i.AuthorUsername,
 			&i.AuthorAvatar,
@@ -1044,7 +1020,6 @@ const listRecentActivity = `-- name: ListRecentActivity :many
 SELECT
     p.id,
     p.created_at,
-    p.is_anonymous,
     COALESCE(u.username, '') AS author_username,
     t.id AS thread_id,
     t.title AS thread_title,
@@ -1062,7 +1037,6 @@ LIMIT ?
 type ListRecentActivityRow struct {
 	ID             int64
 	CreatedAt      sql.NullTime
-	IsAnonymous    int64
 	AuthorUsername string
 	ThreadID       int64
 	ThreadTitle    string
@@ -1082,7 +1056,6 @@ func (q *Queries) ListRecentActivity(ctx context.Context, limit int64) ([]ListRe
 		if err := rows.Scan(
 			&i.ID,
 			&i.CreatedAt,
-			&i.IsAnonymous,
 			&i.AuthorUsername,
 			&i.ThreadID,
 			&i.ThreadTitle,
@@ -1112,8 +1085,7 @@ SELECT
     t.updated_at,
     t.expires_at,
     COALESCE(u.username, '') AS author_username,
-    COUNT(p.id) AS post_count,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    COUNT(p.id) AS post_count
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -1123,16 +1095,15 @@ ORDER BY t.updated_at DESC
 `
 
 type ListThreadsByBoardRow struct {
-	ID                 int64
-	BoardID            int64
-	UserID             sql.NullInt64
-	Title              string
-	CreatedAt          sql.NullTime
-	UpdatedAt          sql.NullTime
-	ExpiresAt          sql.NullTime
-	AuthorUsername     string
-	PostCount          int64
-	FirstPostAnonymous int64
+	ID             int64
+	BoardID        int64
+	UserID         int64
+	Title          string
+	CreatedAt      sql.NullTime
+	UpdatedAt      sql.NullTime
+	ExpiresAt      sql.NullTime
+	AuthorUsername string
+	PostCount      int64
 }
 
 func (q *Queries) ListThreadsByBoard(ctx context.Context, boardID int64) ([]ListThreadsByBoardRow, error) {
@@ -1154,7 +1125,6 @@ func (q *Queries) ListThreadsByBoard(ctx context.Context, boardID int64) ([]List
 			&i.ExpiresAt,
 			&i.AuthorUsername,
 			&i.PostCount,
-			&i.FirstPostAnonymous,
 		); err != nil {
 			return nil, err
 		}

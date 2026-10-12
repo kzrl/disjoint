@@ -32,8 +32,7 @@ var allowedAvatarMIMETypes = map[string]string{
 }
 
 // UserCardPage renders a user's profile card: avatar, bio, join date, last
-// seen, and attributed post count. Anonymous content is unlinked from its
-// author by design, so it never contributes to the post count.
+// seen, and post count (every post is attributed to its author).
 func (app *App) UserCardPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := r.PathValue("name")
@@ -50,7 +49,7 @@ func (app *App) UserCardPage(w http.ResponseWriter, r *http.Request) {
 		lastSeen = &tsCopy
 	}
 
-	postCount, err := app.queries.CountPostsByUserID(ctx, sql.NullInt64{Int64: cardUser.ID, Valid: true})
+	postCount, err := app.queries.CountPostsByUserID(ctx, cardUser.ID)
 	if err != nil {
 		http.Error(w, "failed to load user card", http.StatusInternalServerError)
 		return

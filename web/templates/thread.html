@@ -15,7 +15,7 @@
         <div>
           <h1 class="title is-4 mb-1">{{.Thread.Title}}</h1>
           <div class="is-size-7 has-text-grey">
-            Started by <strong>{{authorAvatar .Thread.AuthorAvatar}}{{authorLink .Thread.FirstPostAnonymous .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
+            Started by <strong>{{authorAvatar .Thread.AuthorAvatar}}{{authorLink .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
           </div>
         </div>
       </div>
@@ -37,7 +37,7 @@
     {{range .Posts}}
       <div class="post-card" id="post-{{.Post.ID}}">
         <div class="post-sidebar">
-          <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{authorLink .Post.IsAnonymous .Post.AuthorUsername}}</div>
+          <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{authorLink .Post.AuthorUsername}}</div>
           <div class="post-date"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
         </div>
         <div class="post-content-area">
@@ -103,15 +103,6 @@
         <label class="label is-size-7">Attach Files (optional)</label>
         <div class="control">
           <input type="file" name="files" class="input" multiple accept="image/*,video/*,application/pdf,text/*">
-        </div>
-      </div>
-
-      <div class="field">
-        <div class="control">
-          <label class="checkbox is-size-7" for="reply-anonymous">
-            <input type="checkbox" id="reply-anonymous" name="anonymous" value="on">
-            Post this reply anonymously
-          </label>
         </div>
       </div>
 

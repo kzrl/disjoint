@@ -70,10 +70,6 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	title := strings.TrimSpace(r.FormValue("title"))
 	body := strings.TrimSpace(r.FormValue("body"))
 	expiration := r.FormValue("expiration")
-	var isAnonymous int64
-	if r.FormValue("anonymous") != "" {
-		isAnonymous = 1
-	}
 
 	if title == "" || body == "" {
 		setFlash(w, "flash_error", "Title and post content are required.")
@@ -104,13 +100,10 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Create thread.
-	// Anonymous threads are stored with user_id = NULL so the author
-	// cannot be identified by anyone, including admins.
-	authorID := sql.NullInt64{Int64: user.ID, Valid: isAnonymous == 0}
+	// 1. Create thread (always attributed to the signed-in user).
 	thread, err := app.queries.CreateThread(ctx, database.CreateThreadParams{
 		BoardID:   boardID,
-		UserID:    authorID,
+		UserID:    user.ID,
 		Title:     title,
 		ExpiresAt: expiresAt,
 	})
@@ -122,10 +115,9 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Create initial post
 	post, err := app.queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID:    thread.ID,
-		UserID:      authorID,
-		Body:        body,
-		IsAnonymous: isAnonymous,
+		ThreadID: thread.ID,
+		UserID:   user.ID,
+		Body:     body,
 	})
 	if err != nil {
 		setFlash(w, "flash_error", "Failed to create initial post.")

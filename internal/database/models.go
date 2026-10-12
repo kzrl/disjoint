@@ -43,18 +43,17 @@ type Invite struct {
 }
 
 type Post struct {
-	ID          int64
-	ThreadID    int64
-	UserID      sql.NullInt64
-	Body        string
-	IsAnonymous int64
-	CreatedAt   sql.NullTime
+	ID        int64
+	ThreadID  int64
+	UserID    int64
+	Body      string
+	CreatedAt sql.NullTime
 }
 
 type Thread struct {
 	ID        int64
 	BoardID   int64
-	UserID    sql.NullInt64
+	UserID    int64
 	Title     string
 	CreatedAt sql.NullTime
 	UpdatedAt sql.NullTime

@@ -65,8 +65,7 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    MAX(t.updated_at) AS latest_updated_at,
-    CAST(COALESCE(MAX((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1)), 0) AS INTEGER) AS first_post_anonymous
+    MAX(t.updated_at) AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -80,8 +79,7 @@ SELECT
     t.title,
     t.created_at,
     t.updated_at,
-    COALESCE(u.username, '') AS author_username,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    COALESCE(u.username, '') AS author_username
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
@@ -98,8 +96,7 @@ SELECT
     t.updated_at,
     t.expires_at,
     COALESCE(u.username, '') AS author_username,
-    COUNT(p.id) AS post_count,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    COUNT(p.id) AS post_count
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -120,8 +117,7 @@ SELECT
     COALESCE(u.avatar_path, '') AS author_avatar,
     b.name AS board_name,
     b.category_id,
-    c.name AS category_name,
-    CAST(COALESCE((SELECT is_anonymous FROM posts fp WHERE fp.thread_id = t.id ORDER BY fp.id LIMIT 1), 0) AS INTEGER) AS first_post_anonymous
+    c.name AS category_name
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 JOIN boards b ON t.board_id = b.id
@@ -169,7 +165,6 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
-    p.is_anonymous,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar
@@ -184,7 +179,6 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
-    p.is_anonymous,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar
@@ -196,10 +190,9 @@ WHERE p.id = ? LIMIT 1;
 INSERT INTO posts (
     thread_id,
     user_id,
-    body,
-    is_anonymous
+    body
 ) VALUES (
-    ?, ?, ?, ?
+    ?, ?, ?
 ) RETURNING *;
 
 -- name: CreateAttachment :one
@@ -303,7 +296,6 @@ ORDER BY p.last_seen_at DESC;
 SELECT last_seen_at FROM user_presence WHERE user_id = ? LIMIT 1;
 
 -- name: CountPostsByUserID :one
--- Anonymous posts (user_id IS NULL) are intentionally never credited.
 SELECT COUNT(*) FROM posts WHERE user_id = ?;
 
 -- name: UpdateUserBio :exec
@@ -319,7 +311,6 @@ UPDATE users SET avatar_path = NULL WHERE id = ?;
 SELECT
     p.id,
     p.created_at,
-    p.is_anonymous,
     COALESCE(u.username, '') AS author_username,
     t.id AS thread_id,
     t.title AS thread_title,

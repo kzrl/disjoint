@@ -107,14 +107,10 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 		"renderMarkdown": func(body string) template.HTML {
 			return markdown.Render(body)
 		},
-		// authorLink renders a post/thread author: the real username as a link
-		// to its user card, or plain "Anonymous" when the content is anonymous.
-		// Anonymous posts are stored unlinked from their author, so there is
-		// never a username to show or link for them.
-		"authorLink": func(isAnon int64, name string) template.HTML {
-			if isAnon == 1 || name == "" {
-				return "Anonymous"
-			}
+		// authorLink renders a post/thread author as a link to its user
+		// card. Every post and thread is attributed to a real user
+		// (posts.user_id is NOT NULL), so there is no anonymous case.
+		"authorLink": func(name string) template.HTML {
 			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 		// authorAvatar renders a small round avatar image before an author

@@ -45,7 +45,7 @@
             <div class="board-latest">
               {{if .LatestThread}}
                 <a href="/threads/{{.LatestThread.ID}}" class="latest-title" title="{{.LatestThread.Title}}">{{.LatestThread.Title}}</a>
-                <div>by <strong>{{authorLink .LatestThread.FirstPostAnonymous .LatestThread.AuthorUsername}}</strong> &bull; <time>{{formatRelative .LatestThread.UpdatedAt.Time}}</time></div>
+                <div>by <strong>{{authorLink .LatestThread.AuthorUsername}}</strong> &bull; <time>{{formatRelative .LatestThread.UpdatedAt.Time}}</time></div>
               {{else}}
                 <span class="has-text-grey">No threads yet</span>
               {{end}}
@@ -71,7 +71,7 @@
       <ul class="activity-list">
         {{range .Activity}}
           <li>
-            {{authorLink .IsAnonymous .AuthorUsername}} posted in
+            {{authorLink .AuthorUsername}} posted in
             <a href="/boards/{{.BoardID}}">{{.BoardName}}</a> &bull;
             <a href="/threads/{{.ThreadID}}">{{.ThreadTitle}}</a>
             <span class="activity-time">&middot; {{formatRelative .CreatedAt.Time}}</span>
