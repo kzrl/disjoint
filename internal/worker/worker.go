@@ -50,15 +50,24 @@ func (w *Worker) Start(ctx context.Context) {
 	}()
 }
 
-// CleanupOnce performs a single pass of identifying and deleting expired threads and their files.
+// CleanupOnce performs a single pass of identifying and deleting expired
+// threads and their files.
 func (w *Worker) CleanupOnce(ctx context.Context) error {
-	// 1. Find all attachment files that belong to expired threads
+	// 1. Collect the attachment files that belong to expired threads.
 	attachments, err := w.queries.GetAttachmentsForExpiredThreads(ctx)
 	if err != nil {
 		return err
 	}
 
-	// 2. Remove physical files from disk
+	// 2. Delete the rows first (cascades to posts, attachments, reads). The
+	// order matters: if file deletion then fails, we are left with orphaned
+	// files (harmless, recoverable) — never attachment rows pointing at
+	// files that no longer exist.
+	if err := w.queries.DeleteExpiredThreads(ctx); err != nil {
+		return err
+	}
+
+	// 3. Remove physical files from disk.
 	for _, att := range attachments {
 		if att.StoragePath != "" {
 			fullPath := filepath.Join(w.uploadDir, filepath.Clean(att.StoragePath))
@@ -66,11 +75,6 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 				log.Printf("[worker] Warning: could not delete expired attachment file %s: %v", fullPath, err)
 			}
 		}
-	}
-
-	// 3. Delete expired threads from database (cascades to posts, attachments, reads)
-	if err := w.queries.DeleteExpiredThreads(ctx); err != nil {
-		return err
 	}
 
 	return nil

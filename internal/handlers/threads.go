@@ -60,8 +60,8 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form up to 50MB
-	if err := r.ParseMultipartForm(50 << 20); err != nil {
+	// Parse multipart form (maxUploadSize of in-memory form data)
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		setFlash(w, "flash_error", "Failed to parse upload form: "+err.Error())
 		http.Redirect(w, r, "/boards/"+boardIDStr+"/threads/new", http.StatusSeeOther)
 		return
@@ -100,40 +100,56 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Create thread (always attributed to the signed-in user).
-	thread, err := app.queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID:   boardID,
-		UserID:    user.ID,
-		Title:     title,
-		ExpiresAt: expiresAt,
-	})
+	// Thread, initial post, and attachments commit together: a failed
+	// step must not leave a title-only thread behind.
+	tx, err := app.db.BeginTx(ctx, nil)
 	if err != nil {
 		setFlash(w, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/boards/"+boardIDStr+"/threads/new", http.StatusSeeOther)
 		return
 	}
+	qtx := app.queries.WithTx(tx)
 
-	// 2. Create initial post
-	post, err := app.queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: thread.ID,
-		UserID:   user.ID,
-		Body:     body,
+	// 1. Create thread (always attributed to the signed-in user).
+	thread, err := qtx.CreateThread(ctx, database.CreateThreadParams{
+		BoardID:   boardID,
+		UserID:    user.ID,
+		Title:     title,
+		ExpiresAt: expiresAt,
 	})
-	if err != nil {
-		setFlash(w, "flash_error", "Failed to create initial post.")
-		http.Redirect(w, r, "/boards/"+boardIDStr, http.StatusSeeOther)
-		return
+	if err == nil {
+		// 2. Create initial post
+		post, err := qtx.CreatePost(ctx, database.CreatePostParams{
+			ThreadID: thread.ID,
+			UserID:   user.ID,
+			Body:     body,
+		})
+		if err == nil {
+			// 3. Save attachments
+			for _, f := range uploadedFiles {
+				if _, err = qtx.CreateAttachment(ctx, database.CreateAttachmentParams{
+					PostID:      post.ID,
+					Filename:    f.OriginalName,
+					StoragePath: f.StoragePath,
+					MimeType:    f.MimeType,
+					FileSize:    f.FileSize,
+				}); err != nil {
+					break
+				}
+			}
+		}
 	}
 
-	// 3. Save attachments
-	for _, f := range uploadedFiles {
-		_, _ = app.queries.CreateAttachment(ctx, database.CreateAttachmentParams{
-			PostID:      post.ID,
-			Filename:    f.OriginalName,
-			StoragePath: f.StoragePath,
-			MimeType:    f.MimeType,
-			FileSize:    f.FileSize,
-		})
+	if err != nil {
+		tx.Rollback()
+		setFlash(w, "flash_error", "Failed to create thread.")
+		http.Redirect(w, r, "/boards/"+boardIDStr+"/threads/new", http.StatusSeeOther)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		setFlash(w, "flash_error", "Failed to create thread.")
+		http.Redirect(w, r, "/boards/"+boardIDStr+"/threads/new", http.StatusSeeOther)
+		return
 	}
 
 	// Update user read state for board

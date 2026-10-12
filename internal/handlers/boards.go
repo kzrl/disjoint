@@ -16,7 +16,7 @@ type BoardViewItem struct {
 	Board        database.Board
 	ThreadCount  int64
 	PostCount    int64
-	LatestThread *database.GetLatestThreadForBoardRow
+	LatestThread *database.ListLatestThreadsByBoardRow
 	IsUnread     bool
 }
 
@@ -24,31 +24,6 @@ type BoardViewItem struct {
 type CategoryViewItem struct {
 	Category database.Category
 	Boards   []BoardViewItem
-}
-
-// ParseTimestamp parses SQLite timestamp values (which may be time.Time or string).
-func ParseTimestamp(v any) (time.Time, bool) {
-	if v == nil {
-		return time.Time{}, false
-	}
-	switch val := v.(type) {
-	case time.Time:
-		return val, true
-	case string:
-		formats := []string{
-			"2006-01-02 15:04:05",
-			"2006-01-02 15:04:05.999999999",
-			"2006-01-02 15:04:05.999999999 -0700 MST",
-			time.RFC3339Nano,
-			time.RFC3339,
-		}
-		for _, f := range formats {
-			if t, err := time.Parse(f, val); err == nil {
-				return t, true
-			}
-		}
-	}
-	return time.Time{}, false
 }
 
 // IndexPage renders the main forum index with categories, boards, and latest thread summaries.
@@ -95,28 +70,24 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Latest thread preview per board (one query for all boards)
+	latestRows, err := app.queries.ListLatestThreadsByBoard(ctx)
+	if err != nil {
+		http.Error(w, "failed to load latest threads", http.StatusInternalServerError)
+		return
+	}
+	latestMap := make(map[int64]*database.ListLatestThreadsByBoardRow, len(latestRows))
+	for i := range latestRows {
+		latestMap[latestRows[i].BoardID] = &latestRows[i]
+	}
+
 	// Map board details by category ID
 	catMap := make(map[int64][]BoardViewItem)
 	for _, bd := range boardDetails {
-		board := database.Board{
-			ID:          bd.ID,
-			CategoryID:  bd.CategoryID,
-			Name:        bd.Name,
-			Description: bd.Description,
-			Position:    bd.Position,
-		}
-
-		// Fetch latest thread preview
-		var latestThread *database.GetLatestThreadForBoardRow
-		lt, err := app.queries.GetLatestThreadForBoard(ctx, bd.ID)
-		if err == nil {
-			latestThread = &lt
-		}
-
 		// Check unread status
 		isUnread := false
-		if user != nil && bd.LatestUpdatedAt != nil {
-			if latestTime, ok := ParseTimestamp(bd.LatestUpdatedAt); ok {
+		if user != nil {
+			if latestTime, ok := bd.LatestUpdatedTime(); ok {
 				lastRead, hasRead := readMap[bd.ID]
 				if !hasRead || latestTime.After(lastRead) {
 					isUnread = true
@@ -125,10 +96,16 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		catMap[bd.CategoryID] = append(catMap[bd.CategoryID], BoardViewItem{
-			Board:        board,
+			Board: database.Board{
+				ID:          bd.ID,
+				CategoryID:  bd.CategoryID,
+				Name:        bd.Name,
+				Description: bd.Description,
+				Position:    bd.Position,
+			},
 			ThreadCount:  bd.ThreadCount,
 			PostCount:    bd.PostCount,
-			LatestThread: latestThread,
+			LatestThread: latestMap[bd.ID],
 			IsUnread:     isUnread,
 		})
 	}

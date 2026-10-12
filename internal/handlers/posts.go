@@ -44,8 +44,8 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form up to 50MB
-	if err := r.ParseMultipartForm(50 << 20); err != nil {
+	// Parse multipart form (maxUploadSize of in-memory form data)
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		http.Error(w, "failed to parse multipart form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -62,30 +62,49 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Insert post (always attributed to the signed-in user).
-	post, err := app.queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: thread.ID,
-		UserID:   user.ID,
-		Body:     body,
-	})
+	// Post and attachments commit together so a failed attachment insert
+	// does not leave a post referencing missing rows.
+	tx, err := app.db.BeginTx(ctx, nil)
 	if err != nil {
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}
+	qtx := app.queries.WithTx(tx)
+
+	// 1. Insert post (always attributed to the signed-in user).
+	post, err := qtx.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   user.ID,
+		Body:     body,
+	})
 
 	// 2. Insert attachments
 	var attachments []database.Attachment
-	for _, f := range uploadedFiles {
-		att, err := app.queries.CreateAttachment(ctx, database.CreateAttachmentParams{
-			PostID:      post.ID,
-			Filename:    f.OriginalName,
-			StoragePath: f.StoragePath,
-			MimeType:    f.MimeType,
-			FileSize:    f.FileSize,
-		})
-		if err == nil {
+	if err == nil {
+		for _, f := range uploadedFiles {
+			att, attErr := qtx.CreateAttachment(ctx, database.CreateAttachmentParams{
+				PostID:      post.ID,
+				Filename:    f.OriginalName,
+				StoragePath: f.StoragePath,
+				MimeType:    f.MimeType,
+				FileSize:    f.FileSize,
+			})
+			if attErr != nil {
+				err = attErr
+				break
+			}
 			attachments = append(attachments, att)
 		}
+	}
+
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "failed to create post", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "failed to create post", http.StatusInternalServerError)
+		return
 	}
 
 	// 3. Touch thread to update updated_at timestamp

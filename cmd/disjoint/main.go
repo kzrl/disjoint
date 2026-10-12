@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -61,8 +60,9 @@ func main() {
 		log.Fatalf("[disjoint] App initialization failed: %v", err)
 	}
 
+	addr := host + ":" + port
 	server := &http.Server{
-		Addr:         host + ":" + port,
+		Addr:         addr,
 		Handler:      app.Routes(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
@@ -73,15 +73,21 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	serveErr := make(chan error, 1)
 	go func() {
-		log.Printf("[disjoint] Server listening on http://%s:%s", host, port)
+		log.Printf("[disjoint] Server listening on http://%s", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("[disjoint] HTTP server error: %v", err)
+			serveErr <- err
 		}
 	}()
 
-	<-stop
-	log.Println("[disjoint] Shutting down gracefully...")
+	select {
+	case sig := <-stop:
+		log.Printf("[disjoint] Received %s, shutting down gracefully...", sig)
+	case err := <-serveErr:
+		cancel()
+		log.Fatalf("[disjoint] HTTP server error: %v", err)
+	}
 
 	// Cancel background workers
 	cancel()
@@ -93,5 +99,5 @@ func main() {
 		log.Printf("[disjoint] Error during server shutdown: %v", err)
 	}
 
-	fmt.Println("[disjoint] Server exited clean.")
+	log.Println("[disjoint] Server exited clean.")
 }

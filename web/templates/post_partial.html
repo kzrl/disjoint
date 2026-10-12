@@ -1,6 +1,6 @@
 <div class="post-card" id="post-{{.Post.ID}}">
   <div class="post-sidebar">
-    <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{authorLink .Post.AuthorUsername}}</div>
+    <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{userLink .Post.AuthorUsername}}</div>
     <div class="post-date"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
   </div>
   <div class="post-content-area">

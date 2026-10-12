@@ -37,11 +37,6 @@ INSERT INTO categories (
 SELECT * FROM boards
 ORDER BY position ASC, id ASC;
 
--- name: ListBoardsByCategoryID :many
-SELECT * FROM boards
-WHERE category_id = ?
-ORDER BY position ASC, id ASC;
-
 -- name: GetBoardByID :one
 SELECT * FROM boards
 WHERE id = ? LIMIT 1;
@@ -65,14 +60,16 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    MAX(t.updated_at) AS latest_updated_at
+    CAST(MAX(t.updated_at) AS TEXT) AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
 GROUP BY b.id
 ORDER BY b.position ASC, b.id ASC;
 
--- name: GetLatestThreadForBoard :one
+-- name: ListLatestThreadsByBoard :many
+-- One row per board: the most recently updated non-expired thread.
+-- Replaces a per-board GetLatestThreadForBoard round trip (N+1).
 SELECT 
     t.id,
     t.board_id,
@@ -80,11 +77,19 @@ SELECT
     t.created_at,
     t.updated_at,
     COALESCE(u.username, '') AS author_username
-FROM threads t
+FROM (
+    SELECT 
+        id, board_id, title, created_at, updated_at, user_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY board_id
+            ORDER BY updated_at DESC, id DESC
+        ) AS rn
+    FROM threads
+    WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
+) t
 LEFT JOIN users u ON t.user_id = u.id
-WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
-ORDER BY t.updated_at DESC
-LIMIT 1;
+WHERE t.rn = 1
+ORDER BY t.board_id ASC;
 
 -- name: ListThreadsByBoard :many
 SELECT 
@@ -144,10 +149,6 @@ WHERE id = ?;
 DELETE FROM threads
 WHERE id = ?;
 
--- name: ListExpiredThreads :many
-SELECT id FROM threads
-WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP;
-
 -- name: GetAttachmentsForExpiredThreads :many
 SELECT a.id, a.storage_path
 FROM attachments a
@@ -206,21 +207,12 @@ INSERT INTO attachments (
     ?, ?, ?, ?, ?
 ) RETURNING *;
 
--- name: ListAttachmentsByPostID :many
-SELECT * FROM attachments
-WHERE post_id = ?
-ORDER BY id ASC;
-
 -- name: ListAttachmentsByThreadID :many
 SELECT a.*
 FROM attachments a
 JOIN posts p ON a.post_id = p.id
 WHERE p.thread_id = ?
 ORDER BY a.id ASC;
-
--- name: GetAttachmentByID :one
-SELECT * FROM attachments
-WHERE id = ? LIMIT 1;
 
 -- name: UpsertUserBoardRead :exec
 INSERT INTO user_board_reads (user_id, board_id, last_read_at)
@@ -243,6 +235,10 @@ UPDATE users SET is_admin = 1 WHERE id = ?;
 -- name: RemoveUserAdmin :exec
 UPDATE users SET is_admin = 0 WHERE id = ?;
 
+-- name: DeleteUser :exec
+DELETE FROM users
+WHERE id = ?;
+
 -- name: ListUsers :many
 SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC;
 
@@ -252,7 +248,9 @@ INSERT INTO invites (code, created_by) VALUES (?, ?) RETURNING *;
 -- name: GetInviteByCode :one
 SELECT * FROM invites WHERE code = ? AND used_by IS NULL LIMIT 1;
 
--- name: ConsumeInvite :exec
+-- name: ConsumeInvite :execrows
+-- Returns the number of rows updated: 0 means the invite was already
+-- used (or deleted) by a concurrent request.
 UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL;
 
 -- name: ListInvites :many

@@ -22,18 +22,10 @@ type App struct {
 	queries         *database.Queries
 	uploadDir       string
 	sessionSecret   string
+	staticFS        fs.FS
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
 	middleware      *middleware.Middleware
-}
-
-// TemplateData is the base view context passed to rendered HTML templates.
-type TemplateData struct {
-	PageTitle    string
-	CurrentUser  *database.User
-	FlashError   string
-	FlashSuccess string
-	Data         any
 }
 
 // NewApp instantiates an App and compiles HTML templates.
@@ -46,6 +38,12 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 		templates:     make(map[string]*template.Template),
 		middleware:    middleware.New(queries, sessionSecret),
 	}
+
+	staticFS, err := fs.Sub(web.Files, "static")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open embedded static assets: %w", err)
+	}
+	app.staticFS = staticFS
 
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
@@ -107,10 +105,14 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 		"renderMarkdown": func(body string) template.HTML {
 			return markdown.Render(body)
 		},
-		// authorLink renders a post/thread author as a link to its user
-		// card. Every post and thread is attributed to a real user
-		// (posts.user_id is NOT NULL), so there is no anonymous case.
-		"authorLink": func(name string) template.HTML {
+		// userLink renders a username as a link to its user card
+		// (empty name renders nothing). Every post and thread is
+		// attributed to a real user (posts.user_id is NOT NULL), so there
+		// is no anonymous case.
+		"userLink": func(name string) template.HTML {
+			if name == "" {
+				return ""
+			}
 			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 		// authorAvatar renders a small round avatar image before an author
@@ -120,13 +122,6 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret stri
 				return ""
 			}
 			return template.HTML(`<img class="avatar avatar-sm" src="/uploads/` + template.HTMLEscapeString(url.PathEscape(path)) + `" alt="" loading="lazy">`)
-		},
-		// userLink renders a plain username as a link to its user card.
-		"userLink": func(name string) template.HTML {
-			if name == "" {
-				return ""
-			}
-			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 	}
 
@@ -199,14 +194,14 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 	}
 }
 
-// setFlash sets a temporary flash cookie.
+// setFlash sets a session-lifetime flash cookie; render() clears it on the
+// next page load, and browsers drop it on close.
 func setFlash(w http.ResponseWriter, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
-		MaxAge:   10,
 	})
 }
 
@@ -215,10 +210,7 @@ func (app *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// Embedded static assets (/static/*)
-	staticFS, err := fs.Sub(web.Files, "static")
-	if err == nil {
-		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	}
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(app.staticFS))))
 
 	// Uploaded media files (/uploads/{filename})
 	mux.HandleFunc("GET /uploads/{filename}", app.ServeUpload)

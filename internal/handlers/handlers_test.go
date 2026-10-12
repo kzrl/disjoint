@@ -333,10 +333,7 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	_, _ = part.Write([]byte("\xFF\xD8\xFF\xE0\x00\x10JFIFfakeimagedata"))
 	_ = w.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/boards/"+strings.TrimSpace(string(rune('0'+boardID)))+"/threads/new", &b)
-	req.URL.Path = "/boards/" + strings.TrimSpace(string(rune('0'+boardID))) + "/threads/new"
-	// Use standard route matching
-	req = httptest.NewRequest(http.MethodPost, "/boards/1/threads/new", &b)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.AddCookie(authCookie)
 	rr := httptest.NewRecorder()
@@ -536,8 +533,8 @@ func TestUnreadIndicators(t *testing.T) {
 			break
 		}
 	}
-	if targetBoard == nil || targetBoard.LatestUpdatedAt == nil {
-		t.Fatalf("expected latest updated at for board")
+	if targetBoard == nil {
+		t.Fatalf("expected board in details")
 	}
 
 	read, err := queries.GetUserBoardRead(ctx, database.GetUserBoardReadParams{
@@ -548,7 +545,7 @@ func TestUnreadIndicators(t *testing.T) {
 		t.Fatalf("expected valid last read")
 	}
 
-	latestTime, ok := handlers.ParseTimestamp(targetBoard.LatestUpdatedAt)
+	latestTime, ok := targetBoard.LatestUpdatedTime()
 	if !ok {
 		t.Fatalf("failed to parse latest updated timestamp: %#v", targetBoard.LatestUpdatedAt)
 	}
@@ -677,7 +674,6 @@ func TestStandardFormReplyFallback(t *testing.T) {
 		t.Fatalf("expected redirect to thread anchoring to post, got %s", loc)
 	}
 }
-
 
 func TestUserAdministration(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
@@ -1414,5 +1410,188 @@ func TestUserAvatarUploads(t *testing.T) {
 	}
 	if got := cardHTML(); !strings.Contains(got, "plain bio") {
 		t.Errorf("bio-only save did not persist:\n%s", got)
+	}
+}
+
+func postThreadWithFile(t *testing.T, router http.Handler, cookie *http.Cookie, boardID int64, filename string, content []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("title", "attachment thread")
+	_ = w.WriteField("body", "body")
+	part, err := w.CreateFormFile("files", filename)
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("failed to write file content: %v", err)
+	}
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	return rr
+}
+
+// TestAttachmentTypeEnforcementAndServing verifies the upload security model:
+// the stored extension is derived from the SNIFFED content type, never from
+// the user-chosen filename, so a file cannot be served as a type its content
+// is not (e.g. HTML saved as .html). Media is served inline; everything else
+// is force-downloaded.
+func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("password123")
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "carol", PasswordHash: hash})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards: %v", err)
+	}
+	boardID := boards[0].ID
+
+	// 1. Detected HTML content is rejected outright, with no thread left
+	// behind and no file on disk.
+	threadsBefore, err := queries.ListThreadsByBoard(ctx, boardID)
+	if err != nil {
+		t.Fatalf("failed to list threads: %v", err)
+	}
+	rr := postThreadWithFile(t, router, authCookie, boardID, "evil.html",
+		[]byte("<html><body><script>alert(1)</script></body></html>"))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect back to the form, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "/threads/new") {
+		t.Fatalf("expected redirect to the thread form, got %s", loc)
+	}
+	if n, _ := queries.ListThreadsByBoard(ctx, boardID); len(n) != len(threadsBefore) {
+		t.Fatalf("rejected upload must not create a thread")
+	}
+	if files := listUploadFiles(t, uploadDir); len(files) != 0 {
+		t.Fatalf("rejected upload must not leave a file behind: %v", files)
+	}
+
+	// 2. Content that sniffs as text/plain but carries an HTML-ish name
+	// must be stored with the .txt extension derived from the sniffed type,
+	// never the user-chosen .html — so it can never be served as a page.
+	rr = postThreadWithFile(t, router, authCookie, boardID, "sneaky.html",
+		[]byte("plain words only, no magic bytes at all"))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d", rr.Code)
+	}
+	stored := listUploadFiles(t, uploadDir)
+	if len(stored) != 1 || !strings.HasSuffix(stored[0], ".txt") {
+		t.Fatalf("expected text content stored with .txt extension, got %v", stored)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+stored[0], nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 serving upload, got %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("expected text/plain content type, got %q", ct)
+	}
+	if cd := rr.Header().Get("Content-Disposition"); cd != "attachment" {
+		t.Fatalf("expected Content-Disposition: attachment for non-media file, got %q", cd)
+	}
+
+	// 3. Real JPEG content (user named it .bin) is stored as .jpg and
+	// served inline.
+	rr = postThreadWithFile(t, router, authCookie, boardID, "photo.bin",
+		[]byte("\xFF\xD8\xFF\xE0\x00\x10JFIFfakeimagedata"))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d", rr.Code)
+	}
+	var jpg string
+	for _, f := range listUploadFiles(t, uploadDir) {
+		if strings.HasSuffix(f, ".jpg") {
+			jpg = f
+		}
+	}
+	if jpg == "" {
+		t.Fatalf("expected JPEG content stored with .jpg extension, got %v", listUploadFiles(t, uploadDir))
+	}
+	req = httptest.NewRequest(http.MethodGet, "/uploads/"+jpg, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 serving jpeg, got %d", rr.Code)
+	}
+	if cd := rr.Header().Get("Content-Disposition"); cd != "inline" {
+		t.Fatalf("expected Content-Disposition: inline for media file, got %q", cd)
+	}
+
+	// 4. Content outside the allowlist entirely (zip magic) is rejected and
+	// leaves no orphaned thread behind.
+	rr = postThreadWithFile(t, router, authCookie, boardID, "archive.zip",
+		[]byte("PK\x03\x04zipzipzip"))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect back to the form, got %d", rr.Code)
+	}
+	if n, _ := queries.ListThreadsByBoard(ctx, boardID); len(n) != len(threadsBefore)+2 {
+		t.Fatalf("rejected zip upload must not create a thread")
+	}
+}
+
+func listUploadFiles(t *testing.T, uploadDir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(uploadDir)
+	if err != nil {
+		t.Fatalf("failed to read upload dir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// TestConsumeInviteAtomic verifies that an invite can only ever be consumed
+// once: the second call reports 0 affected rows, which the registration
+// handler treats as "already used" and rolls the new user back.
+func TestConsumeInviteAtomic(t *testing.T) {
+	_, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	hash, _ := auth.HashPassword("password123")
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "dave", PasswordHash: hash})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	if _, err := queries.CreateInvite(ctx, database.CreateInviteParams{
+		Code:      "unique-code-123",
+		CreatedBy: user.ID,
+	}); err != nil {
+		t.Fatalf("failed to create invite: %v", err)
+	}
+
+	rows, err := queries.ConsumeInvite(ctx, database.ConsumeInviteParams{
+		UsedBy: sql.NullInt64{Int64: user.ID, Valid: true},
+		Code:   "unique-code-123",
+	})
+	if err != nil || rows != 1 {
+		t.Fatalf("expected first consume to affect 1 row, got rows=%d err=%v", rows, err)
+	}
+
+	rows, err = queries.ConsumeInvite(ctx, database.ConsumeInviteParams{
+		UsedBy: sql.NullInt64{Int64: user.ID, Valid: true},
+		Code:   "unique-code-123",
+	})
+	if err != nil || rows != 0 {
+		t.Fatalf("expected second consume to affect 0 rows, got rows=%d err=%v", rows, err)
 	}
 }

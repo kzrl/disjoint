@@ -12,16 +12,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// Allowed MIME type prefixes or specific types
-var allowedMIMETypes = map[string]bool{
-	"image/jpeg":      true,
-	"image/png":       true,
-	"image/webp":      true,
-	"image/gif":       true,
-	"video/mp4":       true,
-	"video/webm":      true,
-	"application/pdf": true,
-	"text/plain":      true,
+// maxUploadSize caps a single uploaded file (and the in-memory multipart
+// budget) at 50MB.
+const maxUploadSize = 50 << 20
+
+// allowedMIMEExtensions maps a SNIFFED content type to the extension used
+// for the stored file. The browser-provided Content-Type header and the
+// user-chosen filename extension are both untrusted: HTML/SVG/scripts have
+// no magic bytes and sniff as text/plain, so a user-named "evil.html" would
+// otherwise be stored and served as a page. Deriving the stored extension
+// from the sniffed type (like the avatar path) guarantees the served file
+// can never be a type its content isn't.
+var allowedMIMEExtensions = map[string]string{
+	"image/jpeg":      ".jpg",
+	"image/png":       ".png",
+	"image/webp":      ".webp",
+	"image/gif":       ".gif",
+	"video/mp4":       ".mp4",
+	"video/webm":      ".webm",
+	"application/pdf": ".pdf",
+	"text/plain":      ".txt",
+}
+
+// inlineExtensions are served inline (embedded in <img>/<video>); every other
+// stored file is force-downloaded as a defense-in-depth measure.
+var inlineExtensions = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+	".gif": true, ".mp4": true, ".webm": true,
 }
 
 // UploadedFileInfo contains metadata about an uploaded and saved file.
@@ -53,8 +70,7 @@ func saveUploadedFiles(r *http.Request, uploadDir string) ([]UploadedFileInfo, e
 		if fileHeader.Size == 0 {
 			continue
 		}
-		// Max file size: 50MB
-		if fileHeader.Size > 50*1024*1024 {
+		if fileHeader.Size > maxUploadSize {
 			return nil, fmt.Errorf("file %q exceeds maximum allowed size of 50MB", fileHeader.Filename)
 		}
 
@@ -79,16 +95,23 @@ func saveSingleFile(header *multipart.FileHeader, uploadDir string) (UploadedFil
 	}
 	defer src.Close()
 
-	// Sniff MIME type
+	// Sniff the actual content; the browser-provided Content-Type is
+	// untrusted. The sniffed type must be on the allowlist.
 	buf := make([]byte, 512)
-	n, _ := src.Read(buf)
-	mimeType := http.DetectContentType(buf[:n])
-	if headerMime := header.Header.Get("Content-Type"); headerMime != "" && headerMime != "application/octet-stream" {
-		mimeType = headerMime
+	n, err := src.Read(buf)
+	if err != nil && err != io.EOF {
+		return UploadedFileInfo{}, fmt.Errorf("failed to read %q: %w", header.Filename, err)
 	}
-	// Normalize mime type
+	if n == 0 {
+		return UploadedFileInfo{}, fmt.Errorf("cannot determine content type of empty file %q", header.Filename)
+	}
+	mimeType := http.DetectContentType(buf[:n])
 	if idx := strings.Index(mimeType, ";"); idx != -1 {
 		mimeType = strings.TrimSpace(mimeType[:idx])
+	}
+	storedExt, ok := allowedMIMEExtensions[mimeType]
+	if !ok {
+		return UploadedFileInfo{}, fmt.Errorf("file %q: unsupported type %s", header.Filename, mimeType)
 	}
 
 	// Rewind reader
@@ -96,8 +119,7 @@ func saveSingleFile(header *multipart.FileHeader, uploadDir string) (UploadedFil
 		return UploadedFileInfo{}, err
 	}
 
-	ext := filepath.Ext(header.Filename)
-	uniqueName := fmt.Sprintf("%s%s", uuid.New().String(), ext)
+	uniqueName := fmt.Sprintf("%s%s", uuid.New().String(), storedExt)
 	targetPath := filepath.Join(uploadDir, uniqueName)
 
 	dst, err := os.Create(targetPath)
@@ -153,6 +175,14 @@ func (app *App) ServeUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	// Media embeds inline in <img>/<video>; anything else is force-
+	// downloaded so a non-media file can never render as a page.
+	if inlineExtensions[strings.ToLower(filepath.Ext(cleanName))] {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Disposition", "attachment")
+	}
 
 	// Cache control for static media
 	w.Header().Set("Cache-Control", "public, max-age=86400")

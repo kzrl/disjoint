@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const consumeInvite = `-- name: ConsumeInvite :exec
+const consumeInvite = `-- name: ConsumeInvite :execrows
 UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL
 `
 
@@ -20,9 +20,14 @@ type ConsumeInviteParams struct {
 	Code   string
 }
 
-func (q *Queries) ConsumeInvite(ctx context.Context, arg ConsumeInviteParams) error {
-	_, err := q.db.ExecContext(ctx, consumeInvite, arg.UsedBy, arg.Code)
-	return err
+// Returns the number of rows updated: 0 means the invite was already
+// used (or deleted) by a concurrent request.
+func (q *Queries) ConsumeInvite(ctx context.Context, arg ConsumeInviteParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, consumeInvite, arg.UsedBy, arg.Code)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const countPostsByUserID = `-- name: CountPostsByUserID :one
@@ -293,24 +298,14 @@ func (q *Queries) DeleteUnusedInvite(ctx context.Context, id int64) error {
 	return err
 }
 
-const getAttachmentByID = `-- name: GetAttachmentByID :one
-SELECT id, post_id, filename, storage_path, mime_type, file_size, created_at FROM attachments
-WHERE id = ? LIMIT 1
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users
+WHERE id = ?
 `
 
-func (q *Queries) GetAttachmentByID(ctx context.Context, id int64) (Attachment, error) {
-	row := q.db.QueryRowContext(ctx, getAttachmentByID, id)
-	var i Attachment
-	err := row.Scan(
-		&i.ID,
-		&i.PostID,
-		&i.Filename,
-		&i.StoragePath,
-		&i.MimeType,
-		&i.FileSize,
-		&i.CreatedAt,
-	)
-	return i, err
+func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteUser, id)
+	return err
 }
 
 const getAttachmentsForExpiredThreads = `-- name: GetAttachmentsForExpiredThreads :many
@@ -393,44 +388,6 @@ func (q *Queries) GetInviteByCode(ctx context.Context, code string) (Invite, err
 		&i.UsedBy,
 		&i.CreatedAt,
 		&i.UsedAt,
-	)
-	return i, err
-}
-
-const getLatestThreadForBoard = `-- name: GetLatestThreadForBoard :one
-SELECT 
-    t.id,
-    t.board_id,
-    t.title,
-    t.created_at,
-    t.updated_at,
-    COALESCE(u.username, '') AS author_username
-FROM threads t
-LEFT JOIN users u ON t.user_id = u.id
-WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
-ORDER BY t.updated_at DESC
-LIMIT 1
-`
-
-type GetLatestThreadForBoardRow struct {
-	ID             int64
-	BoardID        int64
-	Title          string
-	CreatedAt      sql.NullTime
-	UpdatedAt      sql.NullTime
-	AuthorUsername string
-}
-
-func (q *Queries) GetLatestThreadForBoard(ctx context.Context, boardID int64) (GetLatestThreadForBoardRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestThreadForBoard, boardID)
-	var i GetLatestThreadForBoardRow
-	err := row.Scan(
-		&i.ID,
-		&i.BoardID,
-		&i.Title,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AuthorUsername,
 	)
 	return i, err
 }
@@ -600,43 +557,6 @@ func (q *Queries) GetUserPresence(ctx context.Context, userID int64) (time.Time,
 	return last_seen_at, err
 }
 
-const listAttachmentsByPostID = `-- name: ListAttachmentsByPostID :many
-SELECT id, post_id, filename, storage_path, mime_type, file_size, created_at FROM attachments
-WHERE post_id = ?
-ORDER BY id ASC
-`
-
-func (q *Queries) ListAttachmentsByPostID(ctx context.Context, postID int64) ([]Attachment, error) {
-	rows, err := q.db.QueryContext(ctx, listAttachmentsByPostID, postID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Attachment
-	for rows.Next() {
-		var i Attachment
-		if err := rows.Scan(
-			&i.ID,
-			&i.PostID,
-			&i.Filename,
-			&i.StoragePath,
-			&i.MimeType,
-			&i.FileSize,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listAttachmentsByThreadID = `-- name: ListAttachmentsByThreadID :many
 SELECT a.id, a.post_id, a.filename, a.storage_path, a.mime_type, a.file_size, a.created_at
 FROM attachments a
@@ -710,41 +630,6 @@ func (q *Queries) ListBoards(ctx context.Context) ([]Board, error) {
 	return items, nil
 }
 
-const listBoardsByCategoryID = `-- name: ListBoardsByCategoryID :many
-SELECT id, category_id, name, description, position FROM boards
-WHERE category_id = ?
-ORDER BY position ASC, id ASC
-`
-
-func (q *Queries) ListBoardsByCategoryID(ctx context.Context, categoryID int64) ([]Board, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardsByCategoryID, categoryID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Board
-	for rows.Next() {
-		var i Board
-		if err := rows.Scan(
-			&i.ID,
-			&i.CategoryID,
-			&i.Name,
-			&i.Description,
-			&i.Position,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listBoardsWithDetails = `-- name: ListBoardsWithDetails :many
 SELECT 
     b.id,
@@ -754,7 +639,7 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    MAX(t.updated_at) AS latest_updated_at
+    COALESCE(CAST(MAX(t.updated_at) AS TEXT), '') AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -833,34 +718,6 @@ func (q *Queries) ListCategories(ctx context.Context) ([]Category, error) {
 	return items, nil
 }
 
-const listExpiredThreads = `-- name: ListExpiredThreads :many
-SELECT id FROM threads
-WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
-`
-
-func (q *Queries) ListExpiredThreads(ctx context.Context) ([]int64, error) {
-	rows, err := q.db.QueryContext(ctx, listExpiredThreads)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listInvites = `-- name: ListInvites :many
 SELECT
     i.id,
@@ -906,6 +763,70 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 			&i.UsedAt,
 			&i.CreatorUsername,
 			&i.UsedByUsername,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLatestThreadsByBoard = `-- name: ListLatestThreadsByBoard :many
+SELECT 
+    t.id,
+    t.board_id,
+    t.title,
+    t.created_at,
+    t.updated_at,
+    COALESCE(u.username, '') AS author_username
+FROM (
+    SELECT 
+        id, board_id, title, created_at, updated_at, user_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY board_id
+            ORDER BY updated_at DESC, id DESC
+        ) AS rn
+    FROM threads
+    WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
+) t
+LEFT JOIN users u ON t.user_id = u.id
+WHERE t.rn = 1
+ORDER BY t.board_id ASC
+`
+
+type ListLatestThreadsByBoardRow struct {
+	ID             int64
+	BoardID        int64
+	Title          string
+	CreatedAt      sql.NullTime
+	UpdatedAt      sql.NullTime
+	AuthorUsername string
+}
+
+// One row per board: the most recently updated non-expired thread.
+// Replaces a per-board GetLatestThreadForBoard round trip (N+1).
+func (q *Queries) ListLatestThreadsByBoard(ctx context.Context) ([]ListLatestThreadsByBoardRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLatestThreadsByBoard)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLatestThreadsByBoardRow
+	for rows.Next() {
+		var i ListLatestThreadsByBoardRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BoardID,
+			&i.Title,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AuthorUsername,
 		); err != nil {
 			return nil, err
 		}

@@ -134,7 +134,13 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 	// Sniff the actual content instead of trusting the browser header,
 	// so a renamed .txt/.gif cannot masquerade as an avatar.
 	buf := make([]byte, 512)
-	n, _ := file.Read(buf)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("avatar upload failed")
+	}
+	if n == 0 {
+		return fmt.Errorf("avatar is empty")
+	}
 	contentType := http.DetectContentType(buf[:n])
 	// DetectContentType has no WebP signature, so check the RIFF/WEBP
 	// magic bytes explicitly.

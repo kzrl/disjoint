@@ -28,14 +28,11 @@ func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 		return nil, nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
-	// Ping database
+	// Ping database. The DSN's _pragma params apply per connection (the
+	// only reliable way to set per-connection pragmas like foreign_keys
+	// on a pool); journal_mode and busy_timeout are covered there too.
 	if err := conn.Ping(); err != nil {
 		return nil, nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	// Ensure pragmas are set
-	if _, err := conn.Exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;"); err != nil {
-		return nil, nil, fmt.Errorf("failed to execute pragmas: %w", err)
 	}
 
 	// Apply database migrations (goose manages the goose_db_version table).

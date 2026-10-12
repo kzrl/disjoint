@@ -46,7 +46,11 @@ func (app *App) CreateInviteSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		setFlash(w, "flash_error", "Failed to create invite")
+		http.Redirect(w, r, "/invites", http.StatusSeeOther)
+		return
+	}
 	code := hex.EncodeToString(b)
 
 	_, err := app.queries.CreateInvite(r.Context(), database.CreateInviteParams{

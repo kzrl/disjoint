@@ -183,7 +183,17 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = app.queries.ConsumeInvite(ctx, database.ConsumeInviteParams{UsedBy: sql.NullInt64{Int64: user.ID, Valid: true}, Code: code})
+	// ConsumeInvite is atomic (WHERE used_by IS NULL) and reports how many
+	// rows it updated. 0 means a concurrent registration took the invite
+	// first — roll this account back instead of letting one code create
+	// two users.
+	rows, err := app.queries.ConsumeInvite(ctx, database.ConsumeInviteParams{UsedBy: sql.NullInt64{Int64: user.ID, Valid: true}, Code: code})
+	if err != nil || rows == 0 {
+		_ = app.queries.DeleteUser(ctx, user.ID)
+		setFlash(w, "flash_error", "Invalid or already used invite code.")
+		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
+		return
+	}
 
 	auth.SetSessionCookie(w, user.ID, app.sessionSecret)
 	setFlash(w, "flash_success", "Account created successfully!")
