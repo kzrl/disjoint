@@ -60,7 +60,7 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    CAST(MAX(t.updated_at) AS TEXT) AS latest_updated_at
+    CAST(COALESCE(MAX(t.updated_at), '') AS TEXT) AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -321,3 +321,18 @@ JOIN boards b ON t.board_id = b.id
 WHERE t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP
 ORDER BY p.created_at DESC, p.id DESC
 LIMIT ?;
+
+-- name: CreateSession :exec
+INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?);
+
+-- name: GetSessionUserID :one
+SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?;
+
+-- name: DeleteSession :exec
+DELETE FROM sessions WHERE token_hash = ?;
+
+-- name: DeleteSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = ?;
+
+-- name: PruneExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= ?;

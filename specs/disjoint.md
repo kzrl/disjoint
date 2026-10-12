@@ -103,7 +103,7 @@ CREATE INDEX idx_attachments_post_id ON attachments(post_id);
 4. Core Features & Functional Requirements
 A. Authentication & Security
 
-    Registration / Login: Secure session-based authentication using HTTP-only cookies and golang.org/x/crypto/bcrypt for password hashing.
+    Registration / Login: Secure session-based authentication using server-side session rows and HTTP-only cookies, with golang.org/x/crypto/bcrypt for password hashing. The cookie holds a random token; the sessions table stores its SHA-256 hash mapped to a user with an expiry, so logout deletes the row and revokes the token immediately.
 
     First-Run Setup: If the users table is empty, redirect all requests to a setup/registration page to create the initial administrative user.
 
@@ -202,5 +202,3 @@ disjoint/
         DATABASE_PATH (default: disjoint.db)
 
         UPLOAD_DIR (default: uploads)
-
-        SESSION_SECRET (string used for secure session cookie signing/encryption)

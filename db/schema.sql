@@ -93,3 +93,13 @@ CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON posts(thread_id);
 CREATE INDEX IF NOT EXISTS idx_threads_expires_at ON threads(expires_at);
 CREATE INDEX IF NOT EXISTS idx_attachments_post_id ON attachments(post_id);
 
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+

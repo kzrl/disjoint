@@ -50,6 +50,13 @@ type Post struct {
 	CreatedAt sql.NullTime
 }
 
+type Session struct {
+	TokenHash string
+	UserID    int64
+	CreatedAt time.Time
+	ExpiresAt int64
+}
+
 type Thread struct {
 	ID        int64
 	BoardID   int64

@@ -59,7 +59,6 @@ Disjoint is configured via environment variables:
 | `PORT` | `8080` | Port for the HTTP server |
 | `DATABASE_PATH` | `disjoint.db` | File path for SQLite database |
 | `UPLOAD_DIR` | `uploads` | Directory for stored media attachments |
-| `SESSION_SECRET` | *(default dev key)* | Secret key for signing session cookies |
 
 ---
 

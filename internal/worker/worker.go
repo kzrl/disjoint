@@ -77,5 +77,11 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 		}
 	}
 
+	// 4. Prune expired sessions. Best-effort: leftover expired rows are
+	// harmless (GetSessionUserID checks expires_at) and the next tick retries.
+	if err := w.queries.PruneExpiredSessions(ctx, time.Now().Unix()); err != nil {
+		log.Printf("[worker] Warning: could not prune expired sessions: %v", err)
+	}
+
 	return nil
 }

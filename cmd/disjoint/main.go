@@ -27,11 +27,6 @@ func main() {
 	port := getEnv("PORT", "8080")
 	dbPath := getEnv("DATABASE_PATH", "disjoint.db")
 	uploadDir := getEnv("UPLOAD_DIR", "uploads")
-	sessionSecret := getEnv("SESSION_SECRET", "disjoint-default-secret-key-please-change-in-production")
-
-	if sessionSecret == "disjoint-default-secret-key-please-change-in-production" {
-		log.Println("[disjoint] Notice: SESSION_SECRET not set, using default key. Set SESSION_SECRET in production.")
-	}
 
 	// Ensure upload directory exists
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
@@ -55,7 +50,7 @@ func main() {
 	cleanupWorker.Start(ctx)
 
 	// Initialize App and routes
-	app, err := handlers.NewApp(db, queries, uploadDir, sessionSecret)
+	app, err := handlers.NewApp(db, queries, uploadDir)
 	if err != nil {
 		log.Fatalf("[disjoint] App initialization failed: %v", err)
 	}

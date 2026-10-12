@@ -202,6 +202,21 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 	return i, err
 }
 
+const createSession = `-- name: CreateSession :exec
+INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)
+`
+
+type CreateSessionParams struct {
+	TokenHash string
+	UserID    int64
+	ExpiresAt int64
+}
+
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
+	_, err := q.db.ExecContext(ctx, createSession, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	return err
+}
+
 const createThread = `-- name: CreateThread :one
 INSERT INTO threads (
     board_id,
@@ -276,6 +291,24 @@ WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
 
 func (q *Queries) DeleteExpiredThreads(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredThreads)
+	return err
+}
+
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE token_hash = ?
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, tokenHash string) error {
+	_, err := q.db.ExecContext(ctx, deleteSession, tokenHash)
+	return err
+}
+
+const deleteSessionsForUser = `-- name: DeleteSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = ?
+`
+
+func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionsForUser, userID)
 	return err
 }
 
@@ -429,6 +462,22 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 		&i.AuthorAvatar,
 	)
 	return i, err
+}
+
+const getSessionUserID = `-- name: GetSessionUserID :one
+SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?
+`
+
+type GetSessionUserIDParams struct {
+	TokenHash string
+	ExpiresAt int64
+}
+
+func (q *Queries) GetSessionUserID(ctx context.Context, arg GetSessionUserIDParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionUserID, arg.TokenHash, arg.ExpiresAt)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
 }
 
 const getThreadByID = `-- name: GetThreadByID :one
@@ -639,7 +688,7 @@ SELECT
     b.position,
     COUNT(DISTINCT t.id) AS thread_count,
     COUNT(p.id) AS post_count,
-    COALESCE(CAST(MAX(t.updated_at) AS TEXT), '') AS latest_updated_at
+    CAST(COALESCE(MAX(t.updated_at), '') AS TEXT) AS latest_updated_at
 FROM boards b
 LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LEFT JOIN posts p ON p.thread_id = t.id
@@ -655,7 +704,7 @@ type ListBoardsWithDetailsRow struct {
 	Position        int64
 	ThreadCount     int64
 	PostCount       int64
-	LatestUpdatedAt interface{}
+	LatestUpdatedAt string
 }
 
 func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDetailsRow, error) {
@@ -1131,6 +1180,15 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const pruneExpiredSessions = `-- name: PruneExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= ?
+`
+
+func (q *Queries) PruneExpiredSessions(ctx context.Context, expiresAt int64) error {
+	_, err := q.db.ExecContext(ctx, pruneExpiredSessions, expiresAt)
+	return err
 }
 
 const removeUserAdmin = `-- name: RemoveUserAdmin :exec

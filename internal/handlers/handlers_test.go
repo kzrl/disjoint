@@ -28,19 +28,36 @@ func setupTestApp(t *testing.T) (*handlers.App, *sql.DB, *database.Queries, stri
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_disjoint.db")
 	uploadDir := filepath.Join(tempDir, "uploads")
-	sessionSecret := "test-secret-key-32-bytes-long!!"
 
 	db, queries, err := database.OpenDB(dbPath)
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
 
-	app, err := handlers.NewApp(db, queries, uploadDir, sessionSecret)
+	app, err := handlers.NewApp(db, queries, uploadDir)
 	if err != nil {
 		t.Fatalf("failed to create app: %v", err)
 	}
 
 	return app, db, queries, uploadDir
+}
+
+// authCookieFor creates a real server-side session row for the user and
+// returns the matching cookie — the same path the login handler uses.
+func authCookieFor(t *testing.T, queries *database.Queries, userID int64) *http.Cookie {
+	t.Helper()
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session token: %v", err)
+	}
+	if err := queries.CreateSession(context.Background(), database.CreateSessionParams{
+		TokenHash: auth.TokenHash(token),
+		UserID:    userID,
+		ExpiresAt: time.Now().UTC().Add(auth.SessionDuration).Unix(),
+	}); err != nil {
+		t.Fatalf("failed to create session row: %v", err)
+	}
+	return &http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"}
 }
 
 func TestFirstRunSetupAndAuthFlow(t *testing.T) {
@@ -198,8 +215,8 @@ func TestInviteSystem(t *testing.T) {
 		t.Fatalf("failed to create regular user: %v", err)
 	}
 
-	adminCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(admin.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
-	userCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(regularUser.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	adminCookie := authCookieFor(t, queries, admin.ID)
+	userCookie := authCookieFor(t, queries, regularUser.ID)
 
 	// 2. Non-admin accessing /invites should be redirected to /
 	req := httptest.NewRequest(http.MethodGet, "/invites", nil)
@@ -308,9 +325,7 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-	sessionSecret := "test-secret-key-32-bytes-long!!"
-	cookieToken := auth.CreateSessionToken(admin.ID, sessionSecret)
-	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: cookieToken, Path: "/"}
+	authCookie := authCookieFor(t, queries, admin.ID)
 
 	// 2. Fetch seeded board
 	boards, err := queries.ListBoards(ctx)
@@ -562,8 +577,7 @@ func TestCategoryAndBoardCreation(t *testing.T) {
 	// Create user & auth cookie
 	ctx := context.Background()
 	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "moderator", PasswordHash: "hash"})
-	token := auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!")
-	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"}
+	authCookie := authCookieFor(t, queries, user.ID)
 
 	// 1. Create Category via POST /categories/new
 	form := url.Values{}
@@ -643,8 +657,7 @@ func TestStandardFormReplyFallback(t *testing.T) {
 
 	ctx := context.Background()
 	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "dan", PasswordHash: "h"})
-	token := auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!")
-	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"}
+	authCookie := authCookieFor(t, queries, user.ID)
 
 	boards, _ := queries.ListBoards(ctx)
 	thread, _ := queries.CreateThread(ctx, database.CreateThreadParams{
@@ -680,7 +693,6 @@ func TestUserAdministration(t *testing.T) {
 	defer db.Close()
 	router := app.Routes()
 	ctx := context.Background()
-	sessionSecret := "test-secret-key-32-bytes-long!!"
 
 	admin, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "root_admin", PasswordHash: "hash"})
 	if err != nil {
@@ -702,8 +714,8 @@ func TestUserAdministration(t *testing.T) {
 		t.Fatalf("failed to set second admin: %v", err)
 	}
 
-	adminCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(admin.ID, sessionSecret), Path: "/"}
-	userCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(regular.ID, sessionSecret), Path: "/"}
+	adminCookie := authCookieFor(t, queries, admin.ID)
+	userCookie := authCookieFor(t, queries, regular.ID)
 
 	// 1. Non-admin accessing GET /admin/users is redirected to / with unauthorized error
 	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
@@ -807,7 +819,7 @@ func TestOnTheAirPresence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	cookie := authCookieFor(t, queries, user.ID)
 
 	getHome := func() string {
 		t.Helper()
@@ -916,7 +928,7 @@ func TestUserCardPageAndProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	cookie := authCookieFor(t, queries, user.ID)
 
 	// Seed: 2 attributed posts
 	boards, err := queries.ListBoards(ctx)
@@ -1082,7 +1094,7 @@ func TestRecentActivityTicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(alice.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	cookie := authCookieFor(t, queries, alice.ID)
 
 	boards, err := queries.ListBoards(ctx)
 	if err != nil || len(boards) == 0 {
@@ -1166,7 +1178,7 @@ func TestActivityTickerEmptyState(t *testing.T) {
 	if _, err := db.Exec("DELETE FROM posts"); err != nil {
 		t.Fatal(err)
 	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(1, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	cookie := authCookieFor(t, queries, 1)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookie)
@@ -1182,8 +1194,6 @@ func TestActivityTickerEmptyState(t *testing.T) {
 }
 
 // ---- User avatar uploads ----
-
-const testAvatarSecret = "test-secret-key-32-bytes-long!!"
 
 var (
 	pngBytes  = append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, make([]byte, 64)...)
@@ -1229,7 +1239,7 @@ func TestUserAvatarUploads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, testAvatarSecret), Path: "/"}
+	cookie := authCookieFor(t, queries, user.ID)
 
 	submitProfile := func(body *bytes.Buffer, contentType string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -1452,7 +1462,7 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
-	authCookie := &http.Cookie{Name: auth.SessionCookieName, Value: auth.CreateSessionToken(user.ID, "test-secret-key-32-bytes-long!!"), Path: "/"}
+	authCookie := authCookieFor(t, queries, user.ID)
 
 	boards, err := queries.ListBoards(ctx)
 	if err != nil || len(boards) == 0 {
@@ -1593,5 +1603,69 @@ func TestConsumeInviteAtomic(t *testing.T) {
 	})
 	if err != nil || rows != 0 {
 		t.Fatalf("expected second consume to affect 0 rows, got rows=%d err=%v", rows, err)
+	}
+}
+
+// TestSessionLifecycle verifies server-side sessions: a valid token works,
+// logout deletes the row so the token stops working immediately, and an
+// expired session is treated as anonymous.
+func TestSessionLifecycle(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	hash, _ := auth.HashPassword("password123")
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "erin", PasswordHash: hash})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := authCookieFor(t, queries, user.ID)
+
+	// A valid session reaches the home page.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 with a valid session, got %d", rr.Code)
+	}
+
+	// Logout deletes the session row and expires the cookie.
+	req = httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected logout redirect, got %d", rr.Code)
+	}
+
+	// The old token must no longer authenticate.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected revoked token to be anonymous (redirect to /login), got %d", rr.Code)
+	}
+
+	// An expired session is anonymous as well.
+	expiredToken, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+	if err := queries.CreateSession(ctx, database.CreateSessionParams{
+		TokenHash: auth.TokenHash(expiredToken),
+		UserID:    user.ID,
+		ExpiresAt: time.Now().UTC().Add(-time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("failed to create expired session: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: expiredToken, Path: "/"})
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected expired session to be anonymous, got %d", rr.Code)
 	}
 }

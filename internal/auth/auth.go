@@ -1,14 +1,10 @@
 package auth
 
 import (
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -16,100 +12,74 @@ import (
 
 const (
 	SessionCookieName = "disjoint_session"
-	SessionDuration   = 30 * 24 * time.Hour
+	// SessionDuration is how long a login stays valid.
+	SessionDuration = 30 * 24 * time.Hour
+	// sessionTokenBytes is the entropy of a session token (256 bits).
+	sessionTokenBytes = 32
 )
 
-// HashPassword hashes a plaintext password using bcrypt.
+// HashPassword hashes the password using bcrypt.
 func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-	return string(bytes), nil
+	return string(hashed), nil
 }
 
-// CheckPassword verifies a plaintext password against a bcrypt hash.
+// CheckPassword checks if the password matches the hash.
 func CheckPassword(hash, password string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-// CreateSessionToken generates an HMAC-signed session string for a user.
-func CreateSessionToken(userID int64, secret string) string {
-	expiresAt := time.Now().Add(SessionDuration).Unix()
-	payload := fmt.Sprintf("%d:%d", userID, expiresAt)
-
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(payload))
-	signature := hex.EncodeToString(h.Sum(nil))
-
-	return fmt.Sprintf("%s:%s", payload, signature)
+// GenerateSessionToken returns a fresh cryptographically random session
+// token (64 hex characters). It is placed in the session cookie.
+func GenerateSessionToken() (string, error) {
+	b := make([]byte, sessionTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
-// VerifySessionToken verifies the session token and returns the userID if valid.
-func VerifySessionToken(token string, secret string) (int64, error) {
-	parts := strings.Split(token, ":")
-	if len(parts) != 3 {
-		return 0, errors.New("invalid session token format")
-	}
-
-	userIDStr := parts[0]
-	expiresAtStr := parts[1]
-	signature := parts[2]
-
-	payload := fmt.Sprintf("%s:%s", userIDStr, expiresAtStr)
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(payload))
-	expectedSig := hex.EncodeToString(h.Sum(nil))
-
-	if !hmac.Equal([]byte(signature), []byte(expectedSig)) {
-		return 0, errors.New("invalid session signature")
-	}
-
-	expiresAt, err := strconv.ParseInt(expiresAtStr, 10, 64)
-	if err != nil || time.Now().Unix() > expiresAt {
-		return 0, errors.New("session token expired")
-	}
-
-	userID, err := strconv.ParseInt(userIDStr, 10, 64)
-	if err != nil {
-		return 0, errors.New("invalid user id in session token")
-	}
-
-	return userID, nil
+// TokenHash is the value stored in the sessions table for a token. Storing
+// the hash instead of the token means a leaked database does not leak live
+// sessions.
+func TokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
-// SetSessionCookie sets the HTTP-only session cookie.
-func SetSessionCookie(w http.ResponseWriter, userID int64, secret string) {
-	token := CreateSessionToken(userID, secret)
+// GetSessionTokenFromRequest extracts the raw session token from the
+// request cookie. Returns "" if no cookie is present.
+func GetSessionTokenFromRequest(r *http.Request) string {
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return ""
+	}
+	return cookie.Value
+}
+
+// SetSessionCookie sets the session cookie on the response.
+func SetSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
+		MaxAge:   int(SessionDuration.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(SessionDuration.Seconds()),
 	})
 }
 
-// ClearSessionCookie invalidates the session cookie.
+// ClearSessionCookie expires the session cookie on the response.
 func ClearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
+		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-		Expires:  time.Unix(0, 0),
 	})
-}
-
-// GetUserIDFromRequest extracts and verifies the user ID from the request cookie.
-func GetUserIDFromRequest(r *http.Request, secret string) (int64, error) {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil {
-		return 0, err
-	}
-	return VerifySessionToken(cookie.Value, secret)
 }

@@ -21,7 +21,6 @@ type App struct {
 	db              *sql.DB
 	queries         *database.Queries
 	uploadDir       string
-	sessionSecret   string
 	staticFS        fs.FS
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
@@ -29,14 +28,13 @@ type App struct {
 }
 
 // NewApp instantiates an App and compiles HTML templates.
-func NewApp(db *sql.DB, queries *database.Queries, uploadDir, sessionSecret string) (*App, error) {
+func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, error) {
 	app := &App{
-		db:            db,
-		queries:       queries,
-		uploadDir:     uploadDir,
-		sessionSecret: sessionSecret,
-		templates:     make(map[string]*template.Template),
-		middleware:    middleware.New(queries, sessionSecret),
+		db:         db,
+		queries:    queries,
+		uploadDir:  uploadDir,
+		templates:  make(map[string]*template.Template),
+		middleware: middleware.New(queries),
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"disjoint/internal/auth"
 	"disjoint/internal/database"
@@ -31,17 +32,13 @@ func UserFromContext(ctx context.Context) *database.User {
 
 // Middleware holds dependencies for HTTP middleware.
 type Middleware struct {
-	queries       *database.Queries
-	sessionSecret string
-	hasUsers      atomic.Bool
+	queries  *database.Queries
+	hasUsers atomic.Bool
 }
 
 // New creates a new Middleware instance.
-func New(queries *database.Queries, sessionSecret string) *Middleware {
-	m := &Middleware{
-		queries:       queries,
-		sessionSecret: sessionSecret,
-	}
+func New(queries *database.Queries) *Middleware {
+	m := &Middleware{queries: queries}
 	// Initial check if users exist
 	if count, err := queries.CountUsers(context.Background()); err == nil && count > 0 {
 		m.hasUsers.Store(true)
@@ -92,13 +89,20 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// 2. Identify user from session cookie
+		// 2. Identify user from the session cookie. The cookie holds a
+		// random token; its hash is looked up in the sessions table (the
+		// expiry check happens in SQL). A missing or expired session just
+		// means the request proceeds anonymously.
 		var currentUser *database.User
-		userID, err := auth.GetUserIDFromRequest(r, m.sessionSecret)
-		if err == nil {
-			if user, err := m.queries.GetUserByID(ctx, userID); err == nil {
-				currentUser = &user
-				r = r.WithContext(ContextWithUser(r.Context(), currentUser))
+		if token := auth.GetSessionTokenFromRequest(r); token != "" {
+			if userID, err := m.queries.GetSessionUserID(ctx, database.GetSessionUserIDParams{
+				TokenHash: auth.TokenHash(token),
+				ExpiresAt: time.Now().Unix(),
+			}); err == nil {
+				if user, err := m.queries.GetUserByID(ctx, userID); err == nil {
+					currentUser = &user
+					r = r.WithContext(ContextWithUser(r.Context(), currentUser))
+				}
 			}
 		}
 

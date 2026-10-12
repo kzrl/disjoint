@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"disjoint/internal/auth"
 	"disjoint/internal/database"
@@ -14,6 +16,25 @@ import (
 // usernamePattern restricts new usernames to ASCII alphanumerics so that
 // /users/{name} URLs are unambiguous (legacy users keep whatever they have).
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9]{3,32}$`)
+
+// startSession creates a server-side session row for the user and sets the
+// cookie holding the (unhashed) token. The table stores only the token's
+// SHA-256 hash.
+func (app *App) startSession(ctx context.Context, w http.ResponseWriter, userID int64) error {
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
+		return err
+	}
+	if err := app.queries.CreateSession(ctx, database.CreateSessionParams{
+		TokenHash: auth.TokenHash(token),
+		UserID:    userID,
+		ExpiresAt: time.Now().Add(auth.SessionDuration).Unix(),
+	}); err != nil {
+		return err
+	}
+	auth.SetSessionCookie(w, token)
+	return nil
+}
 
 // SetupPage renders the first-run administrator creation form.
 func (app *App) SetupPage(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +90,11 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 	_ = app.queries.SetUserAdmin(ctx, user.ID)
 
 	app.middleware.RefreshUserCount(ctx)
-	auth.SetSessionCookie(w, user.ID, app.sessionSecret)
+	if err := app.startSession(ctx, w, user.ID); err != nil {
+		setFlash(w, "flash_error", "Failed to start session.")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
 	setFlash(w, "flash_success", "Welcome to Disjoint! Setup complete.")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -104,7 +129,11 @@ func (app *App) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.SetSessionCookie(w, user.ID, app.sessionSecret)
+	if err := app.startSession(ctx, w, user.ID); err != nil {
+		setFlash(w, "flash_error", "Failed to start session.")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -195,13 +224,24 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.SetSessionCookie(w, user.ID, app.sessionSecret)
+	if err := app.startSession(ctx, w, user.ID); err != nil {
+		_ = app.queries.DeleteUser(ctx, user.ID)
+		setFlash(w, "flash_error", "Failed to start session.")
+		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
+		return
+	}
 	setFlash(w, "flash_success", "Account created successfully!")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// LogoutSubmit terminates the active session.
+// LogoutSubmit terminates the active session: the row is deleted so the
+// token stops working immediately, and the cookie is expired client-side.
 func (app *App) LogoutSubmit(w http.ResponseWriter, r *http.Request) {
+	if token := auth.GetSessionTokenFromRequest(r); token != "" {
+		// Best-effort: the cookie is cleared regardless, and an unknown or
+		// already-expired token is harmless.
+		_ = app.queries.DeleteSession(r.Context(), auth.TokenHash(token))
+	}
 	auth.ClearSessionCookie(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
