@@ -72,7 +72,7 @@ FK cascades (from `schema.sql`): `attachments → posts`, `posts → threads`,
 
 ### Slice 1 — Schema, queries, code (one atomic, always-buildable commit)
 
-- [ ] Task 1: `db/migrations/00006_drop_and_purge_anonymous.sql`
+- [x] Task 1: `db/migrations/00006_drop_and_purge_anonymous.sql`
   (`+goose NO TRANSACTION`, `PRAGMA foreign_keys = OFF` during rebuild):
   ```sql
   -- 1. Purge anonymous content, top-down.
@@ -100,30 +100,30 @@ FK cascades (from `schema.sql`): `attachments → posts`, `posts → threads`,
   ```
   Down: re-add `user_id` nullable (rebuild) + `is_anonymous` column; comment
   that purged data is unrecoverable.
-- [ ] Task 2: `db/schema.sql` — drop the `is_anonymous` line; `user_id`
+- [x] Task 2: `db/schema.sql` — drop the `is_anonymous` line; `user_id`
   `NOT NULL` with comment "author (every post/thread is attributed)".
-- [ ] Task 3: `db/query.sql` — remove `CreatePost`'s `is_anonymous`
+- [x] Task 3: `db/query.sql` — remove `CreatePost`'s `is_anonymous`
   param+column; remove `p.is_anonymous` from `ListPostsByThread` /
   `GetPostByID`; remove the 4 `first_post_anonymous` subqueries; reword the
   `:306` comment (no more anonymous posts).
-- [ ] Task 4: `threads.go` `CreateThreadSubmit` — delete the `anonymous` form
+- [x] Task 4: `threads.go` `CreateThreadSubmit` — delete the `anonymous` form
   read, `isAnonymous`, `NullInt64` author; pass `UserID: user.ID`.
-- [ ] Task 5: `posts.go` `CreatePostSubmit` — same.
-- [ ] Task 6: `app.go` `authorLink` — one-arg, link-only; update comment.
-- [ ] Task 7: Templates — remove both anonymous checkboxes
+- [x] Task 5: `posts.go` `CreatePostSubmit` — same.
+- [x] Task 6: `app.go` `authorLink` — one-arg, link-only; update comment.
+- [x] Task 7: Templates — remove both anonymous checkboxes
   (`new_thread.html`, `thread.html`); update the 5 `authorLink` call sites.
-- [ ] Task 8: `profiles.go` — refresh the stale comment.
-- [ ] Task 9: `make generate` (sqlc); review diff in `internal/database/`.
+- [x] Task 8: `profiles.go` — refresh the stale comment.
+- [x] Task 9: `make generate` (sqlc); review diff in `internal/database/`.
 
 **Checkpoint A**
-- [ ] `go build ./...` + `go vet ./...` pass.
-- [ ] Migration verified on a **copy** of the dev `disjoint.db` before
+- [x] `go build ./...` + `go vet ./...` pass.
+- [x] Migration verified on a **copy** of the dev `disjoint.db` before
       touching the real one: rows purged, tables rebuilt, `PRAGMA
       table_info(posts)` shows `user_id` NOT NULL and no `is_anonymous`.
 
 ### Slice 2 — File cleanup tool
 
-- [ ] Task 10: `tools/cleanup_anonymous/main.go` (~100 lines, stdlib only +
+- [x] Task 10: `tools/cleanup_anonymous/main.go` (~100 lines, stdlib only +
       same sqlite driver):
   - Flags: `-db` (default from `DISJOINT_DB`/same default as the app),
     `-dir` (default `UPLOAD_DIR` or `uploads`), `--yes` (without it: dry-run
@@ -135,35 +135,35 @@ FK cascades (from `schema.sql`): `attachments → posts`, `posts → threads`,
     applied — rows are gone, paths unrecoverable.
   - Delete only files whose full path stays inside `-dir` (no path traversal);
     print each deletion and a total.
-- [ ] Task 11: Run it on the dev DB: dry-run first (review list), then
+- [x] Task 11: Run it on the dev DB: dry-run first (review list), then
       `--yes`. Verify files gone from `uploads/`.
 
 **Checkpoint B**
-- [ ] `go build ./...` still green; tool dry-run on the dev DB shows the
+- [x] `go build ./...` still green; tool dry-run on the dev DB shows the
       expected legacy-anonymous files; after `--yes`, `uploads/` no longer
       contains them.
 
 ### Slice 3 — Tests, migration on real DB, final verification
 
-- [ ] Task 12: Delete the 4 anon tests; grep `handlers_test.go` for any other
+- [x] Task 12: Delete the 4 anon tests; grep `handlers_test.go` for any other
       `anon`/`Anonymous` assertions and fix stragglers.
-- [ ] Task 13: Back up the real `disjoint.db` (`cp disjoint.db
+- [x] Task 13: Back up the real `disjoint.db` (`cp disjoint.db
       disjoint.db.bak-pre00006`), then boot the app once — migration 00006
       applies; legacy anonymous threads/posts are gone from the UI.
-- [ ] Task 14: Full verification:
-  - [ ] `go build ./...`, `go vet ./...`, `go test ./...` all green.
-  - [ ] Fresh-DB boot (`DISJOINT_DB=/tmp/fresh.db`) — migrations 1→6 apply
+- [x] Task 14: Full verification:
+  - [x] `go build ./...`, `go vet ./...`, `go test ./...` all green.
+  - [x] Fresh-DB boot (`DISJOINT_DB=/tmp/fresh.db`) — migrations 1→6 apply
         with nothing to purge.
-  - [ ] Live smoke: create thread + reply (no checkboxes), authors attributed,
+  - [x] Live smoke: create thread + reply (no checkboxes), authors attributed,
         index/board/thread pages render.
-  - [ ] `grep -ri anon web/templates db/ internal/` returns nothing except
+  - [x] `grep -ri anon web/templates db/ internal/` returns nothing except
         the two historical migrations and this plan's docs.
 
 **Final**
-- [ ] Commits: (1) slice 1 — feature removal + migration, (2) slice 2 —
+- [x] Commits: (1) slice 1 — feature removal + migration, (2) slice 2 —
       cleanup tool (+ the dev-DB run is data, not code), (3) slice 3 — test
       cleanup. (DB backup file stays untracked/git-ignored.)
-- [ ] Leave `tasks/plan.md` / `tasks/todo.md` untouched (historical record).
+- [x] Leave `tasks/plan.md` / `tasks/todo.md` untouched (historical record).
 
 ## Risks / unknowns
 
