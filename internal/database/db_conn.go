@@ -17,7 +17,7 @@ import (
 func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}

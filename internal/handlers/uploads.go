@@ -60,7 +60,7 @@ func saveUploadedFiles(r *http.Request, uploadDir string) ([]UploadedFileInfo, e
 		return nil, nil
 	}
 
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 

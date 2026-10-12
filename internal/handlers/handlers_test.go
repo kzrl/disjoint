@@ -449,9 +449,9 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 	}
 
 	// Create dummy attachment file on disk
-	_ = os.MkdirAll(uploadDir, 0755)
+	_ = os.MkdirAll(uploadDir, 0o755)
 	dummyFilename := "test-purged-file.png"
-	err = os.WriteFile(filepath.Join(uploadDir, dummyFilename), []byte("dummydata"), 0644)
+	err = os.WriteFile(filepath.Join(uploadDir, dummyFilename), []byte("dummydata"), 0o644)
 	if err != nil {
 		t.Fatalf("failed to create dummy file: %v", err)
 	}

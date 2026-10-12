@@ -155,7 +155,7 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 		return fmt.Errorf("avatar upload failed")
 	}
 
-	if err := os.MkdirAll(app.uploadDir, 0755); err != nil {
+	if err := os.MkdirAll(app.uploadDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create upload directory")
 	}
 
