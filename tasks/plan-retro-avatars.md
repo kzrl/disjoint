@@ -17,6 +17,16 @@ Generate each user's default avatar as a small, deterministic **retro pixel-grap
 - **3 fill colors** per avatar (dominant 60% / secondary 30% / accent 10%).
 - **Transparent background**: palette is the bright half of ANSI 16 (indices 9–15) so sprites read on both dark and light themes. (Note: bright blue `#0000ff` is faint on the dark theme — acceptable; it's one of 7 equally-likely colors.)
 
+## v2: Pixelbot-Style Faces (2026-07-18)
+
+On request the generator was reworked to look like the DiceBear **"pixelbot"** style (glowing robot faces on a dark dot-matrix grid) instead of the mirrored confetti sprite. The look is extracted from the official style definition (`@dicebear/styles` v10.6.0, `src/pixelbot.json`), not hand-drawn:
+
+- `tasks/gen-avatar-shapes.py` parses the style JSON (rounded-rect path subpaths → pixel grids) and emits `internal/avatars/shapes.go`: the 12×12 dot-matrix coordinates, 7 eyes variants (6×3 grids), 5 mouth variants (8×2 grids), 10 background colors, 9 glow colors. Regenerate the file if the upstream style changes; the generator asserts the dot matrix stays 12×12.
+- `Render(username, nonce)` now draws, on a 100×100 canvas: a solid ground rect (one background color), the full dot matrix (`#000` at 40% opacity, built once into a package var), and the lit face pixels — one eyes + one mouth variant, all in one glow color — each pixel a 7.5×7.5 rounded square (rx 1.9), the same shape the style draws as arc paths. Variant/color picks are uniform, matching the core's `WeightedPick` (weight 1) semantics.
+- `versionSalt` bumped to **`disjoint-avatar-v2`** — the whole family re-rolled; digest pins re-pinned.
+- Structure tests replaced the symmetry test: ground rect, 144 dots on the dot grid, face pixels at variant coordinates only, all fills in the palettes, plus a variety check that the picker ranges over colors/variants. The dicebear style's `animation` component is intentionally not ported (static avatars).
+- License: DiceBear styles are CC0 / MIT (check the style's `meta.license` when regenerating); the port keeps the shapes as data in `shapes.go` with a generated-file header pointing at the source.
+
 ## As-Built Notes (2026-07-18)
 
 - **Re-rolls ("shuffle"):** avatars were originally fixed per username; on request a per-user nonce was added. Migration `00009_avatar_nonce.sql` adds `users.avatar_nonce INTEGER NOT NULL DEFAULT 0` (0 = original roll, so existing digests/renders stay stable until shuffled). The seed is now `v1 + NUL + username + NUL + nonce` (NUL separators make (username, nonce) pairs unambiguous — tested). A "Shuffle my default avatar" checkbox in the profile form POSTs `shuffle_avatar=on`; `UpdateProfileSubmit` stores a fresh `crypto/rand` nonce in [1, 2^31). The nonce travels in the avatar URL as `?v={nonce}` (author queries expose `author_avatar_nonce`) so a shuffle busts the browser's 1-day cache without changing the route or cache policy. Shuffling is independent of uploads — the nonce is always kept current so a later avatar removal resurfaces the latest roll, not a stale one. `tools/avatar-preview` gained a `-nonce` flag.

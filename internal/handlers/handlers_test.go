@@ -1662,7 +1662,7 @@ func TestDefaultPixelAvatars(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want public max-age=86400", cc)
 	}
 	body := rr.Body.String()
-	if !strings.HasPrefix(body, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"`) || !strings.Contains(body, `crispEdges`) {
+	if !strings.HasPrefix(body, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"`) {
 		t.Errorf("unexpected SVG body: %.80s…", body)
 	}
 	if got := getAvatar().Body.String(); got != body {

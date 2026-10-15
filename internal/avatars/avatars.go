@@ -1,13 +1,12 @@
-// Package avatars generates deterministic retro pixel-art avatars from a
-// username. Each avatar is a size x size grid of cells: the left half is
-// drawn from a seed derived from the username and mirrored onto the right
-// half, so every sprite is bilaterally symmetric. Cells are painted with up
-// to three colors from the bright half of the classic ANSI 16-color palette
-// (one color dominates so each avatar reads as a single figure rather than
-// confetti). The output is an SVG with a transparent background and crisp
-// edges, sized by CSS.
+// Package avatars generates deterministic "pixelbot"-style pixel avatars
+// from a username: a glowing robot face (one of several eye and mouth
+// shapes) drawn from lit rounded pixels on a dark 12x12 dot-matrix ground,
+// in the manner of the DiceBear "pixelbot" style. Shapes, coordinates, and
+// palettes come from shapes.go (extracted from the style definition); the
+// per-avatar choices are drawn from a seed derived from the username and a
+// nonce.
 //
-// Render is a pure function: the same username always produces
+// Render is a pure function: the same (username, nonce) always produces
 // byte-identical output, and the username is only hashed, never embedded in
 // the SVG.
 package avatars
@@ -18,61 +17,30 @@ import (
 	"strings"
 )
 
-// size is the full grid dimension in cells. The left half (size/2 columns)
-// is generated and mirrored for the right half.
-const size = 12
-
-// maxAttempts bounds the resample loop that rejects all-empty and all-full
-// grids (each has probability ~1e-20 for size=12, so this is belt-and-braces
-// and the loop effectively never fires twice).
-const maxAttempts = 8
-
-// fillPercent is the percentage chance of each left-half cell being painted.
-const fillPercent = 45
+// canvasSize is the SVG viewBox dimension; the sprite is drawn in a
+// canvasSize x canvasSize coordinate space.
+const canvasSize = 100
 
 // versionSalt is mixed into the seed so a future generator revision can
-// re-roll the whole family without ambiguity with old renderings.
-const versionSalt = "disjoint-avatar-v1"
+// re-roll the whole family without ambiguity with old renderings. v2 is the
+// pixelbot-style renderer (v1 was the mirrored confetti sprite).
+const versionSalt = "disjoint-avatar-v2"
 
-// palette is the bright half (indices 9-15) of the classic ANSI 16-color
-// palette. Avatars use a transparent background, so only the bright colors
-// are used: they read on both the dark and light themes.
-var palette = []string{
-	"#ff0000", // 9:  bright red
-	"#00ff00", // 10: bright green
-	"#ffff00", // 11: bright yellow
-	"#0000ff", // 12: bright blue
-	"#ff00ff", // 13: bright magenta
-	"#00ffff", // 14: bright cyan
-	"#ffffff", // 15: bright white
-}
+// dotMatrix is the static background grid, identical for every avatar: the
+// full 12x12 field of dark, semi-transparent rounded pixels.
+var dotMatrix = buildDotMatrix()
 
-// Render returns the deterministic pixel-art SVG avatar for username and
-// nonce. Nonce is the user's avatar_nonce (0 until they shuffle), so the
-// same username always renders the same sprite, and shuffling re-rolls it.
+// Render returns the deterministic pixelbot-style SVG avatar for username
+// and nonce. Nonce is the user's avatar_nonce (0 until they shuffle), so
+// the same username always renders the same sprite, and shuffling re-rolls
+// it.
 func Render(username string, nonce int64) string {
 	rng := newRng(hash(username, nonce))
-	colors := pickColors(rng)
-
-	var half [size][size / 2]string
-	filled := 0
-	for attempt := 0; ; attempt++ {
-		filled = 0
-		for y := 0; y < size; y++ {
-			for x := 0; x < size/2; x++ {
-				if rng.next()%100 < fillPercent {
-					half[y][x] = pickColor(rng, colors)
-					filled++
-				} else {
-					half[y][x] = ""
-				}
-			}
-		}
-		if filled > 0 && filled < size*size/2 || attempt == maxAttempts-1 {
-			break
-		}
-	}
-	return renderSVG(half)
+	bg := backgrounds[rng.intn(len(backgrounds))]
+	glow := glows[rng.intn(len(glows))]
+	eyes := eyesVariants[rng.intn(len(eyesVariants))]
+	mouth := mouthVariants[rng.intn(len(mouthVariants))]
+	return renderSVG(bg, glow, eyes, mouth)
 }
 
 // hash derives the PRNG seed: FNV-1a over the version salt, the exact
@@ -99,75 +67,75 @@ func (r *splitMix64) next() uint64 {
 	return z ^ (z >> 31)
 }
 
-// pickColors chooses three distinct palette colors for the avatar.
-func pickColors(r *splitMix64) [3]string {
-	perm := make([]int, len(palette))
-	for i := range perm {
-		perm[i] = i
-	}
-	for i := len(perm) - 1; i > 0; i-- {
-		j := int(r.next() % uint64(i+1))
-		perm[i], perm[j] = perm[j], perm[i]
-	}
-	return [3]string{palette[perm[0]], palette[perm[1]], palette[perm[2]]}
-}
+// intn returns a uniform-ish index in [0, n). The modulo bias is at most
+// 2^-64 relative and irrelevant for palette and variant picks.
+func (r *splitMix64) intn(n int) int { return int(r.next() % uint64(n)) }
 
-// pickColor picks a fill for one cell, biased toward colors[0] so the
-// avatar reads as a single figure: 60% dominant, 30% secondary, 10% accent.
-func pickColor(r *splitMix64, colors [3]string) string {
-	switch r.next() % 10 {
-	case 0, 1, 2, 3, 4:
-		return colors[0]
-	case 5, 6, 7:
-		return colors[1]
-	default:
-		return colors[2]
-	}
-}
-
-// cellAt resolves the color of a full-grid cell, mapping right-half columns
-// back onto their mirrored left-half counterpart.
-func cellAt(half [size][size / 2]string, y, x int) string {
-	if x >= size/2 {
-		x = size - 1 - x
-	}
-	return half[y][x]
-}
-
-// renderSVG emits the sprite as SVG, one rect per horizontal run of
-// same-colored cells (run-length merged, typically ~30-50 rects total).
-// Width/height are left unset so CSS (.avatar-sm / .avatar-lg) controls the
-// display size; crisp edges keep pixels sharp at any scale.
-func renderSVG(half [size][size / 2]string) string {
+// buildDotMatrix renders the 12x12 background grid once; every avatar
+// embeds the same string.
+func buildDotMatrix() string {
 	var b strings.Builder
-	b.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 `)
-	b.WriteString(strconv.Itoa(size))
-	b.WriteByte(' ')
-	b.WriteString(strconv.Itoa(size))
-	b.WriteString(`" shape-rendering="crispEdges" aria-hidden="true">`)
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; {
-			col := cellAt(half, y, x)
-			if col == "" {
-				x++
-				continue
-			}
-			start := x
-			x++
-			for x < size && cellAt(half, y, x) == col {
-				x++
-			}
-			b.WriteString(`<rect x="`)
-			b.WriteString(strconv.Itoa(start))
-			b.WriteString(`" y="`)
-			b.WriteString(strconv.Itoa(y))
-			b.WriteString(`" width="`)
-			b.WriteString(strconv.Itoa(x - start))
-			b.WriteString(`" height="1" fill="`)
-			b.WriteString(col)
-			b.WriteString(`"/>`)
+	b.WriteString(`<g fill="#000000" fill-opacity=".4">`)
+	for _, y := range dotYs {
+		for _, x := range dotXs {
+			writePixel(&b, x, y)
 		}
 	}
-	b.WriteString(`</svg>`)
+	b.WriteString(`</g>`)
 	return b.String()
+}
+
+// writePixel appends one lit pixel: a pixelSize square with pixelRadius
+// corners (the same shape the style definition draws as arc paths).
+func writePixel(b *strings.Builder, x, y float64) {
+	b.WriteString(`<rect x="`)
+	b.WriteString(strconv.FormatFloat(x, 'f', -1, 64))
+	b.WriteString(`" y="`)
+	b.WriteString(strconv.FormatFloat(y, 'f', -1, 64))
+	b.WriteString(`" width="`)
+	b.WriteString(strconv.FormatFloat(pixelSize, 'f', -1, 64))
+	b.WriteString(`" height="`)
+	b.WriteString(strconv.FormatFloat(pixelSize, 'f', -1, 64))
+	b.WriteString(`" rx="`)
+	b.WriteString(strconv.FormatFloat(pixelRadius, 'f', -1, 64))
+	b.WriteString(`"/>`)
+}
+
+// renderSVG assembles the avatar: a solid ground rect, the dot matrix, and
+// the lit face pixels in the glow color. Width/height are left unset so CSS
+// (.avatar-sm / .avatar-lg) controls the display size.
+func renderSVG(bg, glow, eyes, mouth string) string {
+	var b strings.Builder
+	b.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 `)
+	b.WriteString(strconv.Itoa(canvasSize))
+	b.WriteString(` `)
+	b.WriteString(strconv.Itoa(canvasSize))
+	b.WriteString(`" aria-hidden="true">`)
+	b.WriteString(`<rect width="`)
+	b.WriteString(strconv.Itoa(canvasSize))
+	b.WriteString(`" height="`)
+	b.WriteString(strconv.Itoa(canvasSize))
+	b.WriteString(`" fill="`)
+	b.WriteString(bg)
+	b.WriteString(`"/>`)
+	b.WriteString(dotMatrix)
+	b.WriteString(`<g fill="`)
+	b.WriteString(glow)
+	b.WriteString(`">`)
+	writeFace(&b, eyesXs[:], eyesYs[:], eyes)
+	writeFace(&b, mouthXs[:], mouthYs[:], mouth)
+	b.WriteString(`</g></svg>`)
+	return b.String()
+}
+
+// writeFace emits the lit pixels of one face variant, a grid of
+// "#" (lit) and "." (dark) rows indexed onto xs/ys.
+func writeFace(b *strings.Builder, xs, ys []float64, grid string) {
+	for row, line := range strings.Split(grid, "\n") {
+		for col, ch := range line {
+			if ch == '#' {
+				writePixel(b, xs[col], ys[row])
+			}
+		}
+	}
 }

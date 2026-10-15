@@ -4,45 +4,89 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
-	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// parseCells decodes the rects of a rendered SVG into a "x,y -> fill" map,
-// covering every painted cell exactly once.
-func parseCells(t *testing.T, svg string) map[string]string {
+// rect is one decoded <rect> of a rendered SVG.
+type rect struct {
+	X, Y, W, H, RX float64
+	Fill           string
+}
+
+// parseRects decodes every rect of a rendered SVG at any depth, validating
+// well-formedness on the way. A rect's effective fill is its own fill
+// attribute, or the fill of the innermost enclosing <g> when unset.
+func parseRects(t *testing.T, svg string) []rect {
 	t.Helper()
-	var doc struct {
-		XMLName xml.Name `xml:"svg"`
-		Rects   []struct {
-			X      int    `xml:"x,attr"`
-			Y      int    `xml:"y,attr"`
-			Width  int    `xml:"width,attr"`
-			Height int    `xml:"height,attr"`
-			Fill   string `xml:"fill,attr"`
-		} `xml:"rect"`
-	}
-	if err := xml.Unmarshal([]byte(svg), &doc); err != nil {
-		t.Fatalf("SVG is not well-formed XML: %v", err)
-	}
-	if doc.XMLName.Local != "svg" {
-		t.Fatalf("root element is %q, want svg", doc.XMLName.Local)
-	}
-	cells := map[string]string{}
-	for _, r := range doc.Rects {
-		if r.Height != 1 {
-			t.Fatalf("rect y=%d has height %d, want 1", r.Y, r.Height)
+	d := xml.NewDecoder(strings.NewReader(svg))
+	var root string
+	var groupFills []string
+	var out []rect
+	for {
+		tok, err := d.Token()
+		if err == io.EOF {
+			break
 		}
-		for x := r.X; x < r.X+r.Width; x++ {
-			key := fmt.Sprintf("%d,%d", x, r.Y)
-			if prev, ok := cells[key]; ok {
-				t.Fatalf("cell %s painted twice: %q then %q", key, prev, r.Fill)
+		if err != nil {
+			t.Fatalf("SVG is not well-formed XML: %v", err)
+		}
+		switch tok := tok.(type) {
+		case xml.StartElement:
+			if root == "" {
+				root = tok.Name.Local
+				if root != "svg" {
+					t.Fatalf("root element is %q, want svg", root)
+				}
+				continue
 			}
-			cells[key] = r.Fill
+			if tok.Name.Local == "g" {
+				groupFills = append(groupFills, attr(tok.Attr, "fill"))
+				continue
+			}
+			if tok.Name.Local != "rect" {
+				continue
+			}
+			var r rect
+			for _, a := range tok.Attr {
+				v, _ := strconv.ParseFloat(a.Value, 64)
+				switch a.Name.Local {
+				case "x":
+					r.X = v
+				case "y":
+					r.Y = v
+				case "width":
+					r.W = v
+				case "height":
+					r.H = v
+				case "rx":
+					r.RX = v
+				case "fill":
+					r.Fill = a.Value
+				}
+			}
+			if r.Fill == "" && len(groupFills) > 0 {
+				r.Fill = groupFills[len(groupFills)-1]
+			}
+			out = append(out, r)
+		case xml.EndElement:
+			if tok.Name.Local == "g" && len(groupFills) > 0 {
+				groupFills = groupFills[:len(groupFills)-1]
+			}
 		}
 	}
-	return cells
+	return out
+}
+
+func attr(attrs []xml.Attr, name string) string {
+	for _, a := range attrs {
+		if a.Name.Local == name {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 func TestRenderDeterministic(t *testing.T) {
@@ -66,16 +110,19 @@ func TestRenderDistinct(t *testing.T) {
 // pinnedDigests are the committed fixtures for the generator. Update them
 // deliberately when revising the generator (and bump versionSalt).
 var pinnedDigests = map[string]string{
-	"alice": "2c1f956262a0a30194129d778082bfa2635a7f8159c50792ac069980ced811ac",
-	"Bob":   "0b87913721d0d912456a5686a048193c691528fbc17213482d62025e1c43498e",
-	"Ω":     "b98af1509f15c9ce680d3e3f9400f27301964ce94825f5ffe5af2b050bbda372",
+	"alice": "099b743a4a5deac38e73fe1845fb31eee4766e672df521b6e95a5702c37af567",
+	"Bob":   "9511c9b8cf7be72fdaaa51f58891334b65d2f3d184583e8c8935dbb3a1fac420",
+	"Ω":     "06e807d4efba3075fe76c3b35111ffb2e88192bdc8fd15c8fb2724edb240fdb4",
 }
 
 // TestRenderDigest pins the generator output so an accidental PRNG, palette,
-// or threshold change fails loudly instead of silently re-rolling every
-// avatar in the fleet.
+// or shape change fails loudly instead of silently re-rolling every avatar
+// in the fleet.
 func TestRenderDigest(t *testing.T) {
 	for name, want := range pinnedDigests {
+		if want == "REPLACE" {
+			t.Skip("digests not pinned yet")
+		}
 		if got := sha256hex(Render(name, 0)); got != want {
 			t.Errorf("Render(%q) digest = %s, want %s (generator changed? update the fixture and bump versionSalt)", name, got, want)
 		}
@@ -111,40 +158,133 @@ func TestRenderNonceReRolls(t *testing.T) {
 func TestRenderPrologue(t *testing.T) {
 	for _, name := range []string{"alice", "x", "a-very-long-username-with-dashes.123"} {
 		svg := Render(name, 0)
-		wantPrologue := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" shape-rendering="crispEdges"`, size, size)
+		wantPrologue := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">`
 		if !strings.HasPrefix(svg, wantPrologue) {
 			t.Errorf("%s: unexpected svg prologue: %.80s…", name, svg)
 		}
 	}
 }
 
-func TestRenderSymmetricAndPalette(t *testing.T) {
+// TestRenderStructure checks the anatomy of every render: one ground rect,
+// the full 144-dot matrix, and a face made only of lit pixels at the
+// variant coordinates, in palette colors.
+func TestRenderStructure(t *testing.T) {
 	for _, name := range []string{"alice", "Bob", "Ω", "disjoint"} {
-		cells := parseCells(t, Render(name, 0))
-		if len(cells) == 0 || len(cells) > size*size {
-			t.Fatalf("%s: painted %d cells, want 1..%d", name, len(cells), size*size)
+		rects := parseRects(t, Render(name, 0))
+
+		if len(rects) < 2 {
+			t.Fatalf("%s: only %d rects", name, len(rects))
 		}
-		for key, fill := range cells {
-			var x, y int
-			fmt.Sscanf(key, "%d,%d", &x, &y)
-			mirror := size - 1 - x
-			mkey := fmt.Sprintf("%d,%d", mirror, y)
-			other, ok := cells[mkey]
-			if !ok || other != fill {
-				t.Fatalf("%s: cell %s (fill %q) not mirrored at %s (fill %q)", name, key, fill, mkey, other)
+
+		// Ground: first rect, full canvas, background palette color.
+		g := rects[0]
+		if g.X != 0 || g.Y != 0 || g.W != canvasSize || g.H != canvasSize || g.Fill == "" {
+			t.Fatalf("%s: ground rect is (%v %v %v %v %q), want full canvas with a fill", name, g.X, g.Y, g.W, g.H, g.Fill)
+		}
+		if !inList(backgrounds, g.Fill) {
+			t.Fatalf("%s: ground fill %q is not a background color", name, g.Fill)
+		}
+
+		// Dot matrix: next 144 rects, all dark semi-transparent pixels.
+		dots := rects[1 : 1+dotCount()]
+		if len(dots) != dotCount() {
+			t.Fatalf("%s: %d dot rects, want %d", name, len(dots), dotCount())
+		}
+		for i, p := range dots {
+			if p.W != pixelSize || p.H != pixelSize || p.RX != pixelRadius {
+				t.Fatalf("%s: dot %d has wrong pixel geometry (%v %v rx %v)", name, i, p.W, p.H, p.RX)
 			}
-			if !isPaletteColor(fill) {
-				t.Fatalf("%s: cell %s has fill %q outside the ANSI palette", name, key, fill)
+			if !inCoord(dotXs[:], p.X) || !inCoord(dotYs[:], p.Y) {
+				t.Fatalf("%s: dot %d at (%v,%v) is off the dot matrix", name, i, p.X, p.Y)
 			}
+		}
+
+		// Face: the remaining rects are lit pixels, all one glow color, at
+		// eyes/mouth variant coordinates.
+		glow := ""
+		face := 0
+		for _, p := range rects[1+dotCount():] {
+			if glow == "" {
+				glow = p.Fill
+			} else if p.Fill != glow {
+				t.Fatalf("%s: face mixes fills %q and %q", name, glow, p.Fill)
+			}
+			if !inList(glows, p.Fill) {
+				t.Fatalf("%s: face fill %q is not a glow color", name, p.Fill)
+			}
+			if !isFaceCoord(p.X, p.Y) {
+				t.Fatalf("%s: face pixel at (%v,%v) is off the face grid", name, p.X, p.Y)
+			}
+			if p.W != pixelSize || p.H != pixelSize || p.RX != pixelRadius {
+				t.Fatalf("%s: face pixel has wrong geometry (%v %v rx %v)", name, p.W, p.H, p.RX)
+			}
+			face++
+		}
+		// Every variant has at least 4 lit pixels per part.
+		if face < 8 {
+			t.Fatalf("%s: only %d face pixels, want at least 8", name, face)
 		}
 	}
 }
 
-func isPaletteColor(c string) bool {
-	for _, p := range palette {
-		if p == c {
+// TestRenderVariety sanity-checks that the picker actually ranges over the
+// palettes and variant sets (a stuck PRNG would render one face for everyone).
+func TestRenderVariety(t *testing.T) {
+	names := []string{"alice", "bob", "carol", "dave", "erin", "frank",
+		"grace", "heidi", "ivan", "judy", "mallory", "niaj",
+		"oleg", "pepper", "quinn", "rupert", "sybil", "trent",
+		"ursula", "victor", "wendy", "xavier", "yara", "zane"}
+	seenGlow := map[string]bool{}
+	seenBg := map[string]bool{}
+	seenFaces := map[string]bool{}
+	for _, n := range names {
+		svg := Render(n, 0)
+		rects := parseRects(t, svg)
+		g := rects[0]
+		seenBg[g.Fill] = true
+		face := rects[1+dotCount():]
+		glow := face[0].Fill
+		seenGlow[glow] = true
+		// The face section of the SVG is a stable signature of the
+		// (glow, eyes, mouth) choice.
+		i := strings.Index(svg, `<g fill="`+glow+`">`)
+		seenFaces[svg[i:]] = true
+	}
+	if len(seenGlow) < 3 {
+		t.Errorf("only %d distinct glow colors across %d users, want more", len(seenGlow), len(names))
+	}
+	if len(seenBg) < 3 {
+		t.Errorf("only %d distinct background colors across %d users, want more", len(seenBg), len(names))
+	}
+	if len(seenFaces) < 5 {
+		t.Errorf("only %d distinct face renders across %d users, want more", len(seenFaces), len(names))
+	}
+}
+
+func dotCount() int { return len(dotXs) * len(dotYs) }
+
+func inList(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
 			return true
 		}
 	}
 	return false
+}
+
+func inCoord(coords []float64, v float64) bool {
+	for _, c := range coords {
+		if c == v {
+			return true
+		}
+	}
+	return false
+}
+
+// isFaceCoord reports whether (x, y) is a valid eyes or mouth pixel position.
+func isFaceCoord(x, y float64) bool {
+	if inCoord(eyesXs[:], x) && inCoord(eyesYs[:], y) {
+		return true
+	}
+	return inCoord(mouthXs[:], x) && inCoord(mouthYs[:], y)
 }
