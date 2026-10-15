@@ -17,22 +17,6 @@ WHERE username = ? LIMIT 1;
 SELECT * FROM users
 WHERE id = ? LIMIT 1;
 
--- name: ListCategories :many
-SELECT * FROM categories
-ORDER BY position ASC, id ASC;
-
--- name: GetCategoryByID :one
-SELECT * FROM categories
-WHERE id = ? LIMIT 1;
-
--- name: CreateCategory :one
-INSERT INTO categories (
-    name,
-    position
-) VALUES (
-    ?, ?
-) RETURNING *;
-
 -- name: ListBoards :many
 SELECT * FROM boards
 ORDER BY position ASC, id ASC;
@@ -43,18 +27,16 @@ WHERE id = ? LIMIT 1;
 
 -- name: CreateBoard :one
 INSERT INTO boards (
-    category_id,
     name,
     description,
     position
 ) VALUES (
-    ?, ?, ?, ?
+    ?, ?, ?
 ) RETURNING *;
 
 -- name: ListBoardsWithDetails :many
 SELECT 
     b.id,
-    b.category_id,
     b.name,
     b.description,
     b.position,
@@ -120,13 +102,11 @@ SELECT
     t.expires_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
-    b.name AS board_name,
-    b.category_id,
-    c.name AS category_name
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce,
+    b.name AS board_name
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 JOIN boards b ON t.board_id = b.id
-JOIN categories c ON b.category_id = c.id
 WHERE t.id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LIMIT 1;
 
@@ -168,7 +148,8 @@ SELECT
     p.body,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
-    COALESCE(u.avatar_path, '') AS author_avatar
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM posts p
 LEFT JOIN users u ON p.user_id = u.id
 WHERE p.thread_id = ?
@@ -182,7 +163,8 @@ SELECT
     p.body,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
-    COALESCE(u.avatar_path, '') AS author_avatar
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM posts p
 LEFT JOIN users u ON p.user_id = u.id
 WHERE p.id = ? LIMIT 1;
@@ -304,6 +286,9 @@ UPDATE users SET avatar_path = ? WHERE id = ?;
 
 -- name: RemoveUserAvatar :exec
 UPDATE users SET avatar_path = NULL WHERE id = ?;
+
+-- name: SetUserAvatarNonce :exec
+UPDATE users SET avatar_nonce = ? WHERE id = ?;
 
 -- name: ListRecentActivity :many
 SELECT

@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -88,6 +90,24 @@ func (app *App) UpdateProfileSubmit(w http.ResponseWriter, r *http.Request) {
 		setFlash(w, "flash_error", err.Error())
 		http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
 		return
+	}
+
+	// Optional re-roll of the generated default avatar (works alongside an
+	// upload: the nonce only matters while no upload is set, but keeping it
+	// current avoids a stale roll resurfacing after a later removal).
+	if r.FormValue("shuffle_avatar") != "" {
+		nonce, err := randomAvatarNonce()
+		if err != nil {
+			http.Error(w, "failed to save profile", http.StatusInternalServerError)
+			return
+		}
+		if err := app.queries.SetUserAvatarNonce(ctx, database.SetUserAvatarNonceParams{
+			AvatarNonce: nonce,
+			ID:          viewer.ID,
+		}); err != nil {
+			http.Error(w, "failed to save profile", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if err := app.queries.UpdateUserBio(ctx, database.UpdateUserBioParams{
@@ -190,6 +210,19 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 // isWebP checks the RIFF container magic bytes for a WebP payload.
 func isWebP(b []byte) bool {
 	return len(b) >= 12 && string(b[0:4]) == "RIFF" && string(b[8:12]) == "WEBP"
+}
+
+// randomAvatarNonce returns a random nonce in [1, 2^31) that re-seeds the
+// generated default avatar ("shuffle"). crypto/rand is used for
+// unpredictability rather than security: the nonce is not a secret (it is
+// shown in the page's HTML), and a collision is harmless — it just re-rolls
+// to a sprite the user has seen before.
+func randomAvatarNonce() (int64, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1<<31))
+	if err != nil {
+		return 0, err
+	}
+	return n.Int64() + 1, nil
 }
 
 // removeAvatarFile deletes an avatar from disk. The stored path is a bare

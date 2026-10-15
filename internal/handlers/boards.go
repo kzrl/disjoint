@@ -20,22 +20,10 @@ type BoardViewItem struct {
 	IsUnread     bool
 }
 
-// CategoryViewItem holds a category and its nested boards.
-type CategoryViewItem struct {
-	Category database.Category
-	Boards   []BoardViewItem
-}
-
-// IndexPage renders the main forum index with categories, boards, and latest thread summaries.
+// IndexPage renders the main forum index with boards and latest thread summaries.
 func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.UserFromContext(ctx)
-
-	categories, err := app.queries.ListCategories(ctx)
-	if err != nil {
-		http.Error(w, "failed to load categories", http.StatusInternalServerError)
-		return
-	}
 
 	boardDetails, err := app.queries.ListBoardsWithDetails(ctx)
 	if err != nil {
@@ -81,8 +69,8 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		latestMap[latestRows[i].BoardID] = &latestRows[i]
 	}
 
-	// Map board details by category ID
-	catMap := make(map[int64][]BoardViewItem)
+	// Build the flat board list (already ordered by position, id)
+	boards := make([]BoardViewItem, 0, len(boardDetails))
 	for _, bd := range boardDetails {
 		// Check unread status
 		isUnread := false
@@ -95,10 +83,9 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		catMap[bd.CategoryID] = append(catMap[bd.CategoryID], BoardViewItem{
+		boards = append(boards, BoardViewItem{
 			Board: database.Board{
 				ID:          bd.ID,
-				CategoryID:  bd.CategoryID,
 				Name:        bd.Name,
 				Description: bd.Description,
 				Position:    bd.Position,
@@ -110,18 +97,10 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var categoryViews []CategoryViewItem
-	for _, cat := range categories {
-		categoryViews = append(categoryViews, CategoryViewItem{
-			Category: cat,
-			Boards:   catMap[cat.ID],
-		})
-	}
-
 	app.render(w, r, "index.html", map[string]any{
-		"Categories": categoryViews,
-		"Online":     online,
-		"Activity":   activity,
+		"Boards":   boards,
+		"Online":   online,
+		"Activity": activity,
 	}, "Board Index")
 }
 
@@ -145,12 +124,6 @@ func (app *App) BoardPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	board, err := app.queries.GetBoardByID(ctx, boardID)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	category, err := app.queries.GetCategoryByID(ctx, board.CategoryID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -206,37 +179,26 @@ func (app *App) BoardPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	app.render(w, r, "board.html", map[string]any{
-		"Board":    board,
-		"Category": category,
-		"Threads":  threadItems,
+		"Board":   board,
+		"Threads": threadItems,
 	}, board.Name)
 }
 
-// NewBoardPage renders the form to create boards or categories.
+// NewBoardPage renders the form to create a new board (admin only).
 func (app *App) NewBoardPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	categories, err := app.queries.ListCategories(ctx)
-	if err != nil {
-		http.Error(w, "failed to load categories", http.StatusInternalServerError)
+	if requireAdmin(w, r) == nil {
 		return
 	}
-
-	app.render(w, r, "new_board.html", map[string]any{
-		"Categories": categories,
-	}, "Create Board or Category")
+	app.render(w, r, "new_board.html", map[string]any{}, "Create Board")
 }
 
-// CreateBoardSubmit handles creating a new board.
+// CreateBoardSubmit handles creating a new board (admin only).
 func (app *App) CreateBoardSubmit(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	categoryIDStr := r.FormValue("category_id")
-	categoryID, err := strconv.ParseInt(categoryIDStr, 10, 64)
-	if err != nil {
-		setFlash(w, "flash_error", "Invalid category selected.")
-		http.Redirect(w, r, "/boards/new", http.StatusSeeOther)
+	if requireAdmin(w, r) == nil {
 		return
 	}
 
+	ctx := r.Context()
 	name := strings.TrimSpace(r.FormValue("name"))
 	description := strings.TrimSpace(r.FormValue("description"))
 	if name == "" {
@@ -246,7 +208,6 @@ func (app *App) CreateBoardSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	board, err := app.queries.CreateBoard(ctx, database.CreateBoardParams{
-		CategoryID:  categoryID,
 		Name:        name,
 		Description: sql.NullString{String: description, Valid: description != ""},
 		Position:    0,
@@ -259,31 +220,4 @@ func (app *App) CreateBoardSubmit(w http.ResponseWriter, r *http.Request) {
 
 	setFlash(w, "flash_success", "Board created successfully!")
 	http.Redirect(w, r, "/boards/"+strconv.FormatInt(board.ID, 10), http.StatusSeeOther)
-}
-
-// CreateCategorySubmit handles creating a new category.
-func (app *App) CreateCategorySubmit(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	name := strings.TrimSpace(r.FormValue("name"))
-	positionStr := r.FormValue("position")
-	position, _ := strconv.ParseInt(positionStr, 10, 64)
-
-	if name == "" {
-		setFlash(w, "flash_error", "Category name is required.")
-		http.Redirect(w, r, "/boards/new", http.StatusSeeOther)
-		return
-	}
-
-	_, err := app.queries.CreateCategory(ctx, database.CreateCategoryParams{
-		Name:     name,
-		Position: position,
-	})
-	if err != nil {
-		setFlash(w, "flash_error", "Failed to create category.")
-		http.Redirect(w, r, "/boards/new", http.StatusSeeOther)
-		return
-	}
-
-	setFlash(w, "flash_success", "Category created successfully!")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

@@ -939,6 +939,13 @@
   --bulma-primary-s: 91%;
   --bulma-primary-l: 56%;
   --bulma-primary-rgb: 59, 130, 246;
+  /* Disjoint's sans-serif stack: pure system fonts (no webfont to load —
+     keeps the offline/self-hosted property). Overrides Bulma's Inter-first
+     --bulma-family-primary/-secondary for body and heading text alike. */
+  --bulma-family-primary: -apple-system, BlinkMacSystemFont, "Avenir Next",
+    Avenir, "Segoe UI", "Helvetica Neue", "Adwaita Sans", Cantarell, Ubuntu,
+    Roboto, Noto, Helvetica, Arial, sans-serif;
+  --bulma-family-secondary: var(--bulma-family-primary);
 }
 
 @media (prefers-color-scheme: light) {
@@ -957,28 +964,12 @@ body {
 
 /* Bulma's .container has no side padding; page-level ones need gutters.
    main is a flex child of body, so flex-grow fills the space and the
-   footer sits at the bottom of the viewport. */
-.site-header .container,
+   footer sits at the bottom of the viewport. (The top navbar is the
+   full-width Bulma .navbar component and sizes itself.) */
 main.container,
 .site-footer .container {
   padding-left: 1rem;
   padding-right: 1rem;
-}
-
-.site-header {
-  background-color: var(--bulma-scheme-main-bis);
-  border-bottom: 1px solid var(--bulma-border);
-}
-
-.header-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-height: 3.75rem;
-  padding-top: 0.25rem;
-  padding-bottom: 0.25rem;
-  flex-wrap: wrap;
 }
 
 .logo {
@@ -991,29 +982,6 @@ main.container,
 
 .logo span {
   color: var(--bulma-primary);
-}
-
-.nav-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.user-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  background: var(--bulma-scheme-main-ter);
-  border: 1px solid var(--bulma-border);
-  padding: 0.25rem 0.625rem;
-  border-radius: var(--bulma-radius);
-  font-size: 0.8125rem;
-  color: var(--bulma-text-weak);
-}
-
-.user-badge strong {
-  color: var(--bulma-text-strong);
 }
 
 .site-footer {
@@ -1089,11 +1057,6 @@ main.container,
   text-align: center;
 }
 
-.stats-number {
-  font-weight: 600;
-  color: var(--bulma-text-strong);
-}
-
 .board-latest,
 .thread-latest {
   font-size: 0.75rem;
@@ -1143,11 +1106,6 @@ main.container,
   word-break: break-word;
 }
 
-.post-date {
-  color: var(--bulma-text-weak);
-  font-size: 0.6875rem;
-}
-
 .post-content-area {
   padding: 1rem 1.25rem;
   display: flex;
@@ -1155,86 +1113,33 @@ main.container,
   justify-content: space-between;
 }
 
-/* --- Markdown rendered bodies --------------------------------------------- */
+/* Markdown bodies use Bulma's .content component (class "content is-small"). */
 
-.post-body {
-  font-size: 0.875rem;
-  color: var(--bulma-text);
-  line-height: 1.6;
-  overflow-wrap: break-word;
+/* --- Mentions --------------------------------------------------------------- */
+
+/* @user mentions are rendered by internal/markdown as <a class="mention">
+   inside .content. A tinted pill (instead of a plain underline) distinguishes
+   a mention from an ordinary text link.
+
+   Colors: only --bulma-primary is used. Its lightness IS overridden per theme
+   (56% in dark, 41% in light), so the text is readable on the scheme in both.
+   The tint is a transparent color-mix of the same color, so it adapts too.
+   Do NOT use the -light/-dark/-bold ladder here: those lightness steps live
+   only in Bulma's light base :root and leak their light-theme values into the
+   dark theme (the generated dark block overrides just ~54 base variables),
+   which renders a near-white pill. Browsers without color-mix fall back to a
+   plain tintless link. */
+.mention {
+  color: var(--bulma-primary);
+  background-color: transparent;
+  background-color: color-mix(in srgb, var(--bulma-primary) 15%, transparent);
+  border-radius: var(--bulma-radius-small);
+  padding: 0.05em 0.3em;
 }
 
-.post-body p {
-  margin-bottom: 0.75rem;
-}
-
-.post-body p:last-child {
-  margin-bottom: 0;
-}
-
-.post-body h1,
-.post-body h2,
-.post-body h3,
-.post-body h4 {
-  margin-top: 0.875rem;
-  margin-bottom: 0.5rem;
-  color: var(--bulma-text-strong);
-}
-
-.post-body ul,
-.post-body ol {
-  padding-left: 1.25rem;
-  margin-bottom: 0.75rem;
-}
-
-.post-body blockquote {
-  border-left: 3px solid var(--bulma-primary);
-  background: var(--bulma-scheme-main-ter);
-  padding: 0.5rem 0.875rem;
-  margin: 0.75rem 0;
-  color: var(--bulma-text-weak);
-  border-radius: 0 var(--bulma-radius) var(--bulma-radius) 0;
-}
-
-.post-body pre {
-  background: var(--bulma-scheme-main);
-  border: 1px solid var(--bulma-border-weak);
-  padding: 0.75rem;
-  border-radius: var(--bulma-radius);
-  overflow-x: auto;
-  font-family: var(--bulma-family-code);
-  font-size: 0.75rem;
-  margin: 0.75rem 0;
-}
-
-.post-body code {
-  font-family: var(--bulma-family-code);
-  background: var(--bulma-scheme-main-ter);
-  padding: 0.125rem 0.3125rem;
-  border-radius: 3px;
-  font-size: 0.75rem;
-}
-
-.post-body pre code {
-  background: none;
-  padding: 0;
-}
-
-.post-body table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.75rem 0;
-}
-
-.post-body th,
-.post-body td {
-  border: 1px solid var(--bulma-border-weak);
-  padding: 0.375rem 0.625rem;
-  text-align: left;
-}
-
-.post-body th {
-  background: var(--bulma-scheme-main-ter);
+.mention:hover {
+  background-color: transparent;
+  background-color: color-mix(in srgb, var(--bulma-primary) 25%, transparent);
 }
 
 /* --- Attachments ------------------------------------------------------------ */
@@ -1243,15 +1148,6 @@ main.container,
   margin-top: 1rem;
   padding-top: 0.75rem;
   border-top: 1px dashed var(--bulma-border);
-}
-
-.attachment-title {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: var(--bulma-text-weak);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 0.5rem;
 }
 
 .attachments-grid {
@@ -1323,11 +1219,6 @@ main.container,
   white-space: nowrap;
 }
 
-.file-meta {
-  color: var(--bulma-text-weak);
-  font-size: 0.6875rem;
-}
-
 /* --- Homepage extras: on-air strip & activity ticker ------------------------ */
 
 .on-air {
@@ -1353,20 +1244,8 @@ main.container,
   flex-shrink: 0;
 }
 
-.on-air-label {
-  color: var(--bulma-text-weak);
-  text-transform: uppercase;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-}
-
 .on-air-user {
   color: var(--bulma-text-strong);
-}
-
-.on-air-since {
-  color: var(--bulma-text-weak);
-  font-size: 0.78rem;
 }
 
 .on-air-empty {
@@ -1390,12 +1269,6 @@ main.container,
   border-bottom: none;
 }
 
-.activity-time {
-  color: var(--bulma-text-weak);
-  font-size: 0.78rem;
-  opacity: 0.8;
-}
-
 .activity-empty {
   color: var(--bulma-text-weak);
   padding: 0.5rem 1rem;
@@ -1414,11 +1287,6 @@ main.container,
   max-width: 26.25rem;
   margin: 2.5rem auto;
   width: 100%;
-}
-
-.auth-header {
-  text-align: center;
-  margin-bottom: 1.25rem;
 }
 
 /* --- User avatars ---------------------------------------------------------------- */
@@ -1445,6 +1313,9 @@ main.container,
 
 /* --- Responsive --------------------------------------------------------------------- */
 
+/* Mobile range: must stay synced with Bulma's $tablet breakpoint (769px),
+   i.e. max-width = tablet - 1px. Bulma v1 compiles breakpoints as literals
+   (no CSS variables), so this cannot reference them. */
 @media (max-width: 768px) {
   .board-row,
   .thread-row {

@@ -381,6 +381,18 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 		t.Fatalf("expected attachment filename in thread page")
 	}
 
+	// Quote excludes attachments by construction: the quote JS reads only the
+	// .content div, so attachment markup must remain a SIBLING of it (closed
+	// before it), not nested inside. This pins that structure.
+	contentStart := strings.Index(bodyContent, `<div class="content is-small">`)
+	attachStart := strings.Index(bodyContent, `<div class="post-attachments">`)
+	if contentStart < 0 || attachStart < 0 || contentStart > attachStart {
+		t.Fatalf("expected .content div followed by .post-attachments in the post card")
+	}
+	if !strings.Contains(bodyContent[contentStart:attachStart], "</div>") {
+		t.Errorf("attachment markup must be OUTSIDE the .content div (quote reads .content only)")
+	}
+
 	// 5. Submit reply via HTMX
 	var replyBuf bytes.Buffer
 	rw := multipart.NewWriter(&replyBuf)
@@ -422,6 +434,138 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	}
 	if !strings.Contains(rr.Header().Get("Cache-Control"), "public") {
 		t.Fatalf("expected Cache-Control header on served upload")
+	}
+}
+
+func TestMentionRendering(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("password123")
+
+	// Two real users plus one username that must not exist.
+	bob, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "bob",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "alice",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	authCookie := authCookieFor(t, queries, bob.ID)
+
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatalf("expected seeded boards, got err: %v", err)
+	}
+	boardID := boards[0].ID
+
+	// Thread body exercises: a real mention, an unknown mention (link-all
+	// behavior: it still links, and 404s at the user card), an e-mail
+	// address (must NOT become a mention), and a code span (must NOT).
+	body := "ping @alice and @nobody\nreach me at user@gmail.com or `@bob`"
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("title", "Mention test")
+	_ = w.WriteField("body", body)
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	threadPath := rr.Header().Get("Location")
+
+	// 1. Thread page: both mentions render as mention anchors.
+	req = httptest.NewRequest(http.MethodGet, threadPath, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected GET thread to return 200, got %d", rr.Code)
+	}
+	page := rr.Body.String()
+
+	mentionAnchor := func(name string) string {
+		return `<a class="mention" href="/users/` + name + `" data-mention="@` + name + `">@` + name + `</a>`
+	}
+	if !strings.Contains(page, mentionAnchor("alice")) {
+		t.Errorf("thread page: want mention anchor for real user alice, got: %s", page)
+	}
+	if !strings.Contains(page, mentionAnchor("nobody")) {
+		t.Errorf("thread page: want mention anchor for unknown user (link-all behavior), got: %s", page)
+	}
+	if c := strings.Count(page, `class="mention"`); c != 2 {
+		t.Errorf("thread page: want exactly 2 mentions (alice, nobody), got %d in: %s", c, page)
+	}
+	if strings.Contains(page, "gmail\" data-mention") || strings.Contains(page, `/users/gmail`) {
+		t.Errorf("thread page: e-mail address must not become a mention, got: %s", page)
+	}
+	if !strings.Contains(page, `<code>@bob</code>`) {
+		t.Errorf("thread page: want code span preserved, got: %s", page)
+	}
+
+	// Quote affordance (Task 3): the single post card carries the Quote
+	// button, and the container carries the thread id for permalinks.
+	if c := strings.Count(page, `class="button is-small is-light quote-btn"`); c != 1 {
+		t.Errorf("thread page: want exactly 1 quote button (one post), got %d", c)
+	}
+	if !strings.Contains(page, `id="posts-container" class="posts-container" data-thread-id="`) {
+		t.Errorf("thread page: want data-thread-id on #posts-container, got: %s", page)
+	}
+
+	// 2. HTMX reply partial: a mention in the new post renders too.
+	var replyBuf bytes.Buffer
+	rw := multipart.NewWriter(&replyBuf)
+	_ = rw.WriteField("body", "thanks @bob")
+	_ = rw.Close()
+
+	req = httptest.NewRequest(http.MethodPost, threadPath+"/posts", &replyBuf)
+	req.Header.Set("Content-Type", rw.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected HTMX reply to return 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	partial := rr.Body.String()
+	if !strings.Contains(partial, mentionAnchor("bob")) {
+		t.Errorf("HTMX partial: want mention anchor for bob, got: %s", partial)
+	}
+	if c := strings.Count(partial, `class="button is-small is-light quote-btn"`); c != 1 {
+		t.Errorf("HTMX partial: want exactly 1 quote button on the appended post, got %d", c)
+	}
+
+	// 3. The user card for a mentioned user still resolves (the link target).
+	req = httptest.NewRequest(http.MethodGet, "/users/"+alice.Username, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected mention target /users/%s to return 200, got %d", alice.Username, rr.Code)
+	}
+
+	// 4. Unknown mention target 404s (documented link-all consequence).
+	req = httptest.NewRequest(http.MethodGet, "/users/nobody", nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected unknown mention target /users/nobody to 404, got %d", rr.Code)
 	}
 }
 
@@ -569,48 +713,52 @@ func TestUnreadIndicators(t *testing.T) {
 	}
 }
 
-func TestCategoryAndBoardCreation(t *testing.T) {
+func TestBoardCreation(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
 	defer db.Close()
 	router := app.Routes()
-
-	// Create user & auth cookie
 	ctx := context.Background()
-	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "moderator", PasswordHash: "hash"})
-	authCookie := authCookieFor(t, queries, user.ID)
 
-	// 1. Create Category via POST /categories/new
-	form := url.Values{}
-	form.Set("name", "Gaming & Hobbies")
-	form.Set("position", "5")
-	req := httptest.NewRequest(http.MethodPost, "/categories/new", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(authCookie)
+	// Board creation is admin-only: a regular user is denied the page and
+	// the POST, and no board is created.
+	regular, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "moderator", PasswordHash: "hash"})
+	regularCookie := authCookieFor(t, queries, regular.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/boards/new", nil)
+	req.AddCookie(regularCookie)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
-
 	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
-		t.Fatalf("expected redirect to / after category creation, got %d to %s", rr.Code, rr.Header().Get("Location"))
+		t.Fatalf("expected non-admin GET /boards/new to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
 	}
 
-	cats, err := queries.ListCategories(ctx)
-	if err != nil || len(cats) < 3 {
-		t.Fatalf("expected at least 3 categories, got %d", len(cats))
+	bForm := url.Values{}
+	bForm.Set("name", "Denied Board")
+	bForm.Set("description", "A regular user must not be able to create this.")
+	req = httptest.NewRequest(http.MethodPost, "/boards/new", strings.NewReader(bForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(regularCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("expected non-admin POST /boards/new to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
 	}
-	var newCat database.Category
-	for _, c := range cats {
-		if c.Name == "Gaming & Hobbies" {
-			newCat = c
-			break
+	if boards, err := queries.ListBoards(ctx); err == nil {
+		for _, b := range boards {
+			if b.Name == "Denied Board" {
+				t.Fatalf("regular user's POST /boards/new must not create a board")
+			}
 		}
 	}
-	if newCat.ID == 0 {
-		t.Fatalf("category Gaming & Hobbies was not found in DB")
-	}
 
-	// 2. Create Board via POST /boards/new
-	bForm := url.Values{}
-	bForm.Set("category_id", strconv.FormatInt(newCat.ID, 10))
+	// The same user, promoted to admin, can create boards.
+	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "board_admin", PasswordHash: "hash"})
+	if err := queries.SetUserAdmin(ctx, user.ID); err != nil {
+		t.Fatalf("failed to set admin: %v", err)
+	}
+	authCookie := authCookieFor(t, queries, user.ID)
+
+	// Create Board via POST /boards/new
 	bForm.Set("name", "Retro Games")
 	bForm.Set("description", "Talk about NES, SNES, and retro arcade titles.")
 	req = httptest.NewRequest(http.MethodPost, "/boards/new", strings.NewReader(bForm.Encode()))
@@ -625,6 +773,34 @@ func TestCategoryAndBoardCreation(t *testing.T) {
 	newBoardLoc := rr.Header().Get("Location")
 	if !strings.HasPrefix(newBoardLoc, "/boards/") {
 		t.Fatalf("expected redirect to /boards/{id}, got %s", newBoardLoc)
+	}
+
+	newBoardID, err := strconv.ParseInt(strings.TrimPrefix(newBoardLoc, "/boards/"), 10, 64)
+	if err != nil {
+		t.Fatalf("expected numeric board id in redirect, got %q: %v", newBoardLoc, err)
+	}
+	newBoard, err := queries.GetBoardByID(ctx, newBoardID)
+	if err != nil {
+		t.Fatalf("board %d was not found in DB: %v", newBoardID, err)
+	}
+	if newBoard.Name != "Retro Games" {
+		t.Fatalf("expected board name Retro Games, got %s", newBoard.Name)
+	}
+
+	// Navbar: the "+ New Board" link is rendered for admins only.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(authCookie)
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `href="/boards/new"`) {
+		t.Errorf("admin navbar should contain the + New Board link (status %d)", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(regularCookie)
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), `href="/boards/new"`) {
+		t.Errorf("regular user's navbar must not contain the + New Board link (status %d)", rr.Code)
 	}
 }
 
@@ -1405,8 +1581,9 @@ func TestUserAvatarUploads(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(uploadDir, p)); !os.IsNotExist(err) {
 		t.Errorf("removed avatar file still on disk, stat err=%v", err)
 	}
-	if got := cardHTML(); strings.Contains(got, "avatar avatar-lg") {
-		t.Errorf("card still shows avatar after removal:\n%s", got)
+	// The card now falls back to the default pixel avatar after removal.
+	if got := cardHTML(); !strings.Contains(got, `src="/avatars/avatar_user?v=0"`) || strings.Contains(got, "/uploads/"+p) {
+		t.Errorf("card should show the default pixel avatar after removal, not the removed upload:\n%s", got)
 	}
 
 	// 8. Plain urlencoded bio-only POST still works (no avatar field at all).
@@ -1444,6 +1621,165 @@ func postThreadWithFile(t *testing.T, router http.Handler, cookie *http.Cookie, 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	return rr
+}
+
+// ---- Default pixel avatars ----
+
+// TestDefaultPixelAvatars verifies the /avatars/{name} fallback route: it
+// renders a deterministic pixel-art SVG for users without an upload, 404s
+// for unknown users, 302s to the upload once one exists, and appears in the
+// templates that show author avatars.
+func TestDefaultPixelAvatars(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "pixel_user", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, user.ID)
+
+	getAvatar := func() *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/avatars/pixel_user", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. No upload yet: 200 with an SVG, cached for a day, deterministic.
+	rr := getAvatar()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for default avatar, got %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "image/svg+xml" {
+		t.Errorf("Content-Type = %q, want image/svg+xml", ct)
+	}
+	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "public") || !strings.Contains(cc, "max-age=86400") {
+		t.Errorf("Cache-Control = %q, want public max-age=86400", cc)
+	}
+	body := rr.Body.String()
+	if !strings.HasPrefix(body, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"`) || !strings.Contains(body, `crispEdges`) {
+		t.Errorf("unexpected SVG body: %.80s…", body)
+	}
+	if got := getAvatar().Body.String(); got != body {
+		t.Error("avatar SVG is not deterministic across requests")
+	}
+
+	// 2. Unknown user: 404 (the route is not a free render endpoint).
+	req := httptest.NewRequest(http.MethodGet, "/avatars/nosuchuser", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown user, got %d", rr.Code)
+	}
+
+	// 3. User card shows the default avatar (big) and the edit-form preview.
+	req = httptest.NewRequest(http.MethodGet, "/users/pixel_user", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("user card returned %d", rr.Code)
+	}
+	page := rr.Body.String()
+	if !strings.Contains(page, `class="avatar avatar-lg" src="/avatars/pixel_user?v=0"`) {
+		t.Errorf("user card did not show the default avatar-lg img:\n%s", page)
+	}
+	if !strings.Contains(page, `Your default avatar:`) {
+		t.Errorf("user card edit form did not show the default avatar preview")
+	}
+
+	// 4. Thread page shows the small default avatar next to the author.
+	boards, err := queries.ListBoards(ctx)
+	if err != nil || len(boards) == 0 {
+		t.Fatal("expected seeded boards")
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		BoardID: boards[0].ID, UserID: user.ID,
+		Title: "pixel thread", ExpiresAt: sql.NullTime{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: user.ID, Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(thread.ID, 10), nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thread page returned %d", rr.Code)
+	}
+	if page := rr.Body.String(); !strings.Contains(page, `class="avatar avatar-sm" src="/avatars/pixel_user?v=0"`) {
+		t.Errorf("thread page did not show the default avatar-sm img:\n%s", page)
+	}
+
+	// 5. Shuffle: sets a fresh nonce; the rendered sprite and the ?v= URL
+	// in the templates change with it.
+	rr = getAvatar()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 before shuffle, got %d", rr.Code)
+	}
+	before := rr.Body.String()
+
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", strings.NewReader("shuffle_avatar=on"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 after shuffle, got %d", rr.Code)
+	}
+	shuffled, err := queries.GetUserByUsername(ctx, "pixel_user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shuffled.AvatarNonce == 0 {
+		t.Fatal("shuffle did not set a nonce")
+	}
+	rr = getAvatar()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after shuffle, got %d", rr.Code)
+	}
+	if after := rr.Body.String(); after == before {
+		t.Error("shuffled avatar rendered identically to the original roll")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/users/pixel_user", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("user card after shuffle returned %d", rr.Code)
+	}
+	wantV := "?v=" + strconv.FormatInt(shuffled.AvatarNonce, 10)
+	if page := rr.Body.String(); !strings.Contains(page, `/avatars/pixel_user`+wantV) {
+		t.Errorf("user card does not carry the new nonce in the avatar URL:\n%s", page)
+	}
+
+	// 6. After an upload the route 302s to the uploaded file.
+	bodyBuf, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", pngBytes)
+	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", bodyBuf)
+	req.Header.Set("Content-Type", ctype)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 after avatar upload, got %d", rr.Code)
+	}
+	rr = getAvatar()
+	if rr.Code != http.StatusFound {
+		t.Fatalf("expected 302 after upload, got %d", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/uploads/") || !strings.Contains(loc, ".png") {
+		t.Errorf("redirect Location = %q, want /uploads/….png", loc)
+	}
 }
 
 // TestAttachmentTypeEnforcementAndServing verifies the upload security model:
@@ -1667,5 +2003,72 @@ func TestSessionLifecycle(t *testing.T) {
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected expired session to be anonymous, got %d", rr.Code)
+	}
+}
+
+func TestLoginRateLimiting(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+
+	// A user must exist so the middleware lets /login through to the
+	// rate-limited handler instead of redirecting to first-run setup.
+	hash, err := auth.HashPassword("password123")
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+	if _, err := queries.CreateUser(context.Background(), database.CreateUserParams{
+		Username:     "admin",
+		PasswordHash: hash,
+	}); err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	// No explicit refresh needed: the middleware lazily re-counts users
+	// on every request while it believes the install is empty.
+
+	router := app.Routes()
+
+	body := "username=nobody&password=wrong"
+	var last int
+	for i := 0; i < 12; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		last = rr.Code
+		if rr.Code == http.StatusTooManyRequests {
+			t.Logf("rate limit triggered on attempt %d", i+1)
+			break
+		}
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 within 12 attempts, last code %d", last)
+	}
+
+	// GET /login must remain reachable while POSTs are limited.
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /login after limit: expected 200, got %d", rr.Code)
+	}
+}
+
+func TestSecurityHeadersPresent(t *testing.T) {
+	app, db, _, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	want := map[string]string{
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "frame-ancestors 'none'",
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "same-origin",
+	}
+	for header, value := range want {
+		if got := rr.Header().Get(header); got != value {
+			t.Errorf("%s = %q, want %q", header, got, value)
+		}
 	}
 }

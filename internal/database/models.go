@@ -21,16 +21,9 @@ type Attachment struct {
 
 type Board struct {
 	ID          int64
-	CategoryID  int64
 	Name        string
 	Description sql.NullString
 	Position    int64
-}
-
-type Category struct {
-	ID       int64
-	Name     string
-	Position int64
 }
 
 type Invite struct {
@@ -75,6 +68,7 @@ type User struct {
 	CreatedAt    sql.NullTime
 	Bio          sql.NullString
 	AvatarPath   sql.NullString
+	AvatarNonce  int64
 }
 
 type UserBoardRead struct {

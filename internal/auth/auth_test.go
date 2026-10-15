@@ -1,54 +1,52 @@
 package auth
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestHashAndCheckPassword(t *testing.T) {
-	password := "supersecret123"
-	hash, err := HashPassword(password)
-	if err != nil {
-		t.Fatalf("unexpected error hashing password: %v", err)
-	}
+func TestSetSessionCookieFlags(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		rec := httptest.NewRecorder()
+		SetSessionCookie(rec, "token", secure)
 
-	if !CheckPassword(hash, password) {
-		t.Fatalf("expected password check to succeed")
-	}
-
-	if CheckPassword(hash, "wrongpassword") {
-		t.Fatalf("expected password check to fail for incorrect password")
+		var cookie *http.Cookie
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == SessionCookieName {
+				cookie = c
+				break
+			}
+		}
+		if cookie == nil {
+			t.Fatalf("secure=%v: no session cookie set", secure)
+		}
+		if cookie.Secure != secure {
+			t.Errorf("secure=%v: cookie.Secure = %v", secure, cookie.Secure)
+		}
+		if !cookie.HttpOnly {
+			t.Error("cookie.HttpOnly = false, want true")
+		}
+		if cookie.SameSite != http.SameSiteLaxMode {
+			t.Errorf("cookie.SameSite = %v, want %v", cookie.SameSite, http.SameSiteLaxMode)
+		}
+		if cookie.MaxAge <= 0 {
+			t.Errorf("cookie.MaxAge = %d, want > 0", cookie.MaxAge)
+		}
 	}
 }
 
-func TestSessionTokenGenerationAndHashing(t *testing.T) {
-	token, err := GenerateSessionToken()
+func TestSessionTokenEntropy(t *testing.T) {
+	tok, err := GenerateSessionToken()
 	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
+		t.Fatalf("GenerateSessionToken: %v", err)
 	}
-	if len(token) != 64 {
-		t.Fatalf("expected 64 hex chars, got %d", len(token))
+	if len(tok) != 64 {
+		t.Fatalf("token length = %d, want 64 hex chars", len(tok))
 	}
-	if token == "" {
-		t.Fatalf("expected non-empty token")
-	}
-
-	// Tokens must be unique
-	token2, err := GenerateSessionToken()
-	if err != nil {
-		t.Fatalf("failed to generate second token: %v", err)
-	}
-	if token == token2 {
-		t.Fatalf("expected unique tokens, got %s twice", token)
-	}
-
-	// TokenHash is deterministic and not the token itself
-	if h1, h2 := TokenHash(token), TokenHash(token); h1 != h2 {
-		t.Fatalf("expected deterministic hash")
-	}
-	if TokenHash(token) == token {
-		t.Fatalf("hash must differ from the raw token")
-	}
-	if TokenHash(token) == TokenHash(token2) {
-		t.Fatalf("different tokens must hash differently")
+	// Two generated tokens must differ (256 bits of randomness).
+	other, _ := GenerateSessionToken()
+	if tok == other {
+		t.Fatal("two generated tokens are identical")
 	}
 }

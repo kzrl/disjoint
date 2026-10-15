@@ -1,11 +1,10 @@
 {{define "content"}}
 <div>
-  <nav class="breadcrumb is-small mb-4" aria-label="breadcrumbs">
+  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
       <li><a href="/">Home</a></li>
-      <li><span>{{.Thread.CategoryName}}</span></li>
       <li><a href="/boards/{{.Thread.BoardID}}">{{.Thread.BoardName}}</a></li>
-      <li class="is-current" aria-current="page"><span>{{.Thread.Title}}</span></li>
+      <li class="is-active" aria-current="page"><a>{{.Thread.Title}}</a></li>
     </ul>
   </nav>
 
@@ -15,7 +14,7 @@
         <div>
           <h1 class="title is-4 mb-1">{{.Thread.Title}}</h1>
           <div class="is-size-7 has-text-grey">
-            Started by <strong>{{authorAvatar .Thread.AuthorAvatar}}{{userLink .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
+            Started by <strong>{{authorAvatar .Thread.AuthorAvatar .Thread.AuthorUsername .Thread.AuthorAvatarNonce}}{{userLink .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
           </div>
         </div>
       </div>
@@ -33,50 +32,9 @@
     </div>
   </div>
 
-  <div id="posts-container" class="posts-container">
+  <div id="posts-container" class="posts-container" data-thread-id="{{.Thread.ID}}">
     {{range .Posts}}
-      <div class="post-card" id="post-{{.Post.ID}}">
-        <div class="post-sidebar">
-          <div class="post-author">{{authorAvatar .Post.AuthorAvatar}}{{userLink .Post.AuthorUsername}}</div>
-          <div class="post-date"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
-        </div>
-        <div class="post-content-area">
-          <div class="post-body">
-            {{renderMarkdown .Post.Body}}
-          </div>
-          {{if .Attachments}}
-            <div class="post-attachments">
-              <div class="attachment-title">Attachments ({{len .Attachments}})</div>
-              <div class="attachments-grid">
-                {{range .Attachments}}
-                  {{if isImage .MimeType}}
-                    <div class="attachment-image-card">
-                      <a href="/uploads/{{.StoragePath}}" target="_blank">
-                        <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
-                      </a>
-                    </div>
-                  {{else if isVideo .MimeType}}
-                    <div class="attachment-video-card">
-                      <video controls preload="metadata">
-                        <source src="/uploads/{{.StoragePath}}" type="{{.MimeType}}">
-                        Your browser does not support the video tag.
-                      </video>
-                    </div>
-                  {{else}}
-                    <a href="/uploads/{{.StoragePath}}" class="attachment-file-card" download="{{.Filename}}">
-                      <span class="file-icon">&#x1F4CE;</span>
-                      <div class="file-info">
-                        <div class="file-name">{{.Filename}}</div>
-                        <div class="file-meta">{{formatFileSize .FileSize}}</div>
-                      </div>
-                    </a>
-                  {{end}}
-                {{end}}
-              </div>
-            </div>
-          {{end}}
-        </div>
-      </div>
+      {{template "post_card" .}}
     {{end}}
   </div>
 
@@ -109,5 +67,69 @@
       <button type="submit" class="button is-primary">Post Reply</button>
     </form>
   </div>
+
+  <!-- Quote insertion: one delegated listener on #posts-container so it also
+       works on post cards appended by HTMX. If a CSP with script-src is ever
+       added, move this to a static JS file (see tasks/plan-quotes-mentions.md).
+       The blockquote string built here is pinned by
+       TestQuoteBlockquoteFormat in internal/markdown. -->
+  <script>
+    (function () {
+      var container = document.getElementById('posts-container');
+      var textarea = document.getElementById('reply-body');
+      if (!container || !textarea) return;
+      var threadID = container.getAttribute('data-thread-id');
+
+      // Soft cap on quoted post text (decision Q3). The attribution and
+      // "view original" permalink lines are fixed overhead, always kept.
+      var MAX_QUOTE_CHARS = 500;
+
+      container.addEventListener('click', function (event) {
+        var btn = event.target.closest ? event.target.closest('.quote-btn') : null;
+        if (!btn) return;
+        var card = btn.closest('.post-card');
+        if (!card) return;
+
+        var authorEl = card.querySelector('.post-author');
+        var author = authorEl ? authorEl.textContent.trim() : 'unknown';
+        var postID = card.id.replace(/^post-/, '');
+
+        // Rendered body text. innerText (not textContent) turns block
+        // boundaries and <br> into newlines; attachments live outside
+        // .content, so they are excluded by construction.
+        var content = card.querySelector('.content');
+        var lines = (content ? content.innerText : '')
+          .split('\n')
+          .map(function (l) { return l.trim(); });
+        while (lines.length && lines[0] === '') lines.shift();
+        while (lines.length && lines[lines.length - 1] === '') lines.pop();
+        if (lines.length === 0) lines = ['']; // keep the quote one blockquote
+
+        // Apply the soft cap, then re-split for line prefixing. Cutting
+        // mid-line leaves a partial last line; cutting on a line boundary
+        // leaves the ellipsis on the previous line — both render fine.
+        var text = lines.join('\n');
+        if (text.length > MAX_QUOTE_CHARS) {
+          text = text.slice(0, MAX_QUOTE_CHARS).replace(/\s+$/, '') + '\u2026';
+        }
+        lines = text.split('\n');
+
+        // Every physical line is > -prefixed (blank lines as bare >) so the
+        // whole quote is one blockquote after rendering.
+        var quote = '> **' + author + ' wrote:**\n' +
+          lines.map(function (l) { return l === '' ? '>' : '> ' + l; }).join('\n') +
+          '\n>\n' +
+          '> \u2014 [view original](/threads/' + threadID + '#post-' + postID + ')';
+
+        // Append after any existing reply text; never clobber it.
+        var existing = textarea.value;
+        var sep = existing === '' ? '' : (existing.slice(-2) === '\n\n' ? '' : existing.slice(-1) === '\n' ? '\n' : '\n\n');
+        textarea.value = existing + sep + quote;
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    })();
+  </script>
 </div>
 {{end}}

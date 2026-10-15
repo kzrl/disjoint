@@ -9,26 +9,47 @@
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <div class="container header-inner">
-      <a href="/" class="logo">disjoint<span>_</span></a>
-      <div class="nav-actions">
+  <!-- Bulma navbar component: markup per ~/src/bulma/docs/documentation/components/navbar.html -->
+  <nav class="navbar has-shadow" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+      <a class="navbar-item logo" href="/">disjoint<span>_</span></a>
+
+      <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </a>
+    </div>
+
+    <div id="navMenu" class="navbar-menu">
+      <div class="navbar-start">
+        {{if .CurrentUser}}{{if .CurrentUser.IsAdmin}}
+          <a href="/boards/new" class="navbar-item">+ New Board</a>
+          <a href="/invites" class="navbar-item">Invites</a>
+          <a href="/admin/users" class="navbar-item">Users</a>
+        {{end}}{{end}}
+      </div>
+
+      <div class="navbar-end">
         {{if .CurrentUser}}
-          <span class="user-badge">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-            <strong>{{.CurrentUser.Username}}</strong>
-          </span>
-          <a href="/boards/new" class="button is-light is-small">+ New Board</a>
-          {{if .CurrentUser.IsAdmin}}<a href="/invites" class="button is-light is-small">Invites</a><a href="/admin/users" class="button is-light is-small">Users</a>{{end}}
-          <form method="POST" action="/logout">
-            <button type="submit" class="button is-light is-small">Sign Out</button>
-          </form>
+          <div class="navbar-item">
+            <span class="tag">
+              <svg class="mr-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              {{.CurrentUser.Username}}
+            </span>
+          </div>
+          <div class="navbar-item">
+            <form method="POST" action="/logout">
+              <button type="submit" class="button is-light is-small">Sign Out</button>
+            </form>
+          </div>
         {{else}}
-          <a href="/login" class="button is-light is-small">Sign In</a>
+          <a href="/login" class="navbar-item">Sign In</a>
         {{end}}
       </div>
     </div>
-  </header>
+  </nav>
 
   <main class="container">
     {{if .FlashError}}
@@ -46,5 +67,23 @@
       Disjoint
     </div>
   </footer>
+
+  <script>
+    // Bulma ships without JS. This is the vanilla toggle from the navbar docs
+    // (docs/components/navbar.html): flip is-active on the burger and the
+    // navbar-menu it targets, keeping aria-expanded in sync.
+    document.addEventListener('DOMContentLoaded', () => {
+      const $navbarBurgers = Array.prototype.slice.call(document.querySelectorAll('.navbar-burger'), 0);
+      $navbarBurgers.forEach((el) => {
+        el.addEventListener('click', () => {
+          const target = el.dataset.target;
+          const $target = document.getElementById(target);
+          el.classList.toggle('is-active');
+          $target.classList.toggle('is-active');
+          el.setAttribute('aria-expanded', el.classList.contains('is-active'));
+        });
+      });
+    });
+  </script>
 </body>
 </html>

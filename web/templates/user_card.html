@@ -1,9 +1,9 @@
 {{define "content"}}
 <div class="container is-max-w">
-  <nav class="breadcrumb is-small mb-4" aria-label="breadcrumbs">
+  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
       <li><a href="/">Home</a></li>
-      <li class="is-current" aria-current="page"><span>User Card</span></li>
+      <li class="is-active" aria-current="page"><a>{{.CardUser.Username}}</a></li>
     </ul>
   </nav>
 
@@ -11,6 +11,10 @@
     {{if .CardUser.AvatarPath.Valid}}
       <div class="mb-4">
         <img class="avatar avatar-lg" src="/uploads/{{.CardUser.AvatarPath.String}}" alt="Avatar of {{.CardUser.Username}}">
+      </div>
+    {{else}}
+      <div class="mb-4">
+        <img class="avatar avatar-lg" src="/avatars/{{.CardUser.Username}}?v={{.CardUser.AvatarNonce}}" alt="Avatar of {{.CardUser.Username}}">
       </div>
     {{end}}
 
@@ -34,7 +38,7 @@
     </div>
 
     {{if .CardUser.Bio.Valid}}
-      <div class="post-body mb-5">
+      <div class="content is-small mb-5">
         {{renderMarkdown .CardUser.Bio.String}}
       </div>
     {{end}}
@@ -59,6 +63,17 @@
             <label class="checkbox is-size-7" for="remove_avatar">
               <input type="checkbox" id="remove_avatar" name="remove_avatar" value="on">
               Remove current avatar
+            </label>
+          </div>
+          {{else}}
+          <div class="control mt-2 has-text-grey is-size-7">
+            Your default avatar:
+            <img class="avatar avatar-sm" style="vertical-align: middle" src="/avatars/{{.CardUser.Username}}?v={{.CardUser.AvatarNonce}}" alt="Default avatar for {{.CardUser.Username}}">
+          </div>
+          <div class="control mt-2">
+            <label class="checkbox is-size-7" for="shuffle_avatar">
+              <input type="checkbox" id="shuffle_avatar" name="shuffle_avatar" value="on">
+              Shuffle my default avatar
             </label>
           </div>
           {{end}}

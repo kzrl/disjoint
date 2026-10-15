@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,10 +18,24 @@ import (
 // /users/{name} URLs are unambiguous (legacy users keep whatever they have).
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9]{3,32}$`)
 
+// secureCookie reports whether session cookies should carry the Secure
+// flag. COOKIE_SECURE forces the decision ("1"/"true" on, "0"/"false" off)
+// for deployments behind a TLS-terminating proxy where r.TLS is nil;
+// otherwise TLS on the current request is detected automatically.
+func secureCookie(r *http.Request) bool {
+	switch strings.ToLower(os.Getenv("COOKIE_SECURE")) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return r.TLS != nil
+}
+
 // startSession creates a server-side session row for the user and sets the
 // cookie holding the (unhashed) token. The table stores only the token's
 // SHA-256 hash.
-func (app *App) startSession(ctx context.Context, w http.ResponseWriter, userID int64) error {
+func (app *App) startSession(ctx context.Context, w http.ResponseWriter, r *http.Request, userID int64) error {
 	token, err := auth.GenerateSessionToken()
 	if err != nil {
 		return err
@@ -32,7 +47,7 @@ func (app *App) startSession(ctx context.Context, w http.ResponseWriter, userID 
 	}); err != nil {
 		return err
 	}
-	auth.SetSessionCookie(w, token)
+	auth.SetSessionCookie(w, token, secureCookie(r))
 	return nil
 }
 
@@ -90,7 +105,7 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 	_ = app.queries.SetUserAdmin(ctx, user.ID)
 
 	app.middleware.RefreshUserCount(ctx)
-	if err := app.startSession(ctx, w, user.ID); err != nil {
+	if err := app.startSession(ctx, w, r, user.ID); err != nil {
 		setFlash(w, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
@@ -129,7 +144,7 @@ func (app *App) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := app.startSession(ctx, w, user.ID); err != nil {
+	if err := app.startSession(ctx, w, r, user.ID); err != nil {
 		setFlash(w, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
@@ -224,7 +239,7 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := app.startSession(ctx, w, user.ID); err != nil {
+	if err := app.startSession(ctx, w, r, user.ID); err != nil {
 		_ = app.queries.DeleteUser(ctx, user.ID)
 		setFlash(w, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
@@ -242,6 +257,6 @@ func (app *App) LogoutSubmit(w http.ResponseWriter, r *http.Request) {
 		// already-expired token is harmless.
 		_ = app.queries.DeleteSession(r.Context(), auth.TokenHash(token))
 	}
-	auth.ClearSessionCookie(w)
+	auth.ClearSessionCookie(w, secureCookie(r))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

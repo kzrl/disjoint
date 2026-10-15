@@ -1,28 +1,29 @@
 {{define "content"}}
 <div>
-  <nav class="breadcrumb is-small mb-4" aria-label="breadcrumbs">
+  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
       <li><a href="/">Home</a></li>
-      <li class="is-current" aria-current="page"><span>Board Index</span></li>
+      <li class="is-active" aria-current="page"><a>Board Index</a></li>
     </ul>
   </nav>
+
 
   {{if .Online}}
     <div class="on-air">
       <span class="on-air-dot" aria-hidden="true"></span>
-      <span class="on-air-label">On the air:</span>
+      <span class="is-uppercase is-size-7 has-text-grey">On the air:</span>
       {{range .Online}}
-        <span class="on-air-user">{{userLink .Username}} <span class="on-air-since">{{formatRelative .LastSeenAt}}</span></span>
+        <span class="on-air-user">{{userLink .Username}} <span class="is-size-7 has-text-grey">{{formatRelative .LastSeenAt}}</span></span>
       {{end}}
     </div>
   {{else}}
     <div class="on-air on-air-empty">No one else is on the air</div>
   {{end}}
 
-  {{range .Categories}}
+  {{if .Boards}}
     <section class="card forum-section mb-5">
       <div class="card-header">
-        <p class="card-header-title">{{.Category.Name}}</p>
+        <p class="card-header-title">Boards</p>
       </div>
       <div>
         {{range .Boards}}
@@ -39,8 +40,8 @@
               {{end}}
             </div>
             <div class="board-stats">
-              <div><span class="stats-number">{{.ThreadCount}}</span> threads</div>
-              <div><span class="stats-number">{{.PostCount}}</span> posts</div>
+              <div><strong>{{.ThreadCount}}</strong> threads</div>
+              <div><strong>{{.PostCount}}</strong> posts</div>
             </div>
             <div class="board-latest">
               {{if .LatestThread}}
@@ -51,15 +52,15 @@
               {{end}}
             </div>
           </div>
-        {{else}}
-          <div class="py-4 has-text-centered has-text-grey">No boards in this category yet.</div>
         {{end}}
       </div>
     </section>
   {{else}}
     <div class="card forum-section py-6 has-text-centered">
-      <p class="has-text-grey mb-4">No categories configured yet.</p>
+      <p class="has-text-grey mb-4">No boards yet.</p>
+      {{if .CurrentUser}}{{if .CurrentUser.IsAdmin}}
       <a href="/boards/new" class="button is-primary">+ Create First Board</a>
+      {{end}}{{end}}
     </div>
   {{end}}
 
@@ -74,7 +75,7 @@
             {{userLink .AuthorUsername}} posted in
             <a href="/boards/{{.BoardID}}">{{.BoardName}}</a> &bull;
             <a href="/threads/{{.ThreadID}}">{{.ThreadTitle}}</a>
-            <span class="activity-time">&middot; {{formatRelative .CreatedAt.Time}}</span>
+            <span class="is-size-7 has-text-grey">&middot; {{formatRelative .CreatedAt.Time}}</span>
           </li>
         {{end}}
       </ul>

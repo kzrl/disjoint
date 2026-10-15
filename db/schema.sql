@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     bio TEXT,
-    avatar_path TEXT
+    avatar_path TEXT,
+    avatar_nonce INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS user_presence (
@@ -28,19 +29,11 @@ CREATE TABLE IF NOT EXISTS invites (
 
 CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
 
-CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
 CREATE TABLE IF NOT EXISTS boards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
-    position INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+    position INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS threads (

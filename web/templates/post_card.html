@@ -1,0 +1,47 @@
+{{define "post_card"}}
+<div class="post-card" id="post-{{.Post.ID}}">
+  <div class="post-sidebar">
+    <div class="post-author">{{authorAvatar .Post.AuthorAvatar .Post.AuthorUsername .Post.AuthorAvatarNonce}}{{userLink .Post.AuthorUsername}}</div>
+    <div class="is-size-7 has-text-grey"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
+  </div>
+  <div class="post-content-area">
+    <div class="content is-small">
+      {{renderMarkdown .Post.Body}}
+    </div>
+    {{if .Attachments}}
+      <div class="post-attachments">
+        <div class="label is-size-7 is-uppercase has-text-grey">Attachments ({{len .Attachments}})</div>
+        <div class="attachments-grid">
+          {{range .Attachments}}
+            {{if isImage .MimeType}}
+              <div class="attachment-image-card">
+                <a href="/uploads/{{.StoragePath}}" target="_blank">
+                  <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
+                </a>
+              </div>
+            {{else if isVideo .MimeType}}
+              <div class="attachment-video-card">
+                <video controls preload="metadata">
+                  <source src="/uploads/{{.StoragePath}}" type="{{.MimeType}}">
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            {{else}}
+              <a href="/uploads/{{.StoragePath}}" class="attachment-file-card" download="{{.Filename}}">
+                <span class="file-icon">&#x1F4CE;</span>
+                <div class="file-info">
+                  <div class="file-name">{{.Filename}}</div>
+                  <div class="is-size-7 has-text-grey">{{formatFileSize .FileSize}}</div>
+                </div>
+              </a>
+            {{end}}
+          {{end}}
+        </div>
+      </div>
+    {{end}}
+    <div class="has-text-right mt-4">
+      <button type="button" class="button is-small is-light quote-btn">Quote</button>
+    </div>
+  </div>
+</div>
+{{end}}

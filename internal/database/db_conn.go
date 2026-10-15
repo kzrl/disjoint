@@ -46,45 +46,24 @@ func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 
 	queries := New(conn)
 
-	// Seed default categories and boards if none exist
+	// Seed default boards if none exist
 	ctx := context.Background()
-	cats, err := queries.ListCategories(ctx)
-	if err == nil && len(cats) == 0 {
-		c1, err := queries.CreateCategory(ctx, CreateCategoryParams{
-			Name:     "General",
-			Position: 0,
-		})
-		if err == nil {
-			_, _ = queries.CreateBoard(ctx, CreateBoardParams{
-				CategoryID:  c1.ID,
-				Name:        "General Discussion",
-				Description: sql.NullString{String: "A cozy spot for all kinds of conversations.", Valid: true},
-				Position:    0,
-			})
-			_, _ = queries.CreateBoard(ctx, CreateBoardParams{
-				CategoryID:  c1.ID,
-				Name:        "Introductions & Lounge",
-				Description: sql.NullString{String: "Say hello and kick back with friends.", Valid: true},
-				Position:    1,
-			})
+	boards, err := queries.ListBoards(ctx)
+	if err == nil && len(boards) == 0 {
+		seed := []struct {
+			name, desc string
+			position   int64
+		}{
+			{"General Discussion", "A cozy spot for all kinds of conversations.", 0},
+			{"Introductions & Lounge", "Say hello and kick back with friends.", 1},
+			{"Photos & Videos", "Share pictures, clips, and favorite moments.", 2},
+			{"Interesting Finds", "Cool links, articles, and recommendations.", 3},
 		}
-
-		c2, err := queries.CreateCategory(ctx, CreateCategoryParams{
-			Name:     "Media & Links",
-			Position: 1,
-		})
-		if err == nil {
+		for _, b := range seed {
 			_, _ = queries.CreateBoard(ctx, CreateBoardParams{
-				CategoryID:  c2.ID,
-				Name:        "Photos & Videos",
-				Description: sql.NullString{String: "Share pictures, clips, and favorite moments.", Valid: true},
-				Position:    0,
-			})
-			_, _ = queries.CreateBoard(ctx, CreateBoardParams{
-				CategoryID:  c2.ID,
-				Name:        "Interesting Finds",
-				Description: sql.NullString{String: "Cool links, articles, and recommendations.", Valid: true},
-				Position:    1,
+				Name:        b.name,
+				Description: sql.NullString{String: b.desc, Valid: true},
+				Position:    b.position,
 			})
 		}
 	}

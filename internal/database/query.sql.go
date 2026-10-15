@@ -95,58 +95,29 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 
 const createBoard = `-- name: CreateBoard :one
 INSERT INTO boards (
-    category_id,
     name,
     description,
     position
 ) VALUES (
-    ?, ?, ?, ?
-) RETURNING id, category_id, name, description, position
+    ?, ?, ?
+) RETURNING id, name, description, position
 `
 
 type CreateBoardParams struct {
-	CategoryID  int64
 	Name        string
 	Description sql.NullString
 	Position    int64
 }
 
 func (q *Queries) CreateBoard(ctx context.Context, arg CreateBoardParams) (Board, error) {
-	row := q.db.QueryRowContext(ctx, createBoard,
-		arg.CategoryID,
-		arg.Name,
-		arg.Description,
-		arg.Position,
-	)
+	row := q.db.QueryRowContext(ctx, createBoard, arg.Name, arg.Description, arg.Position)
 	var i Board
 	err := row.Scan(
 		&i.ID,
-		&i.CategoryID,
 		&i.Name,
 		&i.Description,
 		&i.Position,
 	)
-	return i, err
-}
-
-const createCategory = `-- name: CreateCategory :one
-INSERT INTO categories (
-    name,
-    position
-) VALUES (
-    ?, ?
-) RETURNING id, name, position
-`
-
-type CreateCategoryParams struct {
-	Name     string
-	Position int64
-}
-
-func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error) {
-	row := q.db.QueryRowContext(ctx, createCategory, arg.Name, arg.Position)
-	var i Category
-	err := row.Scan(&i.ID, &i.Name, &i.Position)
 	return i, err
 }
 
@@ -261,7 +232,7 @@ INSERT INTO users (
     password_hash
 ) VALUES (
     ?, ?
-) RETURNING id, username, password_hash, is_admin, created_at, bio, avatar_path
+) RETURNING id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce
 `
 
 type CreateUserParams struct {
@@ -280,6 +251,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
+		&i.AvatarNonce,
 	)
 	return i, err
 }
@@ -378,7 +350,7 @@ func (q *Queries) GetAttachmentsForExpiredThreads(ctx context.Context) ([]GetAtt
 }
 
 const getBoardByID = `-- name: GetBoardByID :one
-SELECT id, category_id, name, description, position FROM boards
+SELECT id, name, description, position FROM boards
 WHERE id = ? LIMIT 1
 `
 
@@ -387,23 +359,10 @@ func (q *Queries) GetBoardByID(ctx context.Context, id int64) (Board, error) {
 	var i Board
 	err := row.Scan(
 		&i.ID,
-		&i.CategoryID,
 		&i.Name,
 		&i.Description,
 		&i.Position,
 	)
-	return i, err
-}
-
-const getCategoryByID = `-- name: GetCategoryByID :one
-SELECT id, name, position FROM categories
-WHERE id = ? LIMIT 1
-`
-
-func (q *Queries) GetCategoryByID(ctx context.Context, id int64) (Category, error) {
-	row := q.db.QueryRowContext(ctx, getCategoryByID, id)
-	var i Category
-	err := row.Scan(&i.ID, &i.Name, &i.Position)
 	return i, err
 }
 
@@ -433,20 +392,22 @@ SELECT
     p.body,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
-    COALESCE(u.avatar_path, '') AS author_avatar
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM posts p
 LEFT JOIN users u ON p.user_id = u.id
 WHERE p.id = ? LIMIT 1
 `
 
 type GetPostByIDRow struct {
-	ID             int64
-	ThreadID       int64
-	UserID         int64
-	Body           string
-	CreatedAt      sql.NullTime
-	AuthorUsername string
-	AuthorAvatar   string
+	ID                int64
+	ThreadID          int64
+	UserID            int64
+	Body              string
+	CreatedAt         sql.NullTime
+	AuthorUsername    string
+	AuthorAvatar      string
+	AuthorAvatarNonce int64
 }
 
 func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, error) {
@@ -460,6 +421,7 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 		&i.CreatedAt,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
+		&i.AuthorAvatarNonce,
 	)
 	return i, err
 }
@@ -491,30 +453,27 @@ SELECT
     t.expires_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
-    b.name AS board_name,
-    b.category_id,
-    c.name AS category_name
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce,
+    b.name AS board_name
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 JOIN boards b ON t.board_id = b.id
-JOIN categories c ON b.category_id = c.id
 WHERE t.id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LIMIT 1
 `
 
 type GetThreadByIDRow struct {
-	ID             int64
-	BoardID        int64
-	UserID         int64
-	Title          string
-	CreatedAt      sql.NullTime
-	UpdatedAt      sql.NullTime
-	ExpiresAt      sql.NullTime
-	AuthorUsername string
-	AuthorAvatar   string
-	BoardName      string
-	CategoryID     int64
-	CategoryName   string
+	ID                int64
+	BoardID           int64
+	UserID            int64
+	Title             string
+	CreatedAt         sql.NullTime
+	UpdatedAt         sql.NullTime
+	ExpiresAt         sql.NullTime
+	AuthorUsername    string
+	AuthorAvatar      string
+	AuthorAvatarNonce int64
+	BoardName         string
 }
 
 func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow, error) {
@@ -530,9 +489,8 @@ func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow
 		&i.ExpiresAt,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
+		&i.AuthorAvatarNonce,
 		&i.BoardName,
-		&i.CategoryID,
-		&i.CategoryName,
 	)
 	return i, err
 }
@@ -556,7 +514,7 @@ func (q *Queries) GetUserBoardRead(ctx context.Context, arg GetUserBoardReadPara
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path FROM users
+SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE id = ? LIMIT 1
 `
 
@@ -571,12 +529,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
+		&i.AvatarNonce,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path FROM users
+SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE username = ? LIMIT 1
 `
 
@@ -591,6 +550,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
+		&i.AvatarNonce,
 	)
 	return i, err
 }
@@ -646,7 +606,7 @@ func (q *Queries) ListAttachmentsByThreadID(ctx context.Context, threadID int64)
 }
 
 const listBoards = `-- name: ListBoards :many
-SELECT id, category_id, name, description, position FROM boards
+SELECT id, name, description, position FROM boards
 ORDER BY position ASC, id ASC
 `
 
@@ -661,7 +621,6 @@ func (q *Queries) ListBoards(ctx context.Context) ([]Board, error) {
 		var i Board
 		if err := rows.Scan(
 			&i.ID,
-			&i.CategoryID,
 			&i.Name,
 			&i.Description,
 			&i.Position,
@@ -682,7 +641,6 @@ func (q *Queries) ListBoards(ctx context.Context) ([]Board, error) {
 const listBoardsWithDetails = `-- name: ListBoardsWithDetails :many
 SELECT 
     b.id,
-    b.category_id,
     b.name,
     b.description,
     b.position,
@@ -698,7 +656,6 @@ ORDER BY b.position ASC, b.id ASC
 
 type ListBoardsWithDetailsRow struct {
 	ID              int64
-	CategoryID      int64
 	Name            string
 	Description     sql.NullString
 	Position        int64
@@ -718,7 +675,6 @@ func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDe
 		var i ListBoardsWithDetailsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.CategoryID,
 			&i.Name,
 			&i.Description,
 			&i.Position,
@@ -726,34 +682,6 @@ func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDe
 			&i.PostCount,
 			&i.LatestUpdatedAt,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCategories = `-- name: ListCategories :many
-SELECT id, name, position FROM categories
-ORDER BY position ASC, id ASC
-`
-
-func (q *Queries) ListCategories(ctx context.Context) ([]Category, error) {
-	rows, err := q.db.QueryContext(ctx, listCategories)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Category
-	for rows.Next() {
-		var i Category
-		if err := rows.Scan(&i.ID, &i.Name, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -938,7 +866,8 @@ SELECT
     p.body,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
-    COALESCE(u.avatar_path, '') AS author_avatar
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM posts p
 LEFT JOIN users u ON p.user_id = u.id
 WHERE p.thread_id = ?
@@ -946,13 +875,14 @@ ORDER BY p.created_at ASC, p.id ASC
 `
 
 type ListPostsByThreadRow struct {
-	ID             int64
-	ThreadID       int64
-	UserID         int64
-	Body           string
-	CreatedAt      sql.NullTime
-	AuthorUsername string
-	AuthorAvatar   string
+	ID                int64
+	ThreadID          int64
+	UserID            int64
+	Body              string
+	CreatedAt         sql.NullTime
+	AuthorUsername    string
+	AuthorAvatar      string
+	AuthorAvatarNonce int64
 }
 
 func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]ListPostsByThreadRow, error) {
@@ -972,6 +902,7 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 			&i.CreatedAt,
 			&i.AuthorUsername,
 			&i.AuthorAvatar,
+			&i.AuthorAvatarNonce,
 		); err != nil {
 			return nil, err
 		}
@@ -1229,6 +1160,20 @@ type SetUserAvatarParams struct {
 
 func (q *Queries) SetUserAvatar(ctx context.Context, arg SetUserAvatarParams) error {
 	_, err := q.db.ExecContext(ctx, setUserAvatar, arg.AvatarPath, arg.ID)
+	return err
+}
+
+const setUserAvatarNonce = `-- name: SetUserAvatarNonce :exec
+UPDATE users SET avatar_nonce = ? WHERE id = ?
+`
+
+type SetUserAvatarNonceParams struct {
+	AvatarNonce int64
+	ID          int64
+}
+
+func (q *Queries) SetUserAvatarNonce(ctx context.Context, arg SetUserAvatarNonceParams) error {
+	_, err := q.db.ExecContext(ctx, setUserAvatarNonce, arg.AvatarNonce, arg.ID)
 	return err
 }
 

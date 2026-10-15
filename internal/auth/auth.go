@@ -60,25 +60,29 @@ func GetSessionTokenFromRequest(r *http.Request) string {
 	return cookie.Value
 }
 
-// SetSessionCookie sets the session cookie on the response.
-func SetSessionCookie(w http.ResponseWriter, token string) {
+// SetSessionCookie sets the session cookie on the response. secure marks
+// it HTTPS-only (correct when TLS is terminated at this process or a proxy
+// in front of it).
+func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
 		MaxAge:   int(SessionDuration.Seconds()),
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
 // ClearSessionCookie expires the session cookie on the response.
-func ClearSessionCookie(w http.ResponseWriter) {
+func ClearSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})

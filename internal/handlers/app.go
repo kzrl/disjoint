@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,16 +26,19 @@ type App struct {
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
 	middleware      *middleware.Middleware
+	// authLimiter bounds brute-force attempts at login/register per IP.
+	authLimiter *middleware.RateLimiter
 }
 
 // NewApp instantiates an App and compiles HTML templates.
 func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, error) {
 	app := &App{
-		db:         db,
-		queries:    queries,
-		uploadDir:  uploadDir,
-		templates:  make(map[string]*template.Template),
-		middleware: middleware.New(queries),
+		db:          db,
+		queries:     queries,
+		uploadDir:   uploadDir,
+		templates:   make(map[string]*template.Template),
+		middleware:  middleware.New(queries),
+		authLimiter: middleware.NewRateLimiter(10, 15*time.Minute),
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")
@@ -114,12 +118,19 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 			return template.HTML(`<a href="/users/` + template.HTMLEscapeString(url.PathEscape(name)) + `">` + template.HTMLEscapeString(name) + `</a>`)
 		},
 		// authorAvatar renders a small round avatar image before an author
-		// name, or nothing when the user has no avatar.
-		"authorAvatar": func(path string) template.HTML {
-			if path == "" {
+		// name: the uploaded avatar when the user has one, otherwise the
+		// deterministic pixel-art default. The ?v= parameter carries the
+		// user's avatar nonce so a shuffled avatar busts the browser's 1-day
+		// cache of the /avatars URL. An empty username renders nothing.
+		"authorAvatar": func(path, username string, nonce int64) template.HTML {
+			if username == "" {
 				return ""
 			}
-			return template.HTML(`<img class="avatar avatar-sm" src="/uploads/` + template.HTMLEscapeString(url.PathEscape(path)) + `" alt="" loading="lazy">`)
+			src := "/avatars/" + url.PathEscape(username) + "?v=" + strconv.FormatInt(nonce, 10)
+			if path != "" {
+				src = "/uploads/" + url.PathEscape(path)
+			}
+			return template.HTML(`<img class="avatar avatar-sm" src="` + template.HTMLEscapeString(src) + `" alt="" loading="lazy">`)
 		},
 	}
 
@@ -140,7 +151,9 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	}
 
 	for _, page := range pages {
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/"+page)
+		// post_card.html is the shared post-card {{define}} used by thread.html
+		// (and post_partial.html); parsed into every set so the define resolves.
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}
@@ -148,7 +161,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	}
 
 	// Parse post partial for HTMX reply responses
-	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/post_partial.html")
+	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/post_card.html", "templates/post_partial.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse post_partial template: %w", err)
 	}
@@ -193,12 +206,14 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 }
 
 // setFlash sets a session-lifetime flash cookie; render() clears it on the
-// next page load, and browsers drop it on close.
+// next page load, and browsers drop it on close. SameSite=Lax keeps
+// cross-origin pages from planting flash messages on a victim's next load.
 func setFlash(w http.ResponseWriter, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 		HttpOnly: true,
 	})
 }
@@ -212,14 +227,18 @@ func (app *App) Routes() http.Handler {
 
 	// Uploaded media files (/uploads/{filename})
 	mux.HandleFunc("GET /uploads/{filename}", app.ServeUpload)
+	mux.HandleFunc("GET /avatars/{name}", app.ServeAvatar)
 
-	// Auth & First-Run Setup
+	// Auth & First-Run Setup. Login and register are rate-limited per IP
+	// to bound credential brute-forcing; bcrypt already makes each guess
+	// expensive.
+	authLimited := app.authLimiter.Handler
 	mux.HandleFunc("GET /setup", app.SetupPage)
 	mux.HandleFunc("POST /setup", app.SetupSubmit)
 	mux.HandleFunc("GET /login", app.LoginPage)
-	mux.HandleFunc("POST /login", app.LoginSubmit)
+	mux.Handle("POST /login", authLimited(http.HandlerFunc(app.LoginSubmit)))
 	mux.HandleFunc("GET /register", app.RegisterPage)
-	mux.HandleFunc("POST /register", app.RegisterSubmit)
+	mux.Handle("POST /register", authLimited(http.HandlerFunc(app.RegisterSubmit)))
 	mux.HandleFunc("POST /logout", app.LogoutSubmit)
 
 	// Admin Invite Management
@@ -232,11 +251,10 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
 
-	// Forum boards & categories
+	// Forum boards
 	mux.HandleFunc("GET /", app.IndexPage)
 	mux.HandleFunc("GET /boards/new", app.NewBoardPage)
 	mux.HandleFunc("POST /boards/new", app.CreateBoardSubmit)
-	mux.HandleFunc("POST /categories/new", app.CreateCategorySubmit)
 	mux.HandleFunc("GET /boards/{id}", app.BoardPage)
 
 	// Threads & posts
@@ -249,5 +267,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /users/{name}", app.UserCardPage)
 	mux.HandleFunc("POST /users/me/profile", app.UpdateProfileSubmit)
 
-	return app.middleware.FirstRunAndAuth(mux)
+	// Security headers go outermost so they are present on every response,
+	// including 302s, 404s, and static files.
+	return middleware.SecurityHeaders(app.middleware.FirstRunAndAuth(mux))
 }

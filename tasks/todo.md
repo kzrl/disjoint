@@ -109,3 +109,102 @@ Plan: [tasks/plan.md](plan.md) (section "Implementation Plan: BBS Community Trio
   - [x] `go test ./...` passes
   - [x] Manual: app booted against live `disjoint.db` (v3→v4); homepage shows on-air strip (kzrl, linked, "just now"), Recent activity with linked attributed author + "Anonymous" for unlinked posts; user card shows Admin badge, joined, last seen, attributed post count (1 of 3 — anon excluded), edit-profile form
   - [x] Ready for review
+
+---
+
+# Task List: Quoting in Replies + @user Mentions
+
+Plan: [tasks/plan-quotes-mentions.md](plan-quotes-mentions.md)
+
+Approach: mentions = stateless goldmark inline parser (link-all valid tokens, code-aware); quoting = client-side Markdown blockquote insertion (no migration). See Open Questions Q1–Q3 in the plan.
+
+### Phase 1 — @user mentions
+
+- [x] Task 1: goldmark mention inline parser + renderer + unit tests  (DONE)
+  - New `internal/markdown/mention.go`: goldmark `InlineParser` (trigger `@`) + `Mention` node (unique `ast.NewNodeKind`) + `renderer.NodeRenderer`; registered via a `mentionExt` extension added to the shared `md` instance in `markdown.go`
+  - Left boundary implemented as `block.PrecendingCharacter()` not a word rune (letter/digit/`_`) — excludes `user@gmail.com`, `my_bot@host`, `a@kzrl`; allows line-head, after space/punct, and inside emphasis (`**@kzrl**` — first attempt with an allowlist of {start, space, `(`} wrongly rejected the `*` and was fixed)
+  - Extra guard: `pc.IsInLinkLabel()` → `[@kzrl](/x)` stays a plain link (no nested `<a>`)
+  - Render `<a class="mention" href="/users/{name}" data-mention="@{name}">@{name}</a>`; name is `[A-Za-z0-9]{3,32}` by construction so href is scheme/path/quote-free
+  - 31 unit tests green: basics (line head, mid-line, EOL, two-per-line, emphasis, paren, punctuation stop), rejected (email, underscore email, glued, code span, fence, escaped `\@`, len 2/33, `@---`), length boundaries 3/32, XSS (script/slash/quote/colon), block contexts (blockquote, heading, table cell), link-label guard, code-awareness (exactly 1 of 2)
+  - Side fix: `go mod tidy` corrected pre-existing `// indirect` markers on directly-imported deps (goldmark, goose, crypto, sqlite, uuid) — no version changes
+  - **Scope:** Medium (2 new files + 1-line edit) · **Deps:** none
+  - **Verify:** `go test ./internal/markdown/ -race` green; full suite green
+
+- [x] Task 2: `.mention` styling + integration verification  (DONE)
+  - `.mention` rule in `site.css`: tinted pill — `color: var(--bulma-primary)` on `background-color: color-mix(in srgb, var(--bulma-primary) 15%, transparent)` (hover: 25%), `border-radius: var(--bulma-radius-small)`, `padding: 0.05em 0.3em`. **BUG FIX (reported by user: white-on-white):** first attempt used `--bulma-primary-bold`/`--bulma-primary-light` — those ladder lightness steps live ONLY in Bulma's light base `:root` (verified: the dark theme block overrides zero ladder vars), so in the app's default dark theme the pill background resolved to lightness 91% (near-white). Now only `--bulma-primary` is used — its lightness IS overridden per theme (56% dark / 41% light) — plus a transparent color-mix tint; older browsers fall back to a tintless link. Do-not-repeat note is written into the CSS comment; selector is bare `.mention` (class only ever emitted by the markdown renderer) so it also works in bios/headings/table cells
+  - `make css` regenerated `web/static/disjoint.css` (verified `bulma.min.css` unchanged — BULMA_DIR checkout matches vendored copy); assets are `go:embed`-ed, so the rule goes live on the next app restart (the instance running on :8080 from 21:39 still carries the old bundle — not restarted)
+  - New `TestMentionRendering` in handlers_test.go, through real routes: thread body `@alice` (real) + `@nobody` (unknown) + `user@gmail.com` + `` `@bob` `` → thread page has exactly 2 mention anchors (alice, nobody; documents link-all), no mention for the e-mail, code span preserved; HTMX reply partial renders `@bob` mention; `/users/alice` target 200; `/users/nobody` 404
+  - Side fix: `gofmt -w internal/handlers/app.go` (pre-existing field-alignment drift from the authLimiter addition)
+  - **Scope:** Small-Medium (3 files) · **Deps:** Task 1
+  - **Verify:** full suite green with `-race`; route-level checks cover the manual items (link to card, 404, code/email not linked). Visual pill check in both themes is the one item still needing a restarted instance
+
+### Checkpoint: Mentions
+- [x] `go build ./...` + `go test ./...` green
+- [x] Manual: `@realuser` → card; `@nobody` → 404 link; `@x` in code span/fence and `user@gmail.com` NOT linked — fully subsumed by route-level assertions in `TestMentionRendering` (real user 200, unknown 404, e-mail/code span unlinked) plus `TestMentionRejected`/`TestMentionCodeAwareness` in the markdown package
+- [ ] Review with human before proceeding
+
+### Phase 2 — Quoting
+
+- [x] Task 3: Quote button on post cards  (DONE)
+  - `<button type="button" class="button is-small is-light quote-btn">Quote</button>` in a `has-text-right mt-4` row at the bottom of `.post-content-area` — pure Bulma classes, no new CSS
+  - `data-thread-id="{{.Thread.ID}}"` on `#posts-container`
+  - **Refactor beyond stated scope (justified):** the post-card markup was duplicated verbatim in `thread.html` + `post_partial.html`; extracted it to a shared `{{define "post_card"}}` in new `web/templates/post_card.html`, parsed into both template sets (app.go ParseFS ×2). Single source of truth so the card (and any future per-post UI) can't drift between the full page and HTMX partials. `post_partial.html` is now a one-line `{{template "post_card" .}}`
+  - Verification in `TestMentionRendering`: exactly 1 quote button on the thread page (1 post), exactly 1 in the HTMX partial, `data-thread-id` present on the container
+  - **Files:** `web/templates/post_card.html` (new), `web/templates/thread.html`, `web/templates/post_partial.html`, `internal/handlers/app.go` (2 ParseFS lines)
+  - **Verify:** full suite green with `-race`; templates parse; button present per card incl. partial
+
+- [x] Task 4: Quote-insertion JS + format regression test  (DONE)
+  - Inline `<script>` at the bottom of `thread.html` content: one delegated `click` listener on `#posts-container` (works on HTMX-appended cards); on `.quote-btn`: author from `.post-author` textContent, post ID from the card `id` (`post-{id}`), thread ID from the container's `data-thread-id`, body from `.content` **innerText** (layout-aware: block boundaries + `<br>` → newlines; attachments live outside `.content` so they're excluded by construction)
+  - Line handling: trim each line, drop leading/trailing blanks, empty body → single empty line (guards against a raw blank line splitting the blockquote); every line `> `-prefixed, blank lines as bare `>`; permalink line `> — [view original](/threads/{tid}#post-{pid})`
+  - Insertion: append after existing textarea content (never clobber), sep normalized to a blank line; focus + caret to end + smooth scroll-into-view. Comment notes: move to a static file if a CSP `script-src` is ever added
+  - Contract test `TestQuoteBlockquoteFormat` (new `internal/markdown/quote_test.go`), 4 cases pinned through `renderMarkdown`: two-line quote (plan example) → 1 blockquote with `<strong>…wrote:</strong>` + permalink anchor; multi-paragraph (bare `>` lines) → still 1 blockquote (first quoted line glues to attribution via hard-wrap `<br>` — assertion written to the actual shape); empty quote → 1 blockquote; quoted line starting `>` → outer+nested blockquotes, valid, permalink intact
+  - Extra verification: extracted the JS construction and ran it under `node` — output byte-identical to the Go test inputs for both shapes; `node --check` passes on the full script
+  - **Files:** `web/templates/thread.html` (script), `internal/markdown/quote_test.go` (new)
+  - **Verify:** full suite green with `-race`; JS↔Go format contract byte-verified. Browser-level manual items (click → submit HTMX/standard → anchor jump) are the quoting checkpoint
+
+- [x] Task 5: Quoting edge cases  (DONE)
+  - Soft cap in JS (decision Q3): `MAX_QUOTE_CHARS = 500` on the joined quoted text; over → `slice(0, 500)` + trailing-whitespace strip + `\u2026`, then re-split for `> ` prefixing. Attribution + permalink lines are fixed overhead, always kept. Cutting mid-line → partial last line with `…`; cutting on a line boundary → `…` on the previous line, no dangling empty line
+  - Attachment exclusion: by construction (JS reads only `.content`; `.post-attachments` is a sibling) — now pinned by a structural assertion in `TestThreadCreationAndHTMXReply`: the `.content` div closes before `.post-attachments` starts in the post card
+  - Multi-line/empty-line blockquote integrity: already covered by Task 4's `TestQuoteBlockquoteFormat` (bare `>` lines, one blockquote) and the empty-body guard
+  - Node-verified the cap logic: exactly 500 untouched; 501 → 500 chars + `…`; 300/300 two-line (601) → [300, 200] ending in `…`; every line of the capped quote still `>`-prefixed (stays one blockquote); `node --check` passes
+  - **Files:** `web/templates/thread.html` (JS cap), `internal/handlers/handlers_test.go` (structural assertion)
+  - **Verify:** full suite green with `-race`; cap logic node-verified. Browser-level manual item (quote a multi-paragraph + attachment post) is the quoting checkpoint
+
+### Checkpoint: Quoting
+- [x] `go build ./...` + `go test ./...` green
+- [ ] Manual: full quote flow on a live thread, HTMX + standard submit, dark + light themes — rendering side verified (format contract tests + JS↔Go byte-identical check + `node --check`); the literal button click in a browser is the one unperformed step (no browser in this environment; app instance on :8080 still runs the pre-feature build)
+- [ ] Review with human before proceeding
+
+### Phase 3 — Polish
+
+- [x] Task 6: Docs + final end-to-end verification  (DONE)
+  - `specs/disjoint.md` §D: expanded Markdown Support bullet (GFM, hard wraps, raw-HTML neutralized, bios share the pipeline); new **@User Mentions** bullet (token shape, left-boundary rule, stateless render/404-link-all, code/link-label/email exclusions, alnum-by-construction href safety); new **Quoting Posts** bullet (delegated script, exact blockquote shape, one-blockquote invariant, 500-char soft cap, attachment exclusion, no schema change, immutability ⇒ quotes can't go stale)
+  - `README.md` Features: Markdown bullet unchanged; added **@User Mentions** and **Quoting Posts** bullets
+  - Final pass, all green: `go build` + full suite `-race`; **fresh-DB boot** (temp DB: goose 1→8, `/` → 303 `/setup`, served CSS contains `.mention` + `color-mix` rule); **pre-existing-DB boot** (copy of live disjoint.db: "no migrations to run, current version: 8", `/` → 303 `/login`, `/login` 200, new CSS served); both themes' computed values verified (dark: primary 56% + 15% tint; light: 41% + 15% tint)
+  - **Files:** `specs/disjoint.md`, `README.md`
+  - **Verify:** suite + build green; fresh + pre-existing DB boots verified; remaining open boxes are the human review + literal in-browser click
+
+### Checkpoint: Complete
+- [x] All acceptance criteria met (plan Overview + Decisions: both features implemented per confirmed decisions A/A/soft-cap; scope exclusions honored — no notifications, no autocomplete, no edit/delete)
+- [x] Dark + light themes checked (computed per-theme values: mention pill = `--bulma-primary` 56%/41% text on 15% transparent tint in each theme; quote button is pure Bulma `is-small is-light` which the theme handles) — visual confirmation in a browser is folded into the manual checkbox above
+- [x] Ready for review — all 6 tasks done, suite green with `-race`, fresh + pre-existing DB boots verified; the open boxes above are the human review steps and the one literal in-browser click
+
+## Navbar → Bulma navbar component
+
+- [x] Replace the hand-rolled `site-header`/`level` top bar with the Bulma navbar component, markup per `~/src/bulma/docs/documentation/components/navbar.html`  (DONE)
+  - `layout.html` header → `<nav class="navbar has-shadow" role="navigation" aria-label="main navigation">`: `navbar-brand` (logo as `navbar-item logo` + `navbar-burger` with the four spans and `data-target="navMenu"`), `navbar-menu#navMenu` → `navbar-start` (New Board / Invites / Users as plain `navbar-item` links when authed) + `navbar-end` (user `tag`, Sign Out form in a `navbar-item`, or Sign In as a `navbar-item` when logged out)
+  - Burger toggle: the docs' vanilla JS example verbatim at the bottom of the layout (Bulma ships no JS), plus one line syncing `aria-expanded` which the docs example omits but its own markup declares
+  - Separation edge: `has-shadow` modifier (1px in `--bulma-background`) replaces the old `border-bottom`; navbar background comes from `--bulma-scheme-main` so it themes automatically
+  - `site.css`: removed the `.site-header` background/border rule, the `.site-header .level { flex-wrap }` rule, and `.site-header .container` from the gutter selector (navbar is full-width and sizes itself); regenerated `disjoint.css` via `make css`
+  - Note: `level is-mobile` remains in 4 other templates (user_card, thread, invites, board) — only the header-scoped CSS was removed
+  - **Verify:** full suite green with `-race`; `node --check` on the burger script; live boot (fresh DB) — `/setup` serves all navbar classes (`navbar has-shadow`, brand, burger with `data-target`, menu/start/end, `aria-label="main navigation"`) and the toggle script
+
+## Board creation → admin-only
+
+- [x] Restrict board creation to admins  (DONE)
+  - `requireAdmin` (already in invites.go) now guards `NewBoardPage` (GET /boards/new) and `CreateBoardSubmit` (POST /boards/new) in boards.go — non-admins get the "Unauthorized" flash + 303 to `/`, and no board row is created
+  - Navbar: `+ New Board` moved into the `IsAdmin` block alongside Invites/Users in `navbar-start` (layout.html)
+  - Empty-index CTA `+ Create First Board` (index.html) also gated by `IsAdmin` (first-run user is auto-admin, so the normal flow is unaffected)
+  - Tests in `TestBoardCreation`: regular user denied GET + POST (redirect `/`, no board created), promoted admin succeeds; navbar link present for admin, absent for regular user on `/`
+  - `specs/disjoint.md` §B: documented that board creation is admin-only
+  - **Verify:** full suite green with `-race`, `go vet` clean

@@ -35,19 +35,11 @@ CREATE TABLE users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
 CREATE TABLE boards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
-    position INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+    position INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE threads (
@@ -111,9 +103,11 @@ A. Authentication & Security
 
 B. Structure & Organization (phpBB Style)
 
-    Index View (/): Displays categories, nested boards with descriptions, and a summary preview of the latest thread in each board.
+    Index View (/): Displays boards with descriptions, and a summary preview of the latest thread in each board.
 
     Board View (/boards/{id}): Lists threads belonging to that board, sorted by updated_at DESC. Displays thread title, author, reply count, creation time, and expiration status.
+
+    Board Creation is admin-only: GET/POST /boards/new require an administrator (non-admins are redirected home with an error flash), and the "+ New Board" navbar link (and the empty-index CTA) render only for admins.
 
     Thread Creation (/boards/{id}/threads/new): Form to create a thread with a title, initial post body, optional file attachments, and an expiration selection (e.g., 24 hours, 3 days, 7 days, 30 days, or Never).
 
@@ -140,7 +134,19 @@ D. Thread View & Interaction (HTMX Enhanced)
 
         The thread's updated_at timestamp is updated on insertion.
 
-    Markdown Support: Parse post bodies using a Go Markdown library (e.g., [github.com/yuin/goldmark](https://github.com/yuin/goldmark)) to support basic text formatting, lists, quotes, and code blocks.
+    Markdown Support: Parse post bodies using a Go Markdown library (e.g., [github.com/yuin/goldmark](https://github.com/yuin/goldmark)) to support basic text formatting, lists, quotes, and code blocks. Goldmark runs with the GFM extension (tables, strikethrough, autolinks, task lists), hard line wraps, and raw HTML neutralized. The same pipeline renders post bodies and user-card bios.
+
+    @User Mentions: An @username token in any Markdown body matching [A-Za-z0-9]{3,32} and not immediately preceded by a word character (letter/digit/underscore) renders as a tinted pill link to the user's card: <a class="mention" href="/users/{name}">@{name}</a>. Rendering is stateless (no DB lookup in the render path), so a mention of an unknown user links to a 404 card — consistent with how author links behave for deleted users. Tokens inside code spans/fences, inside link labels, or in e-mail local parts (user@host) are never linked. The name is alphanumeric by construction, so the href can never carry a scheme or path.
+
+    Quoting Posts: Every post card carries a Quote button. A small event-delegated inline script (delegated on the posts container so it also works on posts appended by HTMX) reads the rendered text of that post and inserts a Markdown blockquote into the reply field:
+
+        > **AUTHOR wrote:**
+        > first line
+        > second line
+        >
+        > — [view original](/threads/{id}#post-{id})
+
+    Every physical line is > -prefixed (blank lines as bare >), so the quote renders as a single blockquote. The quoted text is soft-capped at 500 characters (truncated with …) while the permalink line is always kept; attachments are excluded from quotes by construction. The quote is stored in the reply's body as ordinary Markdown — no schema change, and since posts are immutable a stored quote can never go stale.
 
 E. File Uploads & Media Rendering
 
