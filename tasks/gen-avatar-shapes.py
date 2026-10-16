@@ -95,8 +95,13 @@ def main():
         "dot matrix changed shape: %dx%d, %d dots" % (len(dot_xs), len(dot_ys), len(bgpts))
     )
 
-    eyes_xs, eyes_ys, eyes_g = comp_data(d, "eyes", 17, 25)
-    mouth_xs, mouth_ys, mouth_g = comp_data(d, "mouth", 17, 67)
+    # Face placement: upstream pixelbot centers the face on dot rows 3-5
+    # (eyes) and 9-10 (mouth), which reads as sitting low in the circle.
+    # Disjoint lifts the whole face two dot rows (2 x 8.33 = 16.67px), so
+    # eyes land on rows 1-3 and the mouth on rows 7-8. The x translate (17)
+    # is unchanged from the style's translate(17 25) / translate(17 67).
+    eyes_xs, eyes_ys, eyes_g = comp_data(d, "eyes", 17, 8.33)
+    mouth_xs, mouth_ys, mouth_g = comp_data(d, "mouth", 17, 50.33)
 
     out = []
     out.append("// Code generated from the DiceBear \"pixelbot\" style definition")

@@ -110,9 +110,9 @@ func TestRenderDistinct(t *testing.T) {
 // pinnedDigests are the committed fixtures for the generator. Update them
 // deliberately when revising the generator (and bump versionSalt).
 var pinnedDigests = map[string]string{
-	"alice": "099b743a4a5deac38e73fe1845fb31eee4766e672df521b6e95a5702c37af567",
-	"Bob":   "9511c9b8cf7be72fdaaa51f58891334b65d2f3d184583e8c8935dbb3a1fac420",
-	"Ω":     "06e807d4efba3075fe76c3b35111ffb2e88192bdc8fd15c8fb2724edb240fdb4",
+	"alice": "7c21278c61f6247be95a6fb5fb941812efc357a581186b31fe82d87d1b87a04b",
+	"Bob":   "3d34ddd81d2dee4896f1880516e39fef3f6094250138441784baa34c7e41ab34",
+	"Ω":     "28c3fb64c1b69b1372745495a75a781c9fdccd38798c3b06a9d447f24f5660ff",
 }
 
 // TestRenderDigest pins the generator output so an accidental PRNG, palette,
