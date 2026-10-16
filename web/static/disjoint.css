@@ -962,6 +962,19 @@
   }
 }
 
+/* Dark-theme body text: Bulma's 71% is technically 8.5:1 on the scheme but
+   reads as dim gray on the near-black surfaces. 80% (~10.5:1) matches the
+   brightness dark-mode users expect (GitHub/Discord class), while keeping a
+   clear hierarchy vs titles (93%) and muted metadata (53%). Scoped to the
+   dark media query on purpose: a bare :root override here would come after
+   the generated theme in disjoint.css and also override the LIGHT theme's
+   29% (same cascade trap as the primary fix above). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bulma-text-l: 80%;
+  }
+}
+
 /* --- App frame ------------------------------------------------------------ */
 
 body {
