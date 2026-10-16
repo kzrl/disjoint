@@ -1139,35 +1139,32 @@ main.container,
   max-width: 55rem;
 }
 
+/* Post cards use Bulma's .media object: the avatar is media-left and the
+   header strip + body + attachments fill media-content, so the message text
+   gets the full card width instead of sharing it with a sidebar column. */
 .post-card {
-  display: grid;
-  grid-template-columns: 11.25rem minmax(0, 1fr);
   background: var(--bulma-scheme-main-bis);
   border: 1px solid var(--bulma-border-weak);
   border-radius: var(--bulma-radius);
-  overflow: hidden;
+  padding: 0.875rem 1rem;
 }
 
-.post-sidebar {
-  background: var(--bulma-scheme-main-ter);
-  border-right: 1px solid var(--bulma-border-weak);
-  padding: 1rem;
-  font-size: 0.75rem;
+/* Author metadata strip above the body: name, timestamp, and the quote
+   action on one line (wraps when tight). Spacing comes from gap, not
+   margin utilities on .quote-btn — that class string is pinned by tests. */
+.post-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.625rem;
+  margin-bottom: 0.375rem;
 }
 
 .post-author {
   font-size: 0.875rem;
   font-weight: 700;
   color: var(--bulma-text-strong);
-  margin-bottom: 0.375rem;
   word-break: break-word;
-}
-
-.post-content-area {
-  padding: 1rem 1.25rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
 }
 
 /* Markdown bodies use Bulma's .content component (class "content is-medium",
@@ -1260,16 +1257,18 @@ main.container,
   text-decoration: none;
 }
 
-.file-icon {
+/* Scoped to the attachment card: the unqualified .file-* class names belong
+   to Bulma's file component (used by the reply form's upload control). */
+.attachment-file-card .file-icon {
   font-size: 1.25rem;
 }
 
-.file-info {
+.attachment-file-card .file-info {
   min-width: 0;
   flex: 1;
 }
 
-.file-name {
+.attachment-file-card .file-name {
   color: var(--bulma-text-strong);
   font-weight: 500;
   overflow: hidden;
@@ -1384,12 +1383,4 @@ main.container,
     text-align: left;
   }
 
-  .post-card {
-    grid-template-columns: 1fr;
-  }
-
-  .post-sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--bulma-border-weak);
-  }
 }

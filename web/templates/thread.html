@@ -18,16 +18,13 @@
         </div>
       </div>
       <div class="level-right">
-        <div class="is-flex is-align-items-center gap-2">
-          <a class="button is-secondary is-small" href="#reply-form">&#x2193; Reply</a>
-          {{if .Thread.ExpiresAt.Valid}}
-            <span class="tag is-subtle" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
-              &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
-            </span>
-          {{else}}
-            <span class="tag is-subtle">Never expires</span>
-          {{end}}
-        </div>
+        {{if .Thread.ExpiresAt.Valid}}
+          <span class="tag is-subtle" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
+            &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
+          </span>
+        {{else}}
+          <span class="tag is-subtle">Never expires</span>
+        {{end}}
       </div>
     </div>
   </div>
@@ -60,7 +57,17 @@
       <div class="field">
         <label class="label is-size-7">Attach Files (optional)</label>
         <div class="control">
-          <input type="file" name="files" class="input" multiple accept="image/*,video/*,application/pdf,text/*">
+          <div class="file">
+            <label class="file-label">
+              <span class="file-cta">
+                <span class="file-icon" aria-hidden="true">
+                  <svg class="icon is-small" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                </span>
+                <span class="file-label">Choose files&#8230;</span>
+              </span>
+              <input type="file" name="files" multiple accept="image/*,video/*,application/pdf,text/*">
+            </label>
+          </div>
         </div>
       </div>
 
