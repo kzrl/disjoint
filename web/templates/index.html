@@ -27,7 +27,7 @@
               <div class="board-title">
                 <span class="is-size-7 muted front-rank">{{.Rank}}.</span>
                 <a href="/threads/{{.Row.ID}}">{{.Row.Title}}</a>
-                {{if .Row.ExpiresAt.Valid}}
+                {{if .ExpiryUrgent}}
                   <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
               </div>

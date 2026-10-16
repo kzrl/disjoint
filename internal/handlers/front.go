@@ -5,18 +5,26 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"disjoint/internal/database"
 )
 
 const frontPagePageSize = 30
 
+// expiryBadgeWindow is how close to expiration a thread must be for its TTL
+// badge to appear on the front page. Threads with more time left show no
+// badge at all, keeping rows uncluttered; the thread page itself still shows
+// the deadline regardless.
+const expiryBadgeWindow = 48 * time.Hour
+
 // FrontPageThreadItem is one row on the global front page.
 type FrontPageThreadItem struct {
-	Row        database.ListFrontPageThreadsRow
-	Rank       int64 // 1-based position in the current listing
-	ReplyCount int64 // posts minus the opening post
-	Snippet    string
+	Row          database.ListFrontPageThreadsRow
+	Rank         int64 // 1-based position in the current listing
+	ReplyCount   int64 // posts minus the opening post
+	ExpiryUrgent bool  // true when ExpiresAt is within expiryBadgeWindow
+	Snippet      string
 }
 
 // IndexPage renders the global front page: all non-expired threads sorted
@@ -56,7 +64,9 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 			Row:        row,
 			Rank:       int64((page-1)*frontPagePageSize + i + 1),
 			ReplyCount: replyCount,
-			Snippet:    commentSnippet(row.LastCommentBody),
+			ExpiryUrgent: row.ExpiresAt.Valid &&
+				time.Until(row.ExpiresAt.Time) <= expiryBadgeWindow,
+			Snippet: commentSnippet(row.LastCommentBody),
 		})
 	}
 

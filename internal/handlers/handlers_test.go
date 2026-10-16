@@ -633,6 +633,82 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 	}
 }
 
+// TestFrontPageExpiryBadge pins the clutter rule: the TTL badge only appears
+// on front-page rows whose thread expires within the urgency window; threads
+// with days left show no badge at all.
+func TestFrontPageExpiryBadge(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	u, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "dora",
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session token: %v", err)
+	}
+	if err := queries.CreateSession(ctx, database.CreateSessionParams{
+		TokenHash: auth.TokenHash(token),
+		UserID:    u.ID,
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	newThread := func(title string, expiry time.Time) {
+		t.Helper()
+		th, err := queries.CreateThread(ctx, database.CreateThreadParams{
+			UserID:     u.ID,
+			Title:      title,
+			ExpiresAt:  sql.NullTime{Time: expiry, Valid: true},
+			TtlSeconds: sql.NullInt64{Valid: false},
+		})
+		if err != nil {
+			t.Fatalf("failed to create thread %q: %v", title, err)
+		}
+		if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+			ThreadID: th.ID,
+			UserID:   u.ID,
+			Body:     "hello",
+		}); err != nil {
+			t.Fatalf("failed to create opening post: %v", err)
+		}
+	}
+
+	newThread("urgent thread", time.Now().Add(5*time.Hour))
+	newThread("long-lived thread", time.Now().Add(72*time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"})
+	rr := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected front page 200, got %d", rr.Code)
+	}
+	page := rr.Body.String()
+
+	for _, title := range []string{"urgent thread", "long-lived thread"} {
+		if !strings.Contains(page, title) {
+			t.Fatalf("front page missing %q", title)
+		}
+	}
+	if c := strings.Count(page, "&#x23F3;"); c != 1 {
+		t.Errorf("want exactly 1 expiry badge (only the 5h thread), got %d", c)
+	}
+	if !strings.Contains(page, "in 4h") {
+		t.Errorf("urgent thread: want 'in 4h' badge text, missing")
+	}
+	if strings.Contains(page, "in 3d") {
+		t.Errorf("long-lived thread: badge must be omitted, found 'in 3d'")
+	}
+}
+
 // TestReplyBumpsExpiration verifies the TTL reset rule: every new post pushes
 // the thread's expiry deadline out to last-comment + ttl, while never-threads
 // keep a NULL deadline.
