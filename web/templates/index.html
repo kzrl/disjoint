@@ -25,27 +25,20 @@
           <div class="board-row">
             <div class="board-main">
               <div class="board-title">
-                <span class="is-size-6 muted front-rank">{{.Rank}}.</span>
+                <span class="is-size-7 muted front-rank">{{.Rank}}.</span>
                 <a href="/threads/{{.Row.ID}}">{{.Row.Title}}</a>
                 {{if .Row.ExpiresAt.Valid}}
                   <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
               </div>
-              <div class="board-desc">
-                by <strong>{{userLink .Row.AuthorUsername}}</strong> &bull; <time datetime="{{isoTime .Row.CreatedAt.Time}}" title="{{formatTime .Row.CreatedAt.Time}}">{{formatRelative .Row.CreatedAt.Time}}</time>
-              </div>
             </div>
-            <div class="board-stats">
-              <div><strong>{{.ReplyCount}}</strong> {{if eq .ReplyCount 1}}comment{{else}}comments{{end}}</div>
-            </div>
-            <div class="board-latest">
+            <div class="board-activity">
               {{if .Row.LastCommentID.Valid}}
-                <div class="board-latest-author">
-                  {{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time>
-                </div>
-                <a href="/threads/{{.Row.ID}}#post-{{.Row.LastCommentID.Int64}}" class="latest-title" title="View the latest comment">&#8220;{{.Snippet}}&#8221;</a>
+                <span class="is-size-7">{{.ReplyCount}} {{if eq .ReplyCount 1}}comment{{else}}comments{{end}}</span>
+                <span class="is-size-7 muted" aria-hidden="true">&bull;</span>
+                <a class="is-size-7" href="/threads/{{.Row.ID}}#post-{{.Row.LastCommentID.Int64}}" title="View the latest comment">{{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time></a>
               {{else}}
-                <span class="muted">No comments yet</span>
+                <span class="is-size-7 muted">No comments yet</span>
               {{end}}
             </div>
           </div>

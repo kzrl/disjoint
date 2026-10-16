@@ -145,69 +145,62 @@ main.container,
   color: var(--bulma-text-strong);
 }
 
-.board-row,
-.thread-row {
+/* Thread rows: left cell carries rank + title + TTL badge only; the right
+   cell is the whole activity line ("N comments • user • time"). Two columns
+   so the title gets full width at every viewport; the activity cell
+   ellipsizes when it gets tight. */
+.board-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 6rem 15rem;
-  padding: 0.75rem 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 16rem);
+  padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--bulma-border-weak);
   align-items: center;
   gap: 1rem;
   transition: background-color 0.1s ease;
 }
 
-.board-row:last-child,
-.thread-row:last-child {
+.board-row:last-child {
   border-bottom: none;
 }
 
-.board-row:hover,
-.thread-row:hover {
-  background-color: var(--bulma-scheme-main-bis);
+.board-row:hover {
+  background-color: var(--bulma-scheme-main-ter);
 }
 
-.board-main,
-.thread-main {
+.board-main {
   min-width: 0;
 }
 
-.board-title,
-.thread-title {
-  font-size: 0.9375rem;
-  font-weight: 600;
+.board-title {
+  font-size: 1rem;
+  font-weight: 700;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
 
-.board-desc {
-  font-size: 0.75rem;
-  color: var(--bulma-text-weak);
-  margin-top: 0.25rem;
+/* Titles read as neutral content headers, not links: crisp near-white in
+   the dark theme (text-strong, hsl 221 14% 93%) and near-black in light.
+   The accent color is reserved for hover/focus. */
+.board-title a {
+  color: var(--bulma-text-strong);
 }
 
-.board-stats,
-.thread-stats {
-  font-size: 0.75rem;
-  color: var(--bulma-text-weak);
-  text-align: center;
+.board-title a:hover,
+.board-title a:focus {
+  color: var(--bulma-primary);
 }
 
-.board-latest,
-.thread-latest {
+/* Right-hand activity cell: single line, right-aligned, ellipsized. */
+.board-activity {
   font-size: 0.75rem;
   color: var(--bulma-text-weak);
   text-align: right;
   min-width: 0;
-}
-
-.latest-title {
-  display: block;
-  color: var(--bulma-text);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* --- Post cards ----------------------------------------------------------- */
@@ -454,36 +447,16 @@ main.container,
 
 /* --- Responsive --------------------------------------------------------------------- */
 
-/* Tablet range (Bulma: 769px-1023px): the fixed 15rem latest-comment column
-   would squeeze thread titles, so it is dropped there and below. Must stay
-   synced with Bulma's $tablet (769px) and $desktop (1024px) breakpoints,
-   which compile as literals (no CSS variables). */
-@media (min-width: 769px) and (max-width: 1023px) {
-  .board-row,
-  .thread-row {
-    grid-template-columns: minmax(0, 1fr) 6rem;
-  }
-
-  .board-latest,
-  .thread-latest {
-    display: none;
-  }
-}
-
 /* Mobile range: must stay synced with Bulma's $tablet breakpoint (769px),
    i.e. max-width = tablet - 1px. Bulma v1 compiles breakpoints as literals
    (no CSS variables), so this cannot reference them. */
 @media (max-width: 768px) {
-  .board-row,
-  .thread-row {
+  .board-row {
     grid-template-columns: 1fr;
     gap: 0.5rem;
   }
 
-  .board-stats,
-  .thread-stats,
-  .board-latest,
-  .thread-latest {
+  .board-activity {
     text-align: left;
   }
 
