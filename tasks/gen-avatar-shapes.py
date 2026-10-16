@@ -88,20 +88,28 @@ def main():
     path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_STYLE
     d = json.load(open(path))
 
+    # Disjoint sprite placement, applied on top of the upstream pixelbot
+    # coordinates:
+    #   dx: upstream puts the dot field at x 2.32..101.48 in the 100px
+    #       canvas, so the right column is clipped and the whole sprite sits
+    #       1.9px right of center. Shifting everything left by 1.9px makes
+    #       the field symmetric (0.42px margins, matching the y axis).
+    #   dy: upstream centers the face on dot rows 3-5 (eyes) and 9-10
+    #       (mouth), which reads as sitting low in the circle. Lifting the
+    #       face one dot row (8.33px) puts eyes on rows 2-4 and the mouth on
+    #       rows 8-9, optically centered. (Two rows overshot: the face
+    #       center landed 12.5px above the canvas center.)
+    dx, dy = -1.9, -8.33
+
     bgpts = pixel_starts(d["canvas"]["elements"][0]["children"][0]["attributes"]["d"])
-    dot_xs = sorted(set(r2(x) for x, _ in bgpts))
+    dot_xs = sorted(set(r2(x + dx) for x, _ in bgpts))
     dot_ys = sorted(set(r2(y) for _, y in bgpts))
     assert len(dot_xs) == 12 and len(dot_ys) == 12 and len(bgpts) == 144, (
         "dot matrix changed shape: %dx%d, %d dots" % (len(dot_xs), len(dot_ys), len(bgpts))
     )
 
-    # Face placement: upstream pixelbot centers the face on dot rows 3-5
-    # (eyes) and 9-10 (mouth), which reads as sitting low in the circle.
-    # Disjoint lifts the whole face two dot rows (2 x 8.33 = 16.67px), so
-    # eyes land on rows 1-3 and the mouth on rows 7-8. The x translate (17)
-    # is unchanged from the style's translate(17 25) / translate(17 67).
-    eyes_xs, eyes_ys, eyes_g = comp_data(d, "eyes", 17, 8.33)
-    mouth_xs, mouth_ys, mouth_g = comp_data(d, "mouth", 17, 50.33)
+    eyes_xs, eyes_ys, eyes_g = comp_data(d, "eyes", 17 + dx, 25 + dy)
+    mouth_xs, mouth_ys, mouth_g = comp_data(d, "mouth", 17 + dx, 67 + dy)
 
     out = []
     out.append("// Code generated from the DiceBear \"pixelbot\" style definition")

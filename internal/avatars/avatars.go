@@ -24,8 +24,8 @@ const canvasSize = 100
 // versionSalt is mixed into the seed so a future generator revision can
 // re-roll the whole family without ambiguity with old renderings. v2 is the
 // pixelbot-style renderer (v1 was the mirrored confetti sprite); v3 lifts
-// the face two dot rows.
-const versionSalt = "disjoint-avatar-v3"
+// the face one dot row and centers the sprite horizontally.
+const versionSalt = "disjoint-avatar-v4"
 
 // dotMatrix is the static background grid, identical for every avatar: the
 // full 12x12 field of dark, semi-transparent rounded pixels.
