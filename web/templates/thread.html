@@ -2,9 +2,8 @@
 <div>
   <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
-      <li><a href="/">Home</a></li>
       <li><a href="/">Front Page</a></li>
-      <li class="is-active" aria-current="page"><a>{{.Thread.Title}}</a></li>
+      <li class="is-active" aria-current="page">{{.Thread.Title}}</li>
     </ul>
   </nav>
 
@@ -13,19 +12,20 @@
       <div class="level-left">
         <div>
           <h1 class="title is-4 mb-1">{{.Thread.Title}}</h1>
-          <div class="is-size-7 has-text-grey">
-            Started by <strong>{{authorAvatar .Thread.AuthorAvatar .Thread.AuthorUsername .Thread.AuthorAvatarNonce}}{{userLink .Thread.AuthorUsername}}</strong> &bull; <time>{{formatTime .Thread.CreatedAt.Time}}</time>
+          <div class="is-size-7 muted">
+            Started by <strong>{{authorAvatar .Thread.AuthorAvatar .Thread.AuthorUsername .Thread.AuthorAvatarNonce}}{{userLink .Thread.AuthorUsername}}</strong> &bull; <time datetime="{{isoTime .Thread.CreatedAt.Time}}">{{formatTime .Thread.CreatedAt.Time}}</time>
           </div>
         </div>
       </div>
       <div class="level-right">
-        <div>
+        <div class="is-flex is-align-items-center gap-2">
+          <a class="button is-secondary is-small" href="#reply-form">&#x2193; Reply</a>
           {{if .Thread.ExpiresAt.Valid}}
-            <span class="tag is-info" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
+            <span class="tag is-subtle" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
               &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
             </span>
           {{else}}
-            <span class="tag is-light">Never expires</span>
+            <span class="tag is-subtle">Never expires</span>
           {{end}}
         </div>
       </div>

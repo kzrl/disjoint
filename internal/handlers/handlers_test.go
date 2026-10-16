@@ -377,7 +377,7 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	// Quote excludes attachments by construction: the quote JS reads only the
 	// .content div, so attachment markup must remain a SIBLING of it (closed
 	// before it), not nested inside. This pins that structure.
-	contentStart := strings.Index(bodyContent, `<div class="content is-small">`)
+	contentStart := strings.Index(bodyContent, `<div class="content is-medium">`)
 	attachStart := strings.Index(bodyContent, `<div class="post-attachments">`)
 	if contentStart < 0 || attachStart < 0 || contentStart > attachStart {
 		t.Fatalf("expected .content div followed by .post-attachments in the post card")
@@ -507,7 +507,7 @@ func TestMentionRendering(t *testing.T) {
 
 	// Quote affordance (Task 3): the single post card carries the Quote
 	// button, and the container carries the thread id for permalinks.
-	if c := strings.Count(page, `class="button is-small is-light quote-btn"`); c != 1 {
+	if c := strings.Count(page, `class="button is-small is-secondary quote-btn"`); c != 1 {
 		t.Errorf("thread page: want exactly 1 quote button (one post), got %d", c)
 	}
 	if !strings.Contains(page, `id="posts-container" class="posts-container" data-thread-id="`) {
@@ -533,7 +533,7 @@ func TestMentionRendering(t *testing.T) {
 	if !strings.Contains(partial, mentionAnchor("bob")) {
 		t.Errorf("HTMX partial: want mention anchor for bob, got: %s", partial)
 	}
-	if c := strings.Count(partial, `class="button is-small is-light quote-btn"`); c != 1 {
+	if c := strings.Count(partial, `class="button is-small is-secondary quote-btn"`); c != 1 {
 		t.Errorf("HTMX partial: want exactly 1 quote button on the appended post, got %d", c)
 	}
 

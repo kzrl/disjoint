@@ -7,34 +7,34 @@
     <table class="table is-fullwidth is-hoverable">
       <thead>
         <tr>
-          <th>ID</th>
-          <th>Username</th>
-          <th>Role</th>
-          <th>Joined</th>
-          <th></th>
+          <th scope="col">ID</th>
+          <th scope="col">Username</th>
+          <th scope="col">Role</th>
+          <th scope="col">Joined</th>
+          <th scope="col"><span class="is-sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
         {{range .Users}}
         <tr>
-          <td class="is-size-7 has-text-grey">{{.ID}}</td>
+          <td class="is-size-7 muted">{{.ID}}</td>
           <td>
             <strong>{{.Username}}</strong>
-            {{if eq $.CurrentUser.ID .ID}}<span class="has-text-grey is-size-7">(you)</span>{{end}}
+            {{if eq $.CurrentUser.ID .ID}}<span class="muted is-size-7">(you)</span>{{end}}
           </td>
           <td>
             {{if eq .IsAdmin 1}}
               <span class="tag is-link">Admin</span>
             {{else}}
-              <span class="has-text-grey is-size-7">Member</span>
+              <span class="muted is-size-7">Member</span>
             {{end}}
           </td>
-          <td class="is-size-7 has-text-grey">{{formatTime .CreatedAt.Time}}</td>
+          <td class="is-size-7 muted"><time datetime="{{isoTime .CreatedAt.Time}}">{{formatTime .CreatedAt.Time}}</time></td>
           <td class="has-text-right">
             {{if eq .IsAdmin 1}}
               {{if ne $.CurrentUser.ID .ID}}
               <form method="POST" action="/admin/users/{{.ID}}/demote">
-                <button type="submit" class="button is-light is-small">Revoke Admin</button>
+                <button type="submit" class="button is-secondary is-small">Revoke Admin</button>
               </form>
               {{end}}
             {{else}}
@@ -50,7 +50,7 @@
   </div>
   {{else}}
   <div class="box py-6 has-text-centered">
-    <p class="has-text-grey">No registered users.</p>
+    <p class="muted">No registered users.</p>
   </div>
   {{end}}
 </div>

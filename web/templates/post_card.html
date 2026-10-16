@@ -2,7 +2,10 @@
 <div class="post-card" id="post-{{.Post.ID}}">
   <div class="post-sidebar">
     <div class="post-author">{{authorAvatar .Post.AuthorAvatar .Post.AuthorUsername .Post.AuthorAvatarNonce}}{{userLink .Post.AuthorUsername}}</div>
-    <div class="is-size-7 has-text-grey"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
+    <div class="is-size-7 muted"><time datetime="{{isoTime .Post.CreatedAt.Time}}">{{formatTime .Post.CreatedAt.Time}}</time></div>
+    <div class="mt-2">
+      <button type="button" class="button is-small is-secondary quote-btn">Quote</button>
+    </div>
   </div>
   <div class="post-content-area">
     <div class="content is-medium">
@@ -10,7 +13,7 @@
     </div>
     {{if .Attachments}}
       <div class="post-attachments">
-        <div class="label is-size-7 is-uppercase has-text-grey">Attachments ({{len .Attachments}})</div>
+        <div class="label is-size-7 is-uppercase muted">Attachments ({{len .Attachments}})</div>
         <div class="attachments-grid">
           {{range .Attachments}}
             {{if isImage .MimeType}}
@@ -31,7 +34,7 @@
                 <span class="file-icon">&#x1F4CE;</span>
                 <div class="file-info">
                   <div class="file-name">{{.Filename}}</div>
-                  <div class="is-size-7 has-text-grey">{{formatFileSize .FileSize}}</div>
+                  <div class="is-size-7 muted">{{formatFileSize .FileSize}}</div>
                 </div>
               </a>
             {{end}}
@@ -39,9 +42,6 @@
         </div>
       </div>
     {{end}}
-    <div class="has-text-right mt-4">
-      <button type="button" class="button is-small is-light quote-btn">Quote</button>
-    </div>
   </div>
 </div>
 {{end}}

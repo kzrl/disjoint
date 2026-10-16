@@ -16,10 +16,10 @@
     <table class="table is-fullwidth is-hoverable">
       <thead>
         <tr>
-          <th>Invite Code</th>
-          <th>Status</th>
-          <th>Created</th>
-          <th></th>
+          <th scope="col">Invite Code</th>
+          <th scope="col">Status</th>
+          <th scope="col">Created</th>
+          <th scope="col"><span class="is-sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
@@ -28,16 +28,16 @@
           <td><code class="is-size-7">{{.Code}}</code></td>
           <td>
             {{if .UsedBy.Valid}}
-              <span class="has-text-grey">Used by <strong>{{.UsedByUsername.String}}</strong></span>
+              <span class="muted">Used by <strong>{{.UsedByUsername.String}}</strong></span>
             {{else}}
               <span class="has-text-success">&#x25CF; Available</span>
             {{end}}
           </td>
-          <td class="is-size-7 has-text-grey">{{formatTime .CreatedAt.Time}}</td>
+          <td class="is-size-7 muted"><time datetime="{{isoTime .CreatedAt.Time}}">{{formatTime .CreatedAt.Time}}</time></td>
           <td class="has-text-right">
             {{if not .UsedBy.Valid}}
             <form method="POST" action="/invites/{{.ID}}/delete">
-              <button type="submit" class="button is-light is-small">Delete</button>
+              <button type="submit" class="button is-secondary is-small">Delete</button>
             </form>
             {{end}}
           </td>
@@ -48,7 +48,7 @@
   </div>
   {{else}}
   <div class="box py-6 has-text-centered">
-    <p class="has-text-grey">No invites yet. Generate one to invite someone.</p>
+    <p class="muted">No invites yet. Generate one to invite someone.</p>
   </div>
   {{end}}
 </div>

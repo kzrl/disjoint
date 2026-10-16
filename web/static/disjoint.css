@@ -933,12 +933,18 @@
   color-scheme: dark;
   /* Re-tint Bulma's primary from teal to the classic Disjoint blue. Every
      --bulma-primary* shade (light/dark/bold/invert/full ladder) derives
-     from these hue variables, so one override re-tints the whole family
-     in both themes. */
+     from these hue/saturation variables, so one override re-tints the whole
+     family in both themes. Lightness is set per theme below: this top-level
+     block (60%) is the dark default, and the light media block later in this
+     file (41%) overrides it for light-mode users. The light override must
+     live in its own @media block — a bare :root declaration here would come
+     after the generated theme in disjoint.css and win in BOTH themes,
+     leaving the light theme at 60% (~#3b82f6, 3.7:1 on white, fails WCAG
+     AA). */
   --bulma-primary-h: 217deg;
   --bulma-primary-s: 91%;
-  --bulma-primary-l: 56%;
-  --bulma-primary-rgb: 59, 130, 246;
+  --bulma-primary-l: 60%;
+  --bulma-primary-rgb: 60, 131, 246;
   /* Disjoint's sans-serif stack: pure system fonts (no webfont to load —
      keeps the offline/self-hosted property). Overrides Bulma's Inter-first
      --bulma-family-primary/-secondary for body and heading text alike. */
@@ -951,6 +957,8 @@
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
+    --bulma-primary-l: 41%;
+    --bulma-primary-rgb: 9, 82, 200;
   }
 }
 
@@ -982,6 +990,46 @@ main.container,
 
 .logo span {
   color: var(--bulma-primary);
+}
+
+/* Theme-aware muted text for small metadata (timestamps, counts, hints).
+   Replaces Bulma's has-text-grey, which is one fixed color (#69748c) in both
+   themes: 5.2:1 in dark but only 3.5:1 on white in light — below WCAG AA
+   for the 12px text it is used for. --bulma-text-weak is 4.6:1 dark /
+   6.0:1 light. */
+.muted {
+  color: var(--bulma-text-weak);
+}
+
+/* Secondary action button: a quiet surface step instead of Bulma's is-light,
+   which renders near-white (90%) even in the dark theme and reads as a
+   glaring chip on the 9-13% scheme. Adapts in both themes via the scheme
+   surface tokens. */
+.button.is-secondary {
+  background-color: var(--bulma-scheme-main-ter);
+  border-color: var(--bulma-border);
+  color: var(--bulma-text);
+}
+
+.button.is-secondary:hover,
+.button.is-secondary:focus {
+  background-color: var(--bulma-scheme-main-bis);
+  border-color: var(--bulma-border);
+  color: var(--bulma-text-strong);
+}
+
+.button.is-secondary:active {
+  background-color: var(--bulma-scheme-main);
+  border-color: var(--bulma-border);
+  color: var(--bulma-text-strong);
+}
+
+/* Subtle status tag (expiries, "never expires"): same surface-step
+   treatment as .is-secondary, so status pills don't out-shout the page. */
+.tag.is-subtle {
+  background-color: var(--bulma-scheme-main-ter);
+  border: 1px solid var(--bulma-border-weak);
+  color: var(--bulma-text);
 }
 
 .site-footer {
@@ -1080,6 +1128,9 @@ main.container,
   flex-direction: column;
   gap: 1rem;
   margin-bottom: 1.5rem;
+  /* Cap the reading width: at the full 1344px container, post bodies run
+     60+ characters per line, which is too long for comfortable reading. */
+  max-width: 55rem;
 }
 
 .post-card {
@@ -1113,7 +1164,8 @@ main.container,
   justify-content: space-between;
 }
 
-/* Markdown bodies use Bulma's .content component (class "content is-small"). */
+/* Markdown bodies use Bulma's .content component (class "content is-medium",
+   1.25rem — deliberately larger for forum reading). */
 
 /* --- Mentions --------------------------------------------------------------- */
 
@@ -1122,7 +1174,7 @@ main.container,
    a mention from an ordinary text link.
 
    Colors: only --bulma-primary is used. Its lightness IS overridden per theme
-   (56% in dark, 41% in light), so the text is readable on the scheme in both.
+   (60% in dark, 41% in light), so the text is readable on the scheme in both.
    The tint is a transparent color-mix of the same color, so it adapts too.
    Do NOT use the -light/-dark/-bold ladder here: those lightness steps live
    only in Bulma's light base :root and leak their light-theme values into the
@@ -1161,7 +1213,7 @@ main.container,
   border: 1px solid var(--bulma-border-weak);
   border-radius: var(--bulma-radius);
   overflow: hidden;
-  background: #000000;
+  background: var(--bulma-scheme-main-ter);
 }
 
 .attachment-image-card img {
@@ -1312,6 +1364,22 @@ main.container,
 }
 
 /* --- Responsive --------------------------------------------------------------------- */
+
+/* Tablet range (Bulma: 769px-1023px): the fixed 15rem latest-comment column
+   would squeeze thread titles, so it is dropped there and below. Must stay
+   synced with Bulma's $tablet (769px) and $desktop (1024px) breakpoints,
+   which compile as literals (no CSS variables). */
+@media (min-width: 769px) and (max-width: 1023px) {
+  .board-row,
+  .thread-row {
+    grid-template-columns: minmax(0, 1fr) 6rem;
+  }
+
+  .board-latest,
+  .thread-latest {
+    display: none;
+  }
+}
 
 /* Mobile range: must stay synced with Bulma's $tablet breakpoint (769px),
    i.e. max-width = tablet - 1px. Bulma v1 compiles breakpoints as literals

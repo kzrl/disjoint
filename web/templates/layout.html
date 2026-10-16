@@ -43,7 +43,7 @@
           </div>
           <div class="navbar-item">
             <form method="POST" action="/logout">
-              <button type="submit" class="button is-light is-small">Sign Out</button>
+              <button type="submit" class="button is-secondary is-small">Sign Out</button>
             </form>
           </div>
         {{else}}
@@ -55,10 +55,10 @@
 
   <main class="container">
     {{if .FlashError}}
-      <div class="notification is-light is-danger">{{.FlashError}}</div>
+      <div class="notification is-danger">{{.FlashError}}</div>
     {{end}}
     {{if .FlashSuccess}}
-      <div class="notification is-light is-success">{{.FlashSuccess}}</div>
+      <div class="notification is-success">{{.FlashSuccess}}</div>
     {{end}}
 
     {{template "content" .}}

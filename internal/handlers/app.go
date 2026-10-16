@@ -54,6 +54,14 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 			}
 			return t.Format("Jan 02, 2006 15:04")
 		},
+		// isoTime renders the value for a <time datetime=""> attribute so
+		// timestamps are machine-readable and get native tooltips.
+		"isoTime": func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			return t.Format(time.RFC3339)
+		},
 		"formatRelative": func(t time.Time) string {
 			if t.IsZero() {
 				return ""

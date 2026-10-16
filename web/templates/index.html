@@ -3,9 +3,9 @@
   {{if .Online}}
     <div class="on-air">
       <span class="on-air-dot" aria-hidden="true"></span>
-      <span class="is-uppercase is-size-7 has-text-grey">On the air:</span>
+      <span class="is-uppercase is-size-7 muted">On the air:</span>
       {{range .Online}}
-        <span class="on-air-user">{{userLink .Username}} <span class="is-size-7 has-text-grey">{{formatRelative .LastSeenAt}}</span></span>
+        <span class="on-air-user">{{userLink .Username}} <span class="is-size-7 muted"><time datetime="{{isoTime .LastSeenAt}}" title="{{formatTime .LastSeenAt}}">{{formatRelative .LastSeenAt}}</time></span></span>
       {{end}}
     </div>
   {{else}}
@@ -25,14 +25,14 @@
           <div class="board-row">
             <div class="board-main">
               <div class="board-title">
-                <span class="is-size-6 has-text-grey front-rank">{{.Rank}}.</span>
+                <span class="is-size-6 muted front-rank">{{.Rank}}.</span>
                 <a href="/threads/{{.Row.ID}}">{{.Row.Title}}</a>
                 {{if .Row.ExpiresAt.Valid}}
-                  <span class="tag is-light" title="This thread expires automatically">{{formatExpiry .Row.ExpiresAt}}</span>
+                  <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
               </div>
               <div class="board-desc">
-                by <strong>{{userLink .Row.AuthorUsername}}</strong> &bull; <time>{{formatRelative .Row.CreatedAt.Time}}</time>
+                by <strong>{{userLink .Row.AuthorUsername}}</strong> &bull; <time datetime="{{isoTime .Row.CreatedAt.Time}}" title="{{formatTime .Row.CreatedAt.Time}}">{{formatRelative .Row.CreatedAt.Time}}</time>
               </div>
             </div>
             <div class="board-stats">
@@ -41,27 +41,30 @@
             <div class="board-latest">
               {{if .Row.LastCommentID.Valid}}
                 <div class="board-latest-author">
-                  {{userLink .Row.LastCommentAuthor}} &bull; <time>{{formatRelative .Row.LastCommentAt.Time}}</time>
+                  {{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time>
                 </div>
                 <a href="/threads/{{.Row.ID}}#post-{{.Row.LastCommentID.Int64}}" class="latest-title" title="View the latest comment">&#8220;{{.Snippet}}&#8221;</a>
               {{else}}
-                <span class="has-text-grey">No comments yet</span>
+                <span class="muted">No comments yet</span>
               {{end}}
             </div>
           </div>
         {{end}}
       </div>
-      <div class="pagination-wrap py-3 px-4">
+      {{if or (gt .Page 1) .HasNext}}
+      <div class="pagination-wrap py-3 px-4 has-text-centered">
         {{if gt .Page 1}}
-          <a class="button is-light is-small" href="/?page={{sub .Page 1}}">&larr; Newer</a>
+          <a class="button is-secondary is-small" href="/?page={{sub .Page 1}}">&larr; Prev</a>
         {{end}}
+        {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
         {{if .HasNext}}
-          <a class="button is-light is-small" href="/?page={{add .Page 1}}">Older &rarr;</a>
+          <a class="button is-secondary is-small" href="/?page={{add .Page 1}}">Next &rarr;</a>
         {{end}}
       </div>
+      {{end}}
     {{else}}
       <div class="forum-section py-6 has-text-centered">
-        <p class="has-text-grey mb-4">No threads yet.</p>
+        <p class="muted mb-4">No threads yet.</p>
         {{if .CurrentUser}}
           <a href="/threads/new" class="button is-primary">+ Start the first thread</a>
         {{end}}

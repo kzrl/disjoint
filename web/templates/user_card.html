@@ -29,7 +29,7 @@
       {{end}}
     </div>
 
-    <div class="is-size-7 has-text-grey mb-5">
+    <div class="is-size-7 muted mb-5">
       Joined {{if .CardUser.CreatedAt.Valid}}{{formatTime .CardUser.CreatedAt.Time}}{{end}}
       &bull;
       Last seen {{if .LastSeen}}{{formatRelative .LastSeen}}{{else}}never{{end}}
@@ -47,14 +47,14 @@
       <form method="POST" action="/users/me/profile" enctype="multipart/form-data">
         <div class="is-4 mb-2">Edit profile</div>
         <div class="field">
-          <label for="bio" class="label is-size-7">Bio <span class="has-text-grey is-size-7">(markdown, up to 500 characters)</span></label>
+          <label for="bio" class="label is-size-7">Bio <span class="muted is-size-7">(markdown, up to 500 characters)</span></label>
           <div class="control">
             <textarea id="bio" name="bio" class="textarea" rows="5" maxlength="500">{{.CardUser.Bio.String}}</textarea>
           </div>
         </div>
 
         <div class="field">
-          <label for="avatar" class="label is-size-7">Avatar <span class="has-text-grey is-size-7">(JPG, PNG, or WEBP, up to 5MB)</span></label>
+          <label for="avatar" class="label is-size-7">Avatar <span class="muted is-size-7">(JPG, PNG, or WEBP, up to 5MB)</span></label>
           <div class="control">
             <input type="file" id="avatar" name="avatar" class="input" accept="image/jpeg,image/png,image/webp">
           </div>
@@ -66,7 +66,7 @@
             </label>
           </div>
           {{else}}
-          <div class="control mt-2 has-text-grey is-size-7">
+          <div class="control mt-2 muted is-size-7">
             Your default avatar:
             <img class="avatar avatar-sm" style="vertical-align: middle" src="/avatars/{{.CardUser.Username}}?v={{.CardUser.AvatarNonce}}" alt="Default avatar for {{.CardUser.Username}}">
           </div>
