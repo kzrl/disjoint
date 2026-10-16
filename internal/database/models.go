@@ -19,13 +19,6 @@ type Attachment struct {
 	CreatedAt   sql.NullTime
 }
 
-type Board struct {
-	ID          int64
-	Name        string
-	Description sql.NullString
-	Position    int64
-}
-
 type Invite struct {
 	ID        int64
 	Code      string
@@ -51,13 +44,13 @@ type Session struct {
 }
 
 type Thread struct {
-	ID        int64
-	BoardID   int64
-	UserID    int64
-	Title     string
-	CreatedAt sql.NullTime
-	UpdatedAt sql.NullTime
-	ExpiresAt sql.NullTime
+	ID         int64
+	UserID     int64
+	Title      string
+	CreatedAt  sql.NullTime
+	UpdatedAt  sql.NullTime
+	ExpiresAt  sql.NullTime
+	TtlSeconds sql.NullInt64
 }
 
 type User struct {
@@ -69,12 +62,6 @@ type User struct {
 	Bio          sql.NullString
 	AvatarPath   sql.NullString
 	AvatarNonce  int64
-}
-
-type UserBoardRead struct {
-	UserID     int64
-	BoardID    int64
-	LastReadAt sql.NullTime
 }
 
 type UserPresence struct {

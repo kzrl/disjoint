@@ -1,6 +1,6 @@
 # Disjoint
 
-**Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums (phpBB) with the casual, private, and ephemeral vibe of modern private chat groups.
+**Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums with the casual, private, and ephemeral vibe of modern private chat groups — around a single HackerNews-style front page of threads.
 
 Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-first). Zero external JavaScript frameworks.
 
@@ -8,7 +8,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-
 
 ## Features
 
-- **Topic-Based Organization (phpBB-Style)**: Boards, thread topics, and chronological replies.
+- **Global Front Page**: Every thread lives on one HackerNews-style front page, sorted by creation date (newest first), with a reply count and a preview of each thread's latest comment. No boards, no categories.
+- **Ephemerality Twist (Expiring Threads)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
 - **Ephemerality Twist (Expiring Threads)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). A background worker automatically purges expired threads along with all attachments from disk.
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
 - **Embedded File Attachments & Media**:
@@ -18,7 +19,6 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-
 - **Markdown Support**: Rich formatting, tables, task lists, blockquotes, and code blocks powered by Goldmark with safe HTML rendering.
 - **@User Mentions**: `@username` tokens in posts (and bios) render as tinted pill links to that user's card. Code spans, e-mail addresses, and malformed tokens are never linked.
 - **Quoting Posts**: A `Quote` button on every post inserts a Markdown blockquote — author attribution, the quoted text (capped at 500 chars), and a “view original” permalink — into the reply box. Works on HTMX-appended replies too; no schema change.
-- **Unread Indicators**: Retro-modern `NEW` badges highlight active boards and threads updated since your last visit.
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
 - **Zero-CGO Single Binary**: Pure Go SQLite driver (`modernc.org/sqlite`) and `//go:embed` for static assets and templates.
 - **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.

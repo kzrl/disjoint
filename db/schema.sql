@@ -29,22 +29,14 @@ CREATE TABLE IF NOT EXISTS invites (
 
 CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
 
-CREATE TABLE IF NOT EXISTS boards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    board_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME, -- NULL means no expiration; otherwise, TTL/Hard expiry target
-    FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
+    expires_at DATETIME, -- NULL means no expiration; otherwise, the live expiry deadline (last comment + ttl)
+    ttl_seconds INTEGER, -- Chosen lifespan in seconds; NULL means never expires
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -69,19 +61,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 );
 
--- Track last read timestamps for unread indicators
-CREATE TABLE IF NOT EXISTS user_board_reads (
-    user_id INTEGER NOT NULL,
-    board_id INTEGER NOT NULL,
-    last_read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, board_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
-);
-
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_threads_board_id ON threads(board_id);
-CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_created_at ON threads(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON posts(thread_id);
 CREATE INDEX IF NOT EXISTS idx_threads_expires_at ON threads(expires_at);
 CREATE INDEX IF NOT EXISTS idx_attachments_post_id ON attachments(post_id);

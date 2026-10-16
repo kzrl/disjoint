@@ -24,19 +24,21 @@
 
     <div id="navMenu" class="navbar-menu">
       <div class="navbar-start">
-        {{if .CurrentUser}}{{if .CurrentUser.IsAdmin}}
-          <a href="/boards/new" class="navbar-item">+ New Board</a>
+        {{if .CurrentUser}}
+          <a href="/threads/new" class="navbar-item">+ New Thread</a>
+          {{if .CurrentUser.IsAdmin}}
           <a href="/invites" class="navbar-item">Invites</a>
           <a href="/admin/users" class="navbar-item">Users</a>
-        {{end}}{{end}}
+          {{end}}
+        {{end}}
       </div>
 
       <div class="navbar-end">
         {{if .CurrentUser}}
           <div class="navbar-item">
-            <span class="tag">
+            <span class="tag is-medium">
               <svg class="mr-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-              {{.CurrentUser.Username}}
+              <a href="/users/{{.CurrentUser.Username}}">{{.CurrentUser.Username}}</a>
             </span>
           </div>
           <div class="navbar-item">

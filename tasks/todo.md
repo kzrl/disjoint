@@ -208,3 +208,80 @@ Approach: mentions = stateless goldmark inline parser (link-all valid tokens, co
   - Tests in `TestBoardCreation`: regular user denied GET + POST (redirect `/`, no board created), promoted admin succeeds; navbar link present for admin, absent for regular user on `/`
   - `specs/disjoint.md` §B: documented that board creation is admin-only
   - **Verify:** full suite green with `-race`, `go vet` clean
+
+---
+
+# Task List: Global Front Page (replaces boards)
+
+Plan: [tasks/plan-front-page.md](plan-front-page.md)
+
+Resolved decisions: boards **removed entirely** (tables + routes + unread state); front page = global thread list sorted by created date with **per-thread last-comment preview**; expiry = stored TTL with `expires_at = now + TTL` on every new comment (never = NULL). No voting (non-goal).
+
+### Phase 1 — Foundation
+
+- [x] Task 1: Migration `00010_front_page.sql` + schema snapshot  (DONE)
+  - `threads.ttl_seconds INTEGER` (NULL = never) + backfill from `expires_at − created_at` (computed in the copy)
+  - **Deviation:** `threads` is **rebuilt** (00003 pattern) instead of `ALTER TABLE DROP COLUMN` — SQLite's DROP COLUMN refuses columns declared in a table-level `FOREIGN KEY` clause (00006's style; verified: inline FKs drop fine, table-level FKs fail). Rebuild drops `board_id` + FK, adds `ttl_seconds`
+  - Dropped `boards`, `user_board_reads`; `idx_threads_updated_at`/`idx_threads_board_id` gone, added `idx_threads_created_at` (kept `idx_threads_expires_at` for the worker)
+  - NO TRANSACTION + `PRAGMA foreign_keys OFF/ON`; down is best-effort (placeholder "General" board, `board_id=1`)
+  - `db/schema.sql` snapshot updated (sqlc regen deferred to Task 2 — query.sql still references boards)
+  - Verified: fresh → v10; seeded v9 fixture (2 threads / 4 posts / attachment / reads) → v10 data intact, ttl = 604800/NULL, `PRAGMA foreign_key_check` clean; `goose.DownTo` v9 → re-up idempotent; live `disjoint.db` copy v9 → v10; `go build ./...` green
+
+- [x] Task 2: sqlc query rework  (DONE)
+  - New `ListFrontPageThreads` (created_at DESC, LIMIT/OFFSET, post_count, last-reply via correlated subquery excluding the opening post, anonymity-safe LEFT JOINs)
+  - New `BumpThreadExpiration` (replaces `TouchThread`); `CreateThread` gains `TtlSeconds` / loses `BoardID`; `GetThreadByID` loses board join, gains `ttl_seconds`
+  - Removed all board/board-read/`ListRecentActivity` queries; `sqlc generate` clean — zero board references in `internal/database/`
+
+### Checkpoint: Foundation
+- [x] `go build ./...` green; goose v10 fresh + upgraded (+ down/re-up round trip)
+- [x] Red window closed: all 4 previously-red handler tests reworked and green (Tasks 2–6 landed as one atomic slice — see note below)
+- [x] No generated query references boards
+
+> **Slice consolidation note:** the sqlc regeneration (Task 2) changed the generated
+> `CreateThreadParams`/`GetThreadByIDRow` shapes and deleted the board queries, so the
+> handlers, templates, and test package could not compile until de-boarding happened.
+> Tasks 2–6 therefore landed together in one atomic slice rather than five
+> separately-green commits. All acceptance criteria below were verified in that slice.
+
+### Phase 2 — Core
+
+- [x] Task 3: Front-page handler + template + board removal  (DONE)
+  - `IndexPage` (`internal/handlers/front.go`) → global list (30/page, `?page=N`), on-air strip kept, boards/activity/NEW badges gone
+  - `index.html` rewritten: rank, title, author, created, reply count, last-comment preview (author · time · escaped-plain-text snippet → `#post-{id}` anchor), "No comments yet", "expires in" tag
+  - `boards.go` deleted (BoardPage/NewBoardPage/CreateBoardSubmit); `/boards/*` routes gone (404); `board.html` + `new_board.html` deleted; navbar "+ New Board" → "+ New Thread" (all signed-in users)
+  - Obsolete tests removed: TestUnreadIndicators, TestBoardCreation, TestRecentActivityTicker, TestActivityTickerEmptyState (features gone); remaining tests reworked to `/threads/new`
+  - Smoke-verified live: empty state, thread row with rank/author/expires tag/reply count, snippet + `#post-2` anchor
+
+- [x] Task 4: Global thread creation at `/threads/new`  (DONE)
+  - Routes + handler rewritten (no board); expiration select drives `ttl_seconds` + `expires_at` (never → both NULL)
+  - `new_thread.html` de-boarded; help text now mentions comment-resets-deadline; navbar link wired
+  - Existing TTL/attachment/markdown/unauth tests reworked and green (TestThreadCreationAndHTMXReply, TestMentionRendering, TestAttachmentTypeEnforcementAndServing, TestUnauthorizedHTMXRequest, …)
+
+- [x] Task 5: Expiry reset on reply  (DONE)
+  - `CreatePostSubmit`: `BumpThreadExpiration` (`expires_at = now + ttl`, NULL for never); board-read upsert dropped
+  - New regression test `TestReplyBumpsExpiration`: initial deadline = created+ttl, reply moves deadline to reply+ttl, never-thread stays NULL
+  - Worker purge regression unchanged (TestExpiringThreadsAndWorkerCleanup); live smoke: deadline advanced `00:45:43 → 00:45:58` (+24h) after a reply
+
+- [x] Task 6: Thread-page cleanup  (DONE)
+  - Breadcrumb: Home → Thread became Front Page → Thread; `BoardID`/`BoardName` gone from `thread.html`
+  - `grep -ri board web/templates/ internal/` clean (only remaining hits: reused `board-*` CSS row classes + one code comment)
+
+### Checkpoint: Core
+- [x] Create thread → comment → front page shows it with last-comment preview (live smoke); `/boards/*` → 404
+- [x] `go build ./...` + `go test ./...` green (race run pending at Phase 3)
+
+### Phase 3 — Polish
+
+- [x] Task 7: Docs + final verification  (DONE)
+  - `README.md`: intro rewritten (global front page, no boards), new front-page feature bullet, ephemerality bullet now states the comment-resets-deadline rule, Unread Indicators bullet removed
+  - `specs/disjoint.md`: schema section de-boarded (no `boards`/`user_board_reads`; `threads` shows `ttl_seconds` + the live-deadline comment; indexes match v10), §4B rewritten (front page row contents + global `/threads/new`), §4C documents the TTL-reset-on-activity rule, §4D notes the deadline bump on reply, §4F now "Unread Indicators — Removed" with rationale, directory-structure comment updated
+  - `go test ./... -race` green
+  - Fresh-DB boot: goose 1→10 in one boot, first-run `/setup` flow works, front page renders
+  - Pre-existing-DB boot: faithful copy of live `disjoint.db` (v9, user + 4 boards, WAL included) → migrated v9→v10, user preserved, `boards`/`user_board_reads` gone, front page 200
+  - Themes: dark-first CSS served with the `prefers-color-scheme: light` override; front page uses only theme-aware Bulma/site classes (no JS theme toggle exists — verified by inspection)
+  - Note: `/boards/*` and any other unknown GET render the front page with 200 — the pre-existing `GET /` tree-root catch-all at HEAD (soft-404 design), not a board regression
+
+### Checkpoint: Complete
+- [x] All acceptance criteria met
+- [x] Manual: front page, thread creation, reply resets expiry, worker purge
+- [ ] Review with human

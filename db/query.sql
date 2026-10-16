@@ -17,112 +17,72 @@ WHERE username = ? LIMIT 1;
 SELECT * FROM users
 WHERE id = ? LIMIT 1;
 
--- name: ListBoards :many
-SELECT * FROM boards
-ORDER BY position ASC, id ASC;
-
--- name: GetBoardByID :one
-SELECT * FROM boards
-WHERE id = ? LIMIT 1;
-
--- name: CreateBoard :one
-INSERT INTO boards (
-    name,
-    description,
-    position
-) VALUES (
-    ?, ?, ?
-) RETURNING *;
-
--- name: ListBoardsWithDetails :many
-SELECT 
-    b.id,
-    b.name,
-    b.description,
-    b.position,
-    COUNT(DISTINCT t.id) AS thread_count,
-    COUNT(p.id) AS post_count,
-    CAST(COALESCE(MAX(t.updated_at), '') AS TEXT) AS latest_updated_at
-FROM boards b
-LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
-LEFT JOIN posts p ON p.thread_id = t.id
-GROUP BY b.id
-ORDER BY b.position ASC, b.id ASC;
-
--- name: ListLatestThreadsByBoard :many
--- One row per board: the most recently updated non-expired thread.
--- Replaces a per-board GetLatestThreadForBoard round trip (N+1).
+-- name: ListFrontPageThreads :many
+-- Global front page: non-expired threads, newest first (created_at DESC).
+-- Last-comment columns describe the thread's most recent reply: the newest
+-- post after the opening post (MIN(id) is the opening post, created in the
+-- same transaction as the thread). All NULL when the thread has no replies.
 SELECT 
     t.id,
-    t.board_id,
     t.title,
     t.created_at,
-    t.updated_at,
-    COALESCE(u.username, '') AS author_username
-FROM (
-    SELECT 
-        id, board_id, title, created_at, updated_at, user_id,
-        ROW_NUMBER() OVER (
-            PARTITION BY board_id
-            ORDER BY updated_at DESC, id DESC
-        ) AS rn
-    FROM threads
-    WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
-) t
-LEFT JOIN users u ON t.user_id = u.id
-WHERE t.rn = 1
-ORDER BY t.board_id ASC;
-
--- name: ListThreadsByBoard :many
-SELECT 
-    t.id,
-    t.board_id,
-    t.user_id,
-    t.title,
-    t.created_at,
-    t.updated_at,
     t.expires_at,
+    t.ttl_seconds,
     COALESCE(u.username, '') AS author_username,
-    COUNT(p.id) AS post_count
+    COUNT(p.id) AS post_count,
+    lc.id AS last_comment_id,
+    lc.body AS last_comment_body,
+    lc.created_at AS last_comment_at,
+    COALESCE(lcu.username, '') AS last_comment_author
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
 LEFT JOIN posts p ON p.thread_id = t.id
-WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
+LEFT JOIN posts lc ON lc.id = (
+    SELECT MAX(p2.id)
+    FROM posts p2
+    WHERE p2.thread_id = t.id
+      AND p2.id > (SELECT MIN(p3.id) FROM posts p3 WHERE p3.thread_id = t.id)
+)
+LEFT JOIN users lcu ON lc.user_id = lcu.id
+WHERE t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP
 GROUP BY t.id
-ORDER BY t.updated_at DESC;
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT ? OFFSET ?;
 
 -- name: GetThreadByID :one
 SELECT 
     t.id,
-    t.board_id,
     t.user_id,
     t.title,
     t.created_at,
     t.updated_at,
     t.expires_at,
+    t.ttl_seconds,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
-    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce,
-    b.name AS board_name
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
-JOIN boards b ON t.board_id = b.id
 WHERE t.id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LIMIT 1;
 
 -- name: CreateThread :one
 INSERT INTO threads (
-    board_id,
     user_id,
     title,
-    expires_at
+    expires_at,
+    ttl_seconds
 ) VALUES (
     ?, ?, ?, ?
 ) RETURNING *;
 
--- name: TouchThread :exec
+-- name: BumpThreadExpiration :exec
+-- Called after every new post: advances updated_at and, for TTL threads,
+-- pushes the expiry deadline out to last-comment + ttl (computed in Go).
+-- Never-threads pass a NULL expires_at and stay NULL.
 UPDATE threads
-SET updated_at = CURRENT_TIMESTAMP
+SET updated_at = CURRENT_TIMESTAMP,
+    expires_at = ?
 WHERE id = ?;
 
 -- name: DeleteThread :exec
@@ -195,21 +155,6 @@ FROM attachments a
 JOIN posts p ON a.post_id = p.id
 WHERE p.thread_id = ?
 ORDER BY a.id ASC;
-
--- name: UpsertUserBoardRead :exec
-INSERT INTO user_board_reads (user_id, board_id, last_read_at)
-VALUES (?, ?, CURRENT_TIMESTAMP)
-ON CONFLICT(user_id, board_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP;
-
--- name: GetUserBoardRead :one
-SELECT last_read_at
-FROM user_board_reads
-WHERE user_id = ? AND board_id = ? LIMIT 1;
-
--- name: ListUserBoardReads :many
-SELECT board_id, last_read_at
-FROM user_board_reads
-WHERE user_id = ?;
 
 -- name: SetUserAdmin :exec
 UPDATE users SET is_admin = 1 WHERE id = ?;
@@ -289,23 +234,6 @@ UPDATE users SET avatar_path = NULL WHERE id = ?;
 
 -- name: SetUserAvatarNonce :exec
 UPDATE users SET avatar_nonce = ? WHERE id = ?;
-
--- name: ListRecentActivity :many
-SELECT
-    p.id,
-    p.created_at,
-    COALESCE(u.username, '') AS author_username,
-    t.id AS thread_id,
-    t.title AS thread_title,
-    t.board_id AS board_id,
-    b.name AS board_name
-FROM posts p
-LEFT JOIN users u ON p.user_id = u.id
-JOIN threads t ON p.thread_id = t.id
-JOIN boards b ON t.board_id = b.id
-WHERE t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP
-ORDER BY p.created_at DESC, p.id DESC
-LIMIT ?;
 
 -- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?);

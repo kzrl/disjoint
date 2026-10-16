@@ -1,13 +1,5 @@
 {{define "content"}}
 <div>
-  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
-    <ul>
-      <li><a href="/">Home</a></li>
-      <li class="is-active" aria-current="page"><a>Board Index</a></li>
-    </ul>
-  </nav>
-
-
   {{if .Online}}
     <div class="on-air">
       <span class="on-air-dot" aria-hidden="true"></span>
@@ -20,67 +12,60 @@
     <div class="on-air on-air-empty">No one else is on the air</div>
   {{end}}
 
-  {{if .Boards}}
-    <section class="card forum-section mb-5">
-      <div class="card-header">
-        <p class="card-header-title">Boards</p>
-      </div>
+  <section class="card forum-section my-5">
+    <div class="card-header">
+      <p class="card-header-title">Threads</p>
+      {{if .CurrentUser}}
+        <a class="card-header-icon" href="/threads/new" title="Start a new thread" aria-label="Start a new thread">+</a>
+      {{end}}
+    </div>
+    {{if .Threads}}
       <div>
-        {{range .Boards}}
+        {{range .Threads}}
           <div class="board-row">
             <div class="board-main">
               <div class="board-title">
-                {{if .IsUnread}}
-                  <span class="tag is-warning">NEW</span>
+                <span class="is-size-6 has-text-grey front-rank">{{.Rank}}.</span>
+                <a href="/threads/{{.Row.ID}}">{{.Row.Title}}</a>
+                {{if .Row.ExpiresAt.Valid}}
+                  <span class="tag is-light" title="This thread expires automatically">{{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
-                <a href="/boards/{{.Board.ID}}">{{.Board.Name}}</a>
               </div>
-              {{if .Board.Description.Valid}}
-                <div class="board-desc">{{.Board.Description.String}}</div>
-              {{end}}
+              <div class="board-desc">
+                by <strong>{{userLink .Row.AuthorUsername}}</strong> &bull; <time>{{formatRelative .Row.CreatedAt.Time}}</time>
+              </div>
             </div>
             <div class="board-stats">
-              <div><strong>{{.ThreadCount}}</strong> threads</div>
-              <div><strong>{{.PostCount}}</strong> posts</div>
+              <div><strong>{{.ReplyCount}}</strong> {{if eq .ReplyCount 1}}comment{{else}}comments{{end}}</div>
             </div>
             <div class="board-latest">
-              {{if .LatestThread}}
-                <a href="/threads/{{.LatestThread.ID}}" class="latest-title" title="{{.LatestThread.Title}}">{{.LatestThread.Title}}</a>
-                <div>by <strong>{{userLink .LatestThread.AuthorUsername}}</strong> &bull; <time>{{formatRelative .LatestThread.UpdatedAt.Time}}</time></div>
+              {{if .Row.LastCommentID.Valid}}
+                <div class="board-latest-author">
+                  {{userLink .Row.LastCommentAuthor}} &bull; <time>{{formatRelative .Row.LastCommentAt.Time}}</time>
+                </div>
+                <a href="/threads/{{.Row.ID}}#post-{{.Row.LastCommentID.Int64}}" class="latest-title" title="View the latest comment">&#8220;{{.Snippet}}&#8221;</a>
               {{else}}
-                <span class="has-text-grey">No threads yet</span>
+                <span class="has-text-grey">No comments yet</span>
               {{end}}
             </div>
           </div>
         {{end}}
       </div>
-    </section>
-  {{else}}
-    <div class="card forum-section py-6 has-text-centered">
-      <p class="has-text-grey mb-4">No boards yet.</p>
-      {{if .CurrentUser}}{{if .CurrentUser.IsAdmin}}
-      <a href="/boards/new" class="button is-primary">+ Create First Board</a>
-      {{end}}{{end}}
-    </div>
-  {{end}}
-
-  <section class="card forum-section">
-    <div class="card-header">
-      <p class="card-header-title">Recent activity</p>
-    </div>
-    {{if .Activity}}
-      <ul class="activity-list">
-        {{range .Activity}}
-          <li>
-            {{userLink .AuthorUsername}} posted in
-            <a href="/boards/{{.BoardID}}">{{.BoardName}}</a> &bull;
-            <a href="/threads/{{.ThreadID}}">{{.ThreadTitle}}</a>
-            <span class="is-size-7 has-text-grey">&middot; {{formatRelative .CreatedAt.Time}}</span>
-          </li>
+      <div class="pagination-wrap py-3 px-4">
+        {{if gt .Page 1}}
+          <a class="button is-light is-small" href="/?page={{sub .Page 1}}">&larr; Newer</a>
         {{end}}
-      </ul>
+        {{if .HasNext}}
+          <a class="button is-light is-small" href="/?page={{add .Page 1}}">Older &rarr;</a>
+        {{end}}
+      </div>
     {{else}}
-      <p class="activity-empty">No activity yet</p>
+      <div class="forum-section py-6 has-text-centered">
+        <p class="has-text-grey mb-4">No threads yet.</p>
+        {{if .CurrentUser}}
+          <a href="/threads/new" class="button is-primary">+ Start the first thread</a>
+        {{end}}
+      </div>
     {{end}}
   </section>
 </div>

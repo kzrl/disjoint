@@ -35,22 +35,14 @@ CREATE TABLE users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE boards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    position INTEGER NOT NULL DEFAULT 0
-);
-
 CREATE TABLE threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    board_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME, -- NULL means no expiration; otherwise, TTL/Hard expiry target
-    FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
+    expires_at DATETIME, -- NULL means no expiration; otherwise the live expiry deadline (last comment + ttl_seconds)
+    ttl_seconds INTEGER, -- NULL means never; otherwise the stored lifespan in seconds, reset onto expires_at by every new comment
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -75,19 +67,8 @@ CREATE TABLE attachments (
     FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 );
 
--- Track last read timestamps for unread indicators
-CREATE TABLE user_board_reads (
-    user_id INTEGER NOT NULL,
-    board_id INTEGER NOT NULL,
-    last_read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, board_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
-);
-
 -- Indexes for performance
-CREATE INDEX idx_threads_board_id ON threads(board_id);
-CREATE INDEX idx_threads_updated_at ON threads(updated_at DESC);
+CREATE INDEX idx_threads_created_at ON threads(created_at DESC);
 CREATE INDEX idx_posts_thread_id ON posts(thread_id);
 CREATE INDEX idx_threads_expires_at ON threads(expires_at);
 CREATE INDEX idx_attachments_post_id ON attachments(post_id);
@@ -101,17 +82,15 @@ A. Authentication & Security
 
     Access Control: All application routes require an active authenticated session.
 
-B. Structure & Organization (phpBB Style)
+B. Structure & Organization (Global Front Page)
 
-    Index View (/): Displays boards with descriptions, and a summary preview of the latest thread in each board.
+    Front Page (/): A single global list of all non-expired threads, sorted by creation date (newest first), paginated 30 per page (?page=N). Each row shows the thread title (with a dim "expires in …" tag for TTL threads), author, creation time, reply count, and a preview of the thread's most recent comment: author, relative time, and an escaped plain-text snippet (whitespace-flattened, ~120 chars) that links to the /threads/{id}#post-{id} anchor. Threads without replies show "No comments yet". The page also carries an "On the air" strip of users seen within the last 5 minutes.
 
-    Board View (/boards/{id}): Lists threads belonging to that board, sorted by updated_at DESC. Displays thread title, author, reply count, creation time, and expiration status.
-
-    Board Creation is admin-only: GET/POST /boards/new require an administrator (non-admins are redirected home with an error flash), and the "+ New Board" navbar link (and the empty-index CTA) render only for admins.
-
-    Thread Creation (/boards/{id}/threads/new): Form to create a thread with a title, initial post body, optional file attachments, and an expiration selection (e.g., 24 hours, 3 days, 7 days, 30 days, or Never).
+    Thread Creation (/threads/new): Global — there are no boards. Form to create a thread with a title, initial post body, optional file attachments, and an expiration selection (e.g., 24 hours, 3 days, 7 days, 30 days, or Never). The selection is stored as threads.ttl_seconds (NULL for Never) and the live deadline expires_at = created_at + ttl (NULL for Never).
 
 C. The Ephemerality Twist (Expiring Threads)
+
+    TTL reset on activity: threads carry a stored lifespan (ttl_seconds) and a live deadline (expires_at). On creation, expires_at = created_at + ttl. On every new comment the handler re-sets expires_at = now + ttl (NULL stays NULL for never-threads), so an active thread keeps living and only dies after ttl of silence. All expiry predicates and the worker operate exclusively on expires_at, so nothing else needs to know about the TTL.
 
     Background Worker: A Go goroutine running on a ticker (e.g., every 5 minutes) that executes a cleanup query:
     SQL
@@ -132,7 +111,7 @@ D. Thread View & Interaction (HTMX Enhanced)
 
         HTMX appends the new response to the post container (hx-swap="beforeend"), updating the thread live without a full page reload.
 
-        The thread's updated_at timestamp is updated on insertion.
+        The thread's updated_at timestamp is updated on insertion, and for TTL threads the expiry deadline is pushed out to now + ttl (never-threads keep a NULL deadline).
 
     Markdown Support: Parse post bodies using a Go Markdown library (e.g., [github.com/yuin/goldmark](https://github.com/yuin/goldmark)) to support basic text formatting, lists, quotes, and code blocks. Goldmark runs with the GFM extension (tables, strikethrough, autolinks, task lists), hard line wraps, and raw HTML neutralized. The same pipeline renders post bodies and user-card bios.
 
@@ -164,11 +143,9 @@ E. File Uploads & Media Rendering
 
         Other files render as a clean downloadable file card.
 
-F. Unread Indicators
+F. Unread Indicators — Removed
 
-    When a user views a board or thread, update their timestamp in user_board_reads.
-
-    Compare threads.updated_at against user_board_reads.last_read_at to render an unread indicator badge on active boards and threads.
+    The retro-modern NEW badges tracked per-board read timestamps (user_board_reads) and were removed along with boards: with a single global front page there is no board to mark as read, and no per-user read state is kept. The front page itself (newest first, with last-comment previews) is the replacement for at-a-glance activity.
 
 5. Suggested Project Directory Structure
 Plaintext
@@ -179,7 +156,7 @@ disjoint/
 │       └── main.go          # Entrypoint, server setup, router wiring, worker init
 ├── internal/
 │   ├── database/            # sqlc generated files & database connection helpers
-│   ├── handlers/            # HTTP handlers (auth, boards, threads, posts, uploads)
+│   ├── handlers/            # HTTP handlers (auth, front page, threads, posts, uploads)
 │   ├── middleware/          # Auth session validation middleware
 │   └── worker/              # Background goroutine for expiring threads cleanup
 ├── db/

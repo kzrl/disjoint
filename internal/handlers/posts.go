@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -107,13 +108,18 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Touch thread to update updated_at timestamp
-	_ = app.queries.TouchThread(ctx, thread.ID)
-
-	// 4. Update user board read timestamp
-	_ = app.queries.UpsertUserBoardRead(ctx, database.UpsertUserBoardReadParams{
-		UserID:  user.ID,
-		BoardID: thread.BoardID,
+	// 3. Bump the thread: advance updated_at and, for TTL threads, push the
+	// expiry deadline out to last-comment + ttl (never-threads stay NULL).
+	var newExpiry sql.NullTime
+	if thread.TtlSeconds.Valid {
+		newExpiry = sql.NullTime{
+			Time:  time.Now().UTC().Add(time.Duration(thread.TtlSeconds.Int64) * time.Second),
+			Valid: true,
+		}
+	}
+	_ = app.queries.BumpThreadExpiration(ctx, database.BumpThreadExpirationParams{
+		ExpiresAt: newExpiry,
+		ID:        thread.ID,
 	})
 
 	// If HTMX request, render and return the single post partial

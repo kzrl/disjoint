@@ -327,14 +327,7 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	}
 	authCookie := authCookieFor(t, queries, admin.ID)
 
-	// 2. Fetch seeded board
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-
-	// 3. Create a thread with an attachment
+	// 2. Create a thread with an attachment
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 	_ = w.WriteField("title", "My First Discussion")
@@ -348,7 +341,7 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	_, _ = part.Write([]byte("\xFF\xD8\xFF\xE0\x00\x10JFIFfakeimagedata"))
 	_ = w.Close()
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.AddCookie(authCookie)
 	rr := httptest.NewRecorder()
@@ -462,12 +455,6 @@ func TestMentionRendering(t *testing.T) {
 	}
 	authCookie := authCookieFor(t, queries, bob.ID)
 
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got err: %v", err)
-	}
-	boardID := boards[0].ID
-
 	// Thread body exercises: a real mention, an unknown mention (link-all
 	// behavior: it still links, and 404s at the user card), an e-mail
 	// address (must NOT become a mention), and a code span (must NOT).
@@ -479,7 +466,7 @@ func TestMentionRendering(t *testing.T) {
 	_ = w.WriteField("body", body)
 	_ = w.Close()
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &buf)
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &buf)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.AddCookie(authCookie)
 	rr := httptest.NewRecorder()
@@ -583,16 +570,13 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
-	boards, _ := queries.ListBoards(ctx)
-	boardID := boards[0].ID
-
 	// Create a thread that is already expired (expires_at in past)
 	pastTime := time.Now().UTC().Add(-1 * time.Hour).Round(0)
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID:   boardID,
-		UserID:    u.ID,
-		Title:     "Expired Thread",
-		ExpiresAt: sql.NullTime{Time: pastTime, Valid: true},
+		UserID:     u.ID,
+		Title:      "Expired Thread",
+		ExpiresAt:  sql.NullTime{Time: pastTime, Valid: true},
+		TtlSeconds: sql.NullInt64{Int64: 3600, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("failed to create expired thread: %v", err)
@@ -649,158 +633,86 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 	}
 }
 
-func TestUnreadIndicators(t *testing.T) {
-	_, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	// Create two users
-	u1, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "user1", PasswordHash: "h1"})
-	u2, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "user2", PasswordHash: "h2"})
-
-	boards, _ := queries.ListBoards(ctx)
-	board := boards[0]
-
-	// User2 marks board as read in the past
-	_, _ = db.Exec("INSERT INTO user_board_reads (user_id, board_id, last_read_at) VALUES (?, ?, datetime('now', '-1 minute'))", u2.ID, board.ID)
-
-	// User1 creates a new thread
-	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID:   board.ID,
-		UserID:    u1.ID,
-		Title:     "New unread discussion",
-		ExpiresAt: sql.NullTime{Valid: false},
-	})
-	if err != nil {
-		t.Fatalf("failed to create thread: %v", err)
-	}
-	_, _ = queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: thread.ID,
-		UserID:   u1.ID,
-		Body:     "Unread post content",
-	})
-
-	// Verify that user2 sees board as unread
-	boardDetails, err := queries.ListBoardsWithDetails(ctx)
-	if err != nil {
-		t.Fatalf("failed to query board details: %v", err)
-	}
-	var targetBoard *database.ListBoardsWithDetailsRow
-	for _, b := range boardDetails {
-		if b.ID == board.ID {
-			targetBoard = &b
-			break
-		}
-	}
-	if targetBoard == nil {
-		t.Fatalf("expected board in details")
-	}
-
-	read, err := queries.GetUserBoardRead(ctx, database.GetUserBoardReadParams{
-		UserID:  u2.ID,
-		BoardID: board.ID,
-	})
-	if err != nil || !read.Valid {
-		t.Fatalf("expected valid last read")
-	}
-
-	latestTime, ok := targetBoard.LatestUpdatedTime()
-	if !ok {
-		t.Fatalf("failed to parse latest updated timestamp: %#v", targetBoard.LatestUpdatedAt)
-	}
-	if !latestTime.After(read.Time) {
-		t.Fatalf("expected latest updated time %v to be after last read time %v", latestTime, read.Time)
-	}
-}
-
-func TestBoardCreation(t *testing.T) {
+// TestReplyBumpsExpiration verifies the TTL reset rule: every new post pushes
+// the thread's expiry deadline out to last-comment + ttl, while never-threads
+// keep a NULL deadline.
+func TestReplyBumpsExpiration(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
 	defer db.Close()
 	router := app.Routes()
 	ctx := context.Background()
 
-	// Board creation is admin-only: a regular user is denied the page and
-	// the POST, and no board is created.
-	regular, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "moderator", PasswordHash: "hash"})
-	regularCookie := authCookieFor(t, queries, regular.ID)
+	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "bump", PasswordHash: "h"})
+	authCookie := authCookieFor(t, queries, user.ID)
 
-	req := httptest.NewRequest(http.MethodGet, "/boards/new", nil)
-	req.AddCookie(regularCookie)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
-		t.Fatalf("expected non-admin GET /boards/new to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	ttl := time.Hour
+	created := time.Now().UTC().Round(0)
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID:     user.ID,
+		Title:      "Bump Thread",
+		ExpiresAt:  sql.NullTime{Time: created.Add(ttl), Valid: true},
+		TtlSeconds: sql.NullInt64{Int64: int64(ttl.Seconds()), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("failed to create thread: %v", err)
 	}
 
-	bForm := url.Values{}
-	bForm.Set("name", "Denied Board")
-	bForm.Set("description", "A regular user must not be able to create this.")
-	req = httptest.NewRequest(http.MethodPost, "/boards/new", strings.NewReader(bForm.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(regularCookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
-		t.Fatalf("expected non-admin POST /boards/new to redirect to /, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	// A never-expiring control thread.
+	never, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID:    user.ID,
+		Title:     "Never Thread",
+		ExpiresAt: sql.NullTime{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("failed to create never thread: %v", err)
 	}
-	if boards, err := queries.ListBoards(ctx); err == nil {
-		for _, b := range boards {
-			if b.Name == "Denied Board" {
-				t.Fatalf("regular user's POST /boards/new must not create a board")
-			}
+
+	reply := func(threadID int64) {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		_ = w.WriteField("body", "a reply")
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", threadID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(authCookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected reply redirect, got %d, body: %s", rr.Code, rr.Body.String())
 		}
 	}
 
-	// The same user, promoted to admin, can create boards.
-	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "board_admin", PasswordHash: "hash"})
-	if err := queries.SetUserAdmin(ctx, user.ID); err != nil {
-		t.Fatalf("failed to set admin: %v", err)
-	}
-	authCookie := authCookieFor(t, queries, user.ID)
-
-	// Create Board via POST /boards/new
-	bForm.Set("name", "Retro Games")
-	bForm.Set("description", "Talk about NES, SNES, and retro arcade titles.")
-	req = httptest.NewRequest(http.MethodPost, "/boards/new", strings.NewReader(bForm.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(authCookie)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("expected redirect after board creation, got %d", rr.Code)
-	}
-	newBoardLoc := rr.Header().Get("Location")
-	if !strings.HasPrefix(newBoardLoc, "/boards/") {
-		t.Fatalf("expected redirect to /boards/{id}, got %s", newBoardLoc)
-	}
-
-	newBoardID, err := strconv.ParseInt(strings.TrimPrefix(newBoardLoc, "/boards/"), 10, 64)
+	before, err := queries.GetThreadByID(ctx, thread.ID)
 	if err != nil {
-		t.Fatalf("expected numeric board id in redirect, got %q: %v", newBoardLoc, err)
+		t.Fatalf("failed to load thread: %v", err)
 	}
-	newBoard, err := queries.GetBoardByID(ctx, newBoardID)
-	if err != nil {
-		t.Fatalf("board %d was not found in DB: %v", newBoardID, err)
-	}
-	if newBoard.Name != "Retro Games" {
-		t.Fatalf("expected board name Retro Games, got %s", newBoard.Name)
+	if !before.ExpiresAt.Valid || !before.ExpiresAt.Time.Equal(created.Add(ttl)) {
+		t.Fatalf("expected initial deadline at created+ttl, got %v", before.ExpiresAt.Time)
 	}
 
-	// Navbar: the "+ New Board" link is rendered for admins only.
-	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(authCookie)
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `href="/boards/new"`) {
-		t.Errorf("admin navbar should contain the + New Board link (status %d)", rr.Code)
+	time.Sleep(1200 * time.Millisecond) // make the bump observable
+	reply(thread.ID)
+
+	after, err := queries.GetThreadByID(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("failed to load thread after reply: %v", err)
 	}
-	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(regularCookie)
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), `href="/boards/new"`) {
-		t.Errorf("regular user's navbar must not contain the + New Board link (status %d)", rr.Code)
+	if !after.ExpiresAt.Valid || !after.ExpiresAt.Time.After(before.ExpiresAt.Time) {
+		t.Fatalf("expected expiry bumped forward, got %v (was %v)", after.ExpiresAt.Time, before.ExpiresAt.Time)
+	}
+	// The new deadline must be reply+ttl, i.e. strictly after created+ttl.
+	if after.ExpiresAt.Time.Before(created.Add(ttl + time.Second)) {
+		t.Fatalf("expected new deadline ~now+ttl, got %v", after.ExpiresAt.Time)
+	}
+
+	reply(never.ID)
+	afterNever, err := queries.GetThreadByID(ctx, never.ID)
+	if err != nil {
+		t.Fatalf("failed to load never thread: %v", err)
+	}
+	if afterNever.ExpiresAt.Valid {
+		t.Fatalf("never-thread must keep NULL expires_at, got %v", afterNever.ExpiresAt.Time)
 	}
 }
 
@@ -835,9 +747,7 @@ func TestStandardFormReplyFallback(t *testing.T) {
 	user, _ := queries.CreateUser(ctx, database.CreateUserParams{Username: "dan", PasswordHash: "h"})
 	authCookie := authCookieFor(t, queries, user.ID)
 
-	boards, _ := queries.ListBoards(ctx)
 	thread, _ := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID:   boards[0].ID,
 		UserID:    user.ID,
 		Title:     "Fallback Test",
 		ExpiresAt: sql.NullTime{Valid: false},
@@ -1107,13 +1017,9 @@ func TestUserCardPageAndProfile(t *testing.T) {
 	cookie := authCookieFor(t, queries, user.ID)
 
 	// Seed: 2 attributed posts
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got %v", err)
-	}
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: boards[0].ID, UserID: user.ID,
-		Title: "card thread", ExpiresAt: sql.NullTime{},
+		UserID: user.ID,
+		Title:  "card thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1259,117 +1165,6 @@ func TestUsernameCharsetValidation(t *testing.T) {
 		t.Fatalf("expected 1 user after valid setup, got %d (err %v)", n, err)
 	}
 }
-
-func TestRecentActivityTicker(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-
-	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "ticker_alice", PasswordHash: "hash"})
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	cookie := authCookieFor(t, queries, alice.ID)
-
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards, got %v", err)
-	}
-	board := boards[0]
-
-	// Attributed thread + post
-	attribThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: board.ID, UserID: alice.ID,
-		Title: "ticker thread", ExpiresAt: sql.NullTime{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: attribThread.ID, UserID: alice.ID,
-		Body: "hello",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Expired thread's post must not appear
-	expiredThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: board.ID, UserID: alice.ID,
-		Title: "expired thread", ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
-		ThreadID: expiredThread.ID, UserID: alice.ID,
-		Body: "gone soon",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("GET / returned %d", rr.Code)
-	}
-	body := rr.Body.String()
-
-	if !strings.Contains(body, "Recent activity") {
-		t.Fatalf("homepage missing Recent activity section:\n%s", body)
-	}
-	// Attributed entry links the author card and the thread
-	if !strings.Contains(body, `/users/ticker_alice`) || !strings.Contains(body, "posted in") {
-		t.Errorf("expected attributed activity entry with author link:\n%s", body)
-	}
-	if !strings.Contains(body, `/threads/`) {
-		t.Errorf("expected thread links in activity entries:\n%s", body)
-	}
-	// Expired thread is absent
-	if strings.Contains(body, "expired thread") {
-		t.Errorf("expired thread should not appear in activity ticker:\n%s", body)
-	}
-	// Cap: 10 entries max (only 1 non-expired entry exists; assert the query honors limit)
-	rows, err := queries.ListRecentActivity(ctx, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Errorf("ListRecentActivity(limit=5) returned %d rows, want 1", len(rows))
-	}
-}
-
-func TestActivityTickerEmptyState(t *testing.T) {
-	app, db, queries, _ := setupTestApp(t)
-	defer db.Close()
-	router := app.Routes()
-	ctx := context.Background()
-
-	if _, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "empty_home", PasswordHash: "hash"}); err != nil {
-		t.Fatal(err)
-	}
-	// Wipe any seeded posts so the ticker is truly empty
-	if _, err := db.Exec("DELETE FROM posts"); err != nil {
-		t.Fatal(err)
-	}
-	cookie := authCookieFor(t, queries, 1)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("GET / returned %d", rr.Code)
-	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "No activity yet") {
-		t.Errorf("expected 'No activity yet' empty state:\n%s", body)
-	}
-}
-
-// ---- User avatar uploads ----
 
 var (
 	pngBytes  = append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, make([]byte, 64)...)
@@ -1539,13 +1334,9 @@ func TestUserAvatarUploads(t *testing.T) {
 	}
 
 	// 6. Avatar renders next to attributed posts on the thread page.
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatal("expected seeded boards")
-	}
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: boards[0].ID, UserID: user.ID,
-		Title: "avatar thread", ExpiresAt: sql.NullTime{},
+		UserID: user.ID,
+		Title:  "avatar thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1600,7 +1391,7 @@ func TestUserAvatarUploads(t *testing.T) {
 	}
 }
 
-func postThreadWithFile(t *testing.T, router http.Handler, cookie *http.Cookie, boardID int64, filename string, content []byte) *httptest.ResponseRecorder {
+func postThreadWithFile(t *testing.T, router http.Handler, cookie *http.Cookie, filename string, content []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
@@ -1615,7 +1406,7 @@ func postThreadWithFile(t *testing.T, router http.Handler, cookie *http.Cookie, 
 	}
 	_ = w.Close()
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/boards/%d/threads/new", boardID), &b)
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
@@ -1695,13 +1486,9 @@ func TestDefaultPixelAvatars(t *testing.T) {
 	}
 
 	// 4. Thread page shows the small default avatar next to the author.
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatal("expected seeded boards")
-	}
 	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
-		BoardID: boards[0].ID, UserID: user.ID,
-		Title: "pixel thread", ExpiresAt: sql.NullTime{},
+		UserID: user.ID,
+		Title:  "pixel thread", ExpiresAt: sql.NullTime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1800,19 +1587,13 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 	}
 	authCookie := authCookieFor(t, queries, user.ID)
 
-	boards, err := queries.ListBoards(ctx)
-	if err != nil || len(boards) == 0 {
-		t.Fatalf("expected seeded boards: %v", err)
-	}
-	boardID := boards[0].ID
-
 	// 1. Detected HTML content is rejected outright, with no thread left
 	// behind and no file on disk.
-	threadsBefore, err := queries.ListThreadsByBoard(ctx, boardID)
-	if err != nil {
-		t.Fatalf("failed to list threads: %v", err)
+	var threadsBefore int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM threads`).Scan(&threadsBefore); err != nil {
+		t.Fatalf("failed to count threads: %v", err)
 	}
-	rr := postThreadWithFile(t, router, authCookie, boardID, "evil.html",
+	rr := postThreadWithFile(t, router, authCookie, "evil.html",
 		[]byte("<html><body><script>alert(1)</script></body></html>"))
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected redirect back to the form, got %d", rr.Code)
@@ -1820,7 +1601,11 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "/threads/new") {
 		t.Fatalf("expected redirect to the thread form, got %s", loc)
 	}
-	if n, _ := queries.ListThreadsByBoard(ctx, boardID); len(n) != len(threadsBefore) {
+	var nAfter int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM threads`).Scan(&nAfter); err != nil {
+		t.Fatalf("failed to count threads: %v", err)
+	}
+	if nAfter != threadsBefore {
 		t.Fatalf("rejected upload must not create a thread")
 	}
 	if files := listUploadFiles(t, uploadDir); len(files) != 0 {
@@ -1830,7 +1615,7 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 	// 2. Content that sniffs as text/plain but carries an HTML-ish name
 	// must be stored with the .txt extension derived from the sniffed type,
 	// never the user-chosen .html — so it can never be served as a page.
-	rr = postThreadWithFile(t, router, authCookie, boardID, "sneaky.html",
+	rr = postThreadWithFile(t, router, authCookie, "sneaky.html",
 		[]byte("plain words only, no magic bytes at all"))
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected thread create redirect, got %d", rr.Code)
@@ -1855,7 +1640,7 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 
 	// 3. Real JPEG content (user named it .bin) is stored as .jpg and
 	// served inline.
-	rr = postThreadWithFile(t, router, authCookie, boardID, "photo.bin",
+	rr = postThreadWithFile(t, router, authCookie, "photo.bin",
 		[]byte("\xFF\xD8\xFF\xE0\x00\x10JFIFfakeimagedata"))
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected thread create redirect, got %d", rr.Code)
@@ -1882,12 +1667,16 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 
 	// 4. Content outside the allowlist entirely (zip magic) is rejected and
 	// leaves no orphaned thread behind.
-	rr = postThreadWithFile(t, router, authCookie, boardID, "archive.zip",
+	rr = postThreadWithFile(t, router, authCookie, "archive.zip",
 		[]byte("PK\x03\x04zipzipzip"))
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected redirect back to the form, got %d", rr.Code)
 	}
-	if n, _ := queries.ListThreadsByBoard(ctx, boardID); len(n) != len(threadsBefore)+2 {
+	var nFinal int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM threads`).Scan(&nFinal); err != nil {
+		t.Fatalf("failed to count threads: %v", err)
+	}
+	if nFinal != threadsBefore+2 {
 		t.Fatalf("rejected zip upload must not create a thread")
 	}
 }

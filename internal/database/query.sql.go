@@ -11,6 +11,26 @@ import (
 	"time"
 )
 
+const bumpThreadExpiration = `-- name: BumpThreadExpiration :exec
+UPDATE threads
+SET updated_at = CURRENT_TIMESTAMP,
+    expires_at = ?
+WHERE id = ?
+`
+
+type BumpThreadExpirationParams struct {
+	ExpiresAt sql.NullTime
+	ID        int64
+}
+
+// Called after every new post: advances updated_at and, for TTL threads,
+// pushes the expiry deadline out to last-comment + ttl (computed in Go).
+// Never-threads pass a NULL expires_at and stay NULL.
+func (q *Queries) BumpThreadExpiration(ctx context.Context, arg BumpThreadExpirationParams) error {
+	_, err := q.db.ExecContext(ctx, bumpThreadExpiration, arg.ExpiresAt, arg.ID)
+	return err
+}
+
 const consumeInvite = `-- name: ConsumeInvite :execrows
 UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL
 `
@@ -93,34 +113,6 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 	return i, err
 }
 
-const createBoard = `-- name: CreateBoard :one
-INSERT INTO boards (
-    name,
-    description,
-    position
-) VALUES (
-    ?, ?, ?
-) RETURNING id, name, description, position
-`
-
-type CreateBoardParams struct {
-	Name        string
-	Description sql.NullString
-	Position    int64
-}
-
-func (q *Queries) CreateBoard(ctx context.Context, arg CreateBoardParams) (Board, error) {
-	row := q.db.QueryRowContext(ctx, createBoard, arg.Name, arg.Description, arg.Position)
-	var i Board
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Description,
-		&i.Position,
-	)
-	return i, err
-}
-
 const createInvite = `-- name: CreateInvite :one
 INSERT INTO invites (code, created_by) VALUES (?, ?) RETURNING id, code, created_by, used_by, created_at, used_at
 `
@@ -190,38 +182,38 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 
 const createThread = `-- name: CreateThread :one
 INSERT INTO threads (
-    board_id,
     user_id,
     title,
-    expires_at
+    expires_at,
+    ttl_seconds
 ) VALUES (
     ?, ?, ?, ?
-) RETURNING id, board_id, user_id, title, created_at, updated_at, expires_at
+) RETURNING id, user_id, title, created_at, updated_at, expires_at, ttl_seconds
 `
 
 type CreateThreadParams struct {
-	BoardID   int64
-	UserID    int64
-	Title     string
-	ExpiresAt sql.NullTime
+	UserID     int64
+	Title      string
+	ExpiresAt  sql.NullTime
+	TtlSeconds sql.NullInt64
 }
 
 func (q *Queries) CreateThread(ctx context.Context, arg CreateThreadParams) (Thread, error) {
 	row := q.db.QueryRowContext(ctx, createThread,
-		arg.BoardID,
 		arg.UserID,
 		arg.Title,
 		arg.ExpiresAt,
+		arg.TtlSeconds,
 	)
 	var i Thread
 	err := row.Scan(
 		&i.ID,
-		&i.BoardID,
 		&i.UserID,
 		&i.Title,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.TtlSeconds,
 	)
 	return i, err
 }
@@ -349,23 +341,6 @@ func (q *Queries) GetAttachmentsForExpiredThreads(ctx context.Context) ([]GetAtt
 	return items, nil
 }
 
-const getBoardByID = `-- name: GetBoardByID :one
-SELECT id, name, description, position FROM boards
-WHERE id = ? LIMIT 1
-`
-
-func (q *Queries) GetBoardByID(ctx context.Context, id int64) (Board, error) {
-	row := q.db.QueryRowContext(ctx, getBoardByID, id)
-	var i Board
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Description,
-		&i.Position,
-	)
-	return i, err
-}
-
 const getInviteByCode = `-- name: GetInviteByCode :one
 SELECT id, code, created_by, used_by, created_at, used_at FROM invites WHERE code = ? AND used_by IS NULL LIMIT 1
 `
@@ -445,35 +420,32 @@ func (q *Queries) GetSessionUserID(ctx context.Context, arg GetSessionUserIDPara
 const getThreadByID = `-- name: GetThreadByID :one
 SELECT 
     t.id,
-    t.board_id,
     t.user_id,
     t.title,
     t.created_at,
     t.updated_at,
     t.expires_at,
+    t.ttl_seconds,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
-    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce,
-    b.name AS board_name
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
 FROM threads t
 LEFT JOIN users u ON t.user_id = u.id
-JOIN boards b ON t.board_id = b.id
 WHERE t.id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
 LIMIT 1
 `
 
 type GetThreadByIDRow struct {
 	ID                int64
-	BoardID           int64
 	UserID            int64
 	Title             string
 	CreatedAt         sql.NullTime
 	UpdatedAt         sql.NullTime
 	ExpiresAt         sql.NullTime
+	TtlSeconds        sql.NullInt64
 	AuthorUsername    string
 	AuthorAvatar      string
 	AuthorAvatarNonce int64
-	BoardName         string
 }
 
 func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow, error) {
@@ -481,36 +453,17 @@ func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow
 	var i GetThreadByIDRow
 	err := row.Scan(
 		&i.ID,
-		&i.BoardID,
 		&i.UserID,
 		&i.Title,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.TtlSeconds,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
 		&i.AuthorAvatarNonce,
-		&i.BoardName,
 	)
 	return i, err
-}
-
-const getUserBoardRead = `-- name: GetUserBoardRead :one
-SELECT last_read_at
-FROM user_board_reads
-WHERE user_id = ? AND board_id = ? LIMIT 1
-`
-
-type GetUserBoardReadParams struct {
-	UserID  int64
-	BoardID int64
-}
-
-func (q *Queries) GetUserBoardRead(ctx context.Context, arg GetUserBoardReadParams) (sql.NullTime, error) {
-	row := q.db.QueryRowContext(ctx, getUserBoardRead, arg.UserID, arg.BoardID)
-	var last_read_at sql.NullTime
-	err := row.Scan(&last_read_at)
-	return last_read_at, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
@@ -605,82 +558,79 @@ func (q *Queries) ListAttachmentsByThreadID(ctx context.Context, threadID int64)
 	return items, nil
 }
 
-const listBoards = `-- name: ListBoards :many
-SELECT id, name, description, position FROM boards
-ORDER BY position ASC, id ASC
-`
-
-func (q *Queries) ListBoards(ctx context.Context) ([]Board, error) {
-	rows, err := q.db.QueryContext(ctx, listBoards)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Board
-	for rows.Next() {
-		var i Board
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Description,
-			&i.Position,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardsWithDetails = `-- name: ListBoardsWithDetails :many
+const listFrontPageThreads = `-- name: ListFrontPageThreads :many
 SELECT 
-    b.id,
-    b.name,
-    b.description,
-    b.position,
-    COUNT(DISTINCT t.id) AS thread_count,
+    t.id,
+    t.title,
+    t.created_at,
+    t.expires_at,
+    t.ttl_seconds,
+    COALESCE(u.username, '') AS author_username,
     COUNT(p.id) AS post_count,
-    CAST(COALESCE(MAX(t.updated_at), '') AS TEXT) AS latest_updated_at
-FROM boards b
-LEFT JOIN threads t ON t.board_id = b.id AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
+    lc.id AS last_comment_id,
+    lc.body AS last_comment_body,
+    lc.created_at AS last_comment_at,
+    COALESCE(lcu.username, '') AS last_comment_author
+FROM threads t
+LEFT JOIN users u ON t.user_id = u.id
 LEFT JOIN posts p ON p.thread_id = t.id
-GROUP BY b.id
-ORDER BY b.position ASC, b.id ASC
+LEFT JOIN posts lc ON lc.id = (
+    SELECT MAX(p2.id)
+    FROM posts p2
+    WHERE p2.thread_id = t.id
+      AND p2.id > (SELECT MIN(p3.id) FROM posts p3 WHERE p3.thread_id = t.id)
+)
+LEFT JOIN users lcu ON lc.user_id = lcu.id
+WHERE t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP
+GROUP BY t.id
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT ? OFFSET ?
 `
 
-type ListBoardsWithDetailsRow struct {
-	ID              int64
-	Name            string
-	Description     sql.NullString
-	Position        int64
-	ThreadCount     int64
-	PostCount       int64
-	LatestUpdatedAt string
+type ListFrontPageThreadsParams struct {
+	Limit  int64
+	Offset int64
 }
 
-func (q *Queries) ListBoardsWithDetails(ctx context.Context) ([]ListBoardsWithDetailsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardsWithDetails)
+type ListFrontPageThreadsRow struct {
+	ID                int64
+	Title             string
+	CreatedAt         sql.NullTime
+	ExpiresAt         sql.NullTime
+	TtlSeconds        sql.NullInt64
+	AuthorUsername    string
+	PostCount         int64
+	LastCommentID     sql.NullInt64
+	LastCommentBody   sql.NullString
+	LastCommentAt     sql.NullTime
+	LastCommentAuthor string
+}
+
+// Global front page: non-expired threads, newest first (created_at DESC).
+// Last-comment columns describe the thread's most recent reply: the newest
+// post after the opening post (MIN(id) is the opening post, created in the
+// same transaction as the thread). All NULL when the thread has no replies.
+func (q *Queries) ListFrontPageThreads(ctx context.Context, arg ListFrontPageThreadsParams) ([]ListFrontPageThreadsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFrontPageThreads, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListBoardsWithDetailsRow
+	var items []ListFrontPageThreadsRow
 	for rows.Next() {
-		var i ListBoardsWithDetailsRow
+		var i ListFrontPageThreadsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Name,
-			&i.Description,
-			&i.Position,
-			&i.ThreadCount,
+			&i.Title,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.TtlSeconds,
+			&i.AuthorUsername,
 			&i.PostCount,
-			&i.LatestUpdatedAt,
+			&i.LastCommentID,
+			&i.LastCommentBody,
+			&i.LastCommentAt,
+			&i.LastCommentAuthor,
 		); err != nil {
 			return nil, err
 		}
@@ -740,70 +690,6 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 			&i.UsedAt,
 			&i.CreatorUsername,
 			&i.UsedByUsername,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLatestThreadsByBoard = `-- name: ListLatestThreadsByBoard :many
-SELECT 
-    t.id,
-    t.board_id,
-    t.title,
-    t.created_at,
-    t.updated_at,
-    COALESCE(u.username, '') AS author_username
-FROM (
-    SELECT 
-        id, board_id, title, created_at, updated_at, user_id,
-        ROW_NUMBER() OVER (
-            PARTITION BY board_id
-            ORDER BY updated_at DESC, id DESC
-        ) AS rn
-    FROM threads
-    WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
-) t
-LEFT JOIN users u ON t.user_id = u.id
-WHERE t.rn = 1
-ORDER BY t.board_id ASC
-`
-
-type ListLatestThreadsByBoardRow struct {
-	ID             int64
-	BoardID        int64
-	Title          string
-	CreatedAt      sql.NullTime
-	UpdatedAt      sql.NullTime
-	AuthorUsername string
-}
-
-// One row per board: the most recently updated non-expired thread.
-// Replaces a per-board GetLatestThreadForBoard round trip (N+1).
-func (q *Queries) ListLatestThreadsByBoard(ctx context.Context) ([]ListLatestThreadsByBoardRow, error) {
-	rows, err := q.db.QueryContext(ctx, listLatestThreadsByBoard)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListLatestThreadsByBoardRow
-	for rows.Next() {
-		var i ListLatestThreadsByBoardRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.BoardID,
-			&i.Title,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.AuthorUsername,
 		); err != nil {
 			return nil, err
 		}
@@ -904,163 +790,6 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 			&i.AuthorAvatar,
 			&i.AuthorAvatarNonce,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRecentActivity = `-- name: ListRecentActivity :many
-SELECT
-    p.id,
-    p.created_at,
-    COALESCE(u.username, '') AS author_username,
-    t.id AS thread_id,
-    t.title AS thread_title,
-    t.board_id AS board_id,
-    b.name AS board_name
-FROM posts p
-LEFT JOIN users u ON p.user_id = u.id
-JOIN threads t ON p.thread_id = t.id
-JOIN boards b ON t.board_id = b.id
-WHERE t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP
-ORDER BY p.created_at DESC, p.id DESC
-LIMIT ?
-`
-
-type ListRecentActivityRow struct {
-	ID             int64
-	CreatedAt      sql.NullTime
-	AuthorUsername string
-	ThreadID       int64
-	ThreadTitle    string
-	BoardID        int64
-	BoardName      string
-}
-
-func (q *Queries) ListRecentActivity(ctx context.Context, limit int64) ([]ListRecentActivityRow, error) {
-	rows, err := q.db.QueryContext(ctx, listRecentActivity, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRecentActivityRow
-	for rows.Next() {
-		var i ListRecentActivityRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.CreatedAt,
-			&i.AuthorUsername,
-			&i.ThreadID,
-			&i.ThreadTitle,
-			&i.BoardID,
-			&i.BoardName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listThreadsByBoard = `-- name: ListThreadsByBoard :many
-SELECT 
-    t.id,
-    t.board_id,
-    t.user_id,
-    t.title,
-    t.created_at,
-    t.updated_at,
-    t.expires_at,
-    COALESCE(u.username, '') AS author_username,
-    COUNT(p.id) AS post_count
-FROM threads t
-LEFT JOIN users u ON t.user_id = u.id
-LEFT JOIN posts p ON p.thread_id = t.id
-WHERE t.board_id = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
-GROUP BY t.id
-ORDER BY t.updated_at DESC
-`
-
-type ListThreadsByBoardRow struct {
-	ID             int64
-	BoardID        int64
-	UserID         int64
-	Title          string
-	CreatedAt      sql.NullTime
-	UpdatedAt      sql.NullTime
-	ExpiresAt      sql.NullTime
-	AuthorUsername string
-	PostCount      int64
-}
-
-func (q *Queries) ListThreadsByBoard(ctx context.Context, boardID int64) ([]ListThreadsByBoardRow, error) {
-	rows, err := q.db.QueryContext(ctx, listThreadsByBoard, boardID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListThreadsByBoardRow
-	for rows.Next() {
-		var i ListThreadsByBoardRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.BoardID,
-			&i.UserID,
-			&i.Title,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ExpiresAt,
-			&i.AuthorUsername,
-			&i.PostCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUserBoardReads = `-- name: ListUserBoardReads :many
-SELECT board_id, last_read_at
-FROM user_board_reads
-WHERE user_id = ?
-`
-
-type ListUserBoardReadsRow struct {
-	BoardID    int64
-	LastReadAt sql.NullTime
-}
-
-func (q *Queries) ListUserBoardReads(ctx context.Context, userID int64) ([]ListUserBoardReadsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUserBoardReads, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUserBoardReadsRow
-	for rows.Next() {
-		var i ListUserBoardReadsRow
-		if err := rows.Scan(&i.BoardID, &i.LastReadAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1177,17 +906,6 @@ func (q *Queries) SetUserAvatarNonce(ctx context.Context, arg SetUserAvatarNonce
 	return err
 }
 
-const touchThread = `-- name: TouchThread :exec
-UPDATE threads
-SET updated_at = CURRENT_TIMESTAMP
-WHERE id = ?
-`
-
-func (q *Queries) TouchThread(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, touchThread, id)
-	return err
-}
-
 const updateUserBio = `-- name: UpdateUserBio :exec
 UPDATE users SET bio = ? WHERE id = ?
 `
@@ -1199,22 +917,6 @@ type UpdateUserBioParams struct {
 
 func (q *Queries) UpdateUserBio(ctx context.Context, arg UpdateUserBioParams) error {
 	_, err := q.db.ExecContext(ctx, updateUserBio, arg.Bio, arg.ID)
-	return err
-}
-
-const upsertUserBoardRead = `-- name: UpsertUserBoardRead :exec
-INSERT INTO user_board_reads (user_id, board_id, last_read_at)
-VALUES (?, ?, CURRENT_TIMESTAMP)
-ON CONFLICT(user_id, board_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
-`
-
-type UpsertUserBoardReadParams struct {
-	UserID  int64
-	BoardID int64
-}
-
-func (q *Queries) UpsertUserBoardRead(ctx context.Context, arg UpsertUserBoardReadParams) error {
-	_, err := q.db.ExecContext(ctx, upsertUserBoardRead, arg.UserID, arg.BoardID)
 	return err
 }
 

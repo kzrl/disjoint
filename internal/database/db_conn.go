@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -44,29 +43,5 @@ func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 		return nil, nil, fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
-	queries := New(conn)
-
-	// Seed default boards if none exist
-	ctx := context.Background()
-	boards, err := queries.ListBoards(ctx)
-	if err == nil && len(boards) == 0 {
-		seed := []struct {
-			name, desc string
-			position   int64
-		}{
-			{"General Discussion", "A cozy spot for all kinds of conversations.", 0},
-			{"Introductions & Lounge", "Say hello and kick back with friends.", 1},
-			{"Photos & Videos", "Share pictures, clips, and favorite moments.", 2},
-			{"Interesting Finds", "Cool links, articles, and recommendations.", 3},
-		}
-		for _, b := range seed {
-			_, _ = queries.CreateBoard(ctx, CreateBoardParams{
-				Name:        b.name,
-				Description: sql.NullString{String: b.desc, Valid: true},
-				Position:    b.position,
-			})
-		}
-	}
-
-	return conn, queries, nil
+	return conn, New(conn), nil
 }

@@ -70,6 +70,9 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 			}
 			return t.Format("Jan 02, 2006")
 		},
+		// add/sub are tiny integer helpers for pagination links in templates.
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
 		"formatFileSize": func(b int64) string {
 			const unit = 1024
 			if b < unit {
@@ -137,7 +140,6 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	// Parse individual page templates combined with layout.html
 	pages := []string{
 		"index.html",
-		"board.html",
 		"thread.html",
 		"new_thread.html",
 		"login.html",
@@ -146,7 +148,6 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"invites.html",
 		"users.html",
 		"setup.html",
-		"new_board.html",
 		"user_card.html",
 	}
 
@@ -251,15 +252,10 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
 
-	// Forum boards
+	// Front page & threads
 	mux.HandleFunc("GET /", app.IndexPage)
-	mux.HandleFunc("GET /boards/new", app.NewBoardPage)
-	mux.HandleFunc("POST /boards/new", app.CreateBoardSubmit)
-	mux.HandleFunc("GET /boards/{id}", app.BoardPage)
-
-	// Threads & posts
-	mux.HandleFunc("GET /boards/{id}/threads/new", app.NewThreadPage)
-	mux.HandleFunc("POST /boards/{id}/threads/new", app.CreateThreadSubmit)
+	mux.HandleFunc("GET /threads/new", app.NewThreadPage)
+	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)
 	mux.HandleFunc("GET /threads/{id}", app.ThreadPage)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
 

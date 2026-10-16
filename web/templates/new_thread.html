@@ -2,16 +2,15 @@
 <div>
   <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
-      <li><a href="/">Home</a></li>
-      <li><a href="/boards/{{.Board.ID}}">{{.Board.Name}}</a></li>
+      <li><a href="/">Front Page</a></li>
       <li class="is-active" aria-current="page"><a>New Thread</a></li>
     </ul>
   </nav>
 
   <div class="box">
-    <h1 class="title is-4 mb-4">Create a New Thread in {{.Board.Name}}</h1>
+    <h1 class="title is-4 mb-4">Create a New Thread</h1>
 
-    <form method="POST" action="/boards/{{.Board.ID}}/threads/new" enctype="multipart/form-data">
+    <form method="POST" action="/threads/new" enctype="multipart/form-data">
       <div class="field">
         <label for="title" class="label">Thread Title</label>
         <div class="control">
@@ -40,7 +39,7 @@
             </select>
           </div>
         </div>
-        <p class="help">Expired threads and all their attachments will be permanently deleted automatically.</p>
+        <p class="help">Expired threads and all their attachments will be permanently deleted automatically. Each new comment pushes the deadline out by the chosen lifespan, so active threads keep living.</p>
       </div>
 
       <div class="field">
@@ -53,7 +52,7 @@
 
       <div class="buttons mt-5">
         <button type="submit" class="button is-primary">Publish Thread</button>
-        <a href="/boards/{{.Board.ID}}" class="button is-light">Cancel</a>
+        <a href="/" class="button is-light">Cancel</a>
       </div>
     </form>
   </div>
