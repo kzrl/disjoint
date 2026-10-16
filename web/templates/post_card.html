@@ -5,7 +5,7 @@
     <div class="is-size-7 has-text-grey"><time>{{formatTime .Post.CreatedAt.Time}}</time></div>
   </div>
   <div class="post-content-area">
-    <div class="content is-small">
+    <div class="content is-medium">
       {{renderMarkdown .Post.Body}}
     </div>
     {{if .Attachments}}

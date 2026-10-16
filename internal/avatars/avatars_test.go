@@ -230,10 +230,12 @@ func TestRenderStructure(t *testing.T) {
 // TestRenderVariety sanity-checks that the picker actually ranges over the
 // palettes and variant sets (a stuck PRNG would render one face for everyone).
 func TestRenderVariety(t *testing.T) {
-	names := []string{"alice", "bob", "carol", "dave", "erin", "frank",
+	names := []string{
+		"alice", "bob", "carol", "dave", "erin", "frank",
 		"grace", "heidi", "ivan", "judy", "mallory", "niaj",
 		"oleg", "pepper", "quinn", "rupert", "sybil", "trent",
-		"ursula", "victor", "wendy", "xavier", "yara", "zane"}
+		"ursula", "victor", "wendy", "xavier", "yara", "zane",
+	}
 	seenGlow := map[string]bool{}
 	seenBg := map[string]bool{}
 	seenFaces := map[string]bool{}
