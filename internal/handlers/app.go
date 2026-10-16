@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"disjoint/internal/buildinfo"
 	"disjoint/internal/database"
 	"disjoint/internal/markdown"
 	"disjoint/internal/middleware"
@@ -206,6 +207,12 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 		m["PageTitle"] = pageTitle
 		m["FlashError"] = flashErr
 		m["FlashSuccess"] = flashSucc
+		// Build commit for the footer; omitted ("dev") when the stamp was
+		// not applied at build time.
+		if buildinfo.Commit != "dev" {
+			m["Commit"] = buildinfo.Commit
+			m["RepoURL"] = buildinfo.RepoURL
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -9,13 +9,17 @@ MAIN_PKG := ./cmd/disjoint
 
 PORT ?= 8080
 
+# Short git hash stamped into the binary (shown in the footer); "dev" when
+# the tree is not a git checkout (e.g. a source tarball).
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+
 all: build
 
 ## build: Compile a standalone static binary without CGO dependencies
 build:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BINARY) $(MAIN_PKG)
-	@echo "Built binary at $(BINARY)"
+	CGO_ENABLED=0 go build -ldflags="-s -w -X disjoint/internal/buildinfo.Commit=$(GIT_COMMIT)" -o $(BINARY) $(MAIN_PKG)
+	@echo "Built binary at $(BINARY) (commit $(GIT_COMMIT))"
 
 ## run: Run the application locally (override port with PORT=xxxx)
 run:

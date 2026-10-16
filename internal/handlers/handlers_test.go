@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"disjoint/internal/auth"
+	"disjoint/internal/buildinfo"
 	"disjoint/internal/database"
 	"disjoint/internal/handlers"
 	"disjoint/internal/worker"
@@ -706,6 +707,58 @@ func TestFrontPageExpiryBadge(t *testing.T) {
 	}
 	if strings.Contains(page, "in 3d") {
 		t.Errorf("long-lived thread: badge must be omitted, found 'in 3d'")
+	}
+}
+
+// TestFooterBuildCommit pins the footer: the default "dev" stamp is hidden,
+// a stamped commit renders as a link to the public repository.
+func TestFooterBuildCommit(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	u, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "erin",
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session token: %v", err)
+	}
+	if err := queries.CreateSession(ctx, database.CreateSessionParams{
+		TokenHash: auth.TokenHash(token),
+		UserID:    u.ID,
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"})
+
+	rr := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected front page 200, got %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "github.com/kzrl/disjoint/commit/") {
+		t.Errorf("footer must not show a commit link for the default dev build")
+	}
+
+	buildinfo.Commit = "abc1234"
+	t.Cleanup(func() { buildinfo.Commit = "dev" })
+
+	rr = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected front page 200, got %d", rr.Code)
+	}
+	want := `<a class="is-size-7" href="https://github.com/kzrl/disjoint/commit/abc1234" title="View this build's commit">abc1234</a>`
+	if !strings.Contains(rr.Body.String(), want) {
+		t.Errorf("footer: want commit link %s, missing", want)
 	}
 }
 
