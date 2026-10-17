@@ -17,7 +17,8 @@ type ReactionGroup struct {
 	Glyph       string // unicode emoji only
 	StoragePath string // custom emoji only
 	Count       int
-	You         bool // the viewing user reacted with this emoji
+	You         bool     // the viewing user reacted with this emoji
+	Users       []string // usernames of everyone who reacted, for the chip's hover tooltip
 }
 
 // ReactionBarData is the context for the reaction_bar.html partial.
@@ -40,6 +41,7 @@ type reactionRow struct {
 	source      string
 	glyph       string
 	storagePath string
+	username    string // reactant's username, for the chip's hover tooltip
 }
 
 func groupReactions(rows []reactionRow, currentUserID int64) map[int64][]ReactionGroup {
@@ -67,6 +69,9 @@ func groupReactions(rows []reactionRow, currentUserID int64) map[int64][]Reactio
 		g.Count++
 		if r.userID == currentUserID {
 			g.You = true
+		}
+		if r.username != "" {
+			g.Users = append(g.Users, r.username)
 		}
 	}
 	return out
@@ -146,6 +151,7 @@ func (app *App) ToggleReaction(w http.ResponseWriter, r *http.Request) {
 			source:      r.EmojiSource,
 			glyph:       r.EmojiGlyph,
 			storagePath: r.EmojiStoragePath,
+			username:    r.Username,
 		})
 	}
 

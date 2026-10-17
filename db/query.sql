@@ -321,9 +321,11 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE r.post_id = ?
 ORDER BY r.emoji_id ASC, r.id ASC;
 
@@ -340,10 +342,12 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
 JOIN posts p ON r.post_id = p.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE p.thread_id = ?
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;
 
@@ -360,8 +364,10 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE r.post_id IN (sqlc.slice('postIds'))
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;

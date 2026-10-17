@@ -83,6 +83,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 				source:      r.EmojiSource,
 				glyph:       r.EmojiGlyph,
 				storagePath: r.EmojiStoragePath,
+				username:    r.Username,
 			})
 		}
 	}

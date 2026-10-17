@@ -50,6 +50,11 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	app.staticFS = staticFS
 
 	funcMap := template.FuncMap{
+		// joinNames renders a username list for the reaction chip hover
+		// tooltip ("a, b, c").
+		"joinNames": func(items []string) string {
+			return strings.Join(items, ", ")
+		},
 		"formatTime": func(t time.Time) string {
 			if t.IsZero() {
 				return ""

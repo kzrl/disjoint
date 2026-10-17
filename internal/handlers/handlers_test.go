@@ -2518,8 +2518,8 @@ func TestReactionToggles(t *testing.T) {
 	for _, want := range []string{
 		`class="reaction-chip is-active"`,
 		`hx-vals='{"emoji_id": ` + strconv.FormatInt(joy.ID, 10) + `}'`,
-		`>1<`,     // count
-		"joy (1)", // title
+		`>1<`,                                  // count
+		`title="Reacted by: react_ally (you)"`, // hover tooltip lists the reactant
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("toggled-on bar missing %q in:\n%s", want, body)
@@ -2548,8 +2548,8 @@ func TestReactionToggles(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	body = rr.Body.String()
-	if !strings.Contains(body, ">2<") || !strings.Contains(body, "joy (2)") {
-		t.Errorf("expected count 2 in bar:\n%s", body)
+	if !strings.Contains(body, ">2<") || !strings.Contains(body, "Reacted by: react_ally, react_bob (you)") {
+		t.Errorf("expected count 2 and both reactants in the tooltip:\n%s", body)
 	}
 	if !strings.Contains(body, `class="reaction-chip is-active"`) {
 		t.Errorf("expected active chip for the requesting user (bob):\n%s", body)
@@ -2583,8 +2583,8 @@ func TestReactionToggles(t *testing.T) {
 	if !strings.Contains(body, `<img class="emoji-img" src="/uploads/`+custom.StoragePath.String) {
 		t.Errorf("custom emoji chip did not render an <img>:\n%s", body)
 	}
-	if !strings.Contains(body, `title="react_custom (1)"`) {
-		t.Errorf("custom emoji chip missing name/count title:\n%s", body)
+	if !strings.Contains(body, `title="Reacted by: react_bob (you)"`) {
+		t.Errorf("custom emoji chip missing reactant tooltip:\n%s", body)
 	}
 
 	// 7. Unknown post / unknown emoji: 404.
@@ -2672,14 +2672,14 @@ func TestThreadPageReactionBars(t *testing.T) {
 	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 2 {
 		t.Errorf("expected 2 active chips for ally, got %d", got)
 	}
-	if !strings.Contains(page, `title="joy (2)"`) {
-		t.Errorf("expected grouped joy (2) chip")
+	if !strings.Contains(page, `title="Reacted by: bar_ally, bar_bob (you)"`) {
+		t.Errorf("joy chip tooltip should list both reactants and mark the viewer")
 	}
 	if !strings.Contains(page, `<img class="emoji-img" src="/uploads/bar-custom.png"`) {
 		t.Errorf("custom reaction chip missing <img>")
 	}
-	if !strings.Contains(page, `title="bar_custom (1)"`) {
-		t.Errorf("custom reaction chip missing count title")
+	if !strings.Contains(page, `title="Reacted by: bar_ally (you)"`) {
+		t.Errorf("custom chip tooltip should list only ally")
 	}
 	if !strings.Contains(page, `title=":joy:"`) || !strings.Contains(page, `title=":party:"`) || !strings.Contains(page, `title=":bar_custom:"`) {
 		t.Errorf("picker missing emoji entries")
@@ -2693,8 +2693,8 @@ func TestThreadPageReactionBars(t *testing.T) {
 	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 1 {
 		t.Errorf("expected 1 active chip for bob, got %d", got)
 	}
-	if !strings.Contains(page, `title="joy (2)"`) {
-		t.Errorf("bob's view should show the same grouped counts")
+	if !strings.Contains(page, `title="Reacted by: bar_ally, bar_bob (you)"`) {
+		t.Errorf("bob's view should list the same reactants with himself marked")
 	}
 
 	// 3. HTMX reply: the appended post card carries a reaction bar with a
@@ -2807,8 +2807,8 @@ func TestFrontPageReactions(t *testing.T) {
 	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 2 {
 		t.Errorf("expected 2 active chips on the front page, got %d", got)
 	}
-	if !strings.Contains(page, `title="joy (2)"`) {
-		t.Errorf("missing grouped joy (2) chip")
+	if !strings.Contains(page, `title="Reacted by: fp_ally, fp_bob (you)"`) {
+		t.Errorf("front-page joy chip tooltip should list both reactants")
 	}
 	if !strings.Contains(page, `<img class="emoji-img" src="/uploads/fp-custom.png"`) {
 		t.Errorf("custom reaction chip missing <img>")
@@ -2829,8 +2829,8 @@ func TestFrontPageReactions(t *testing.T) {
 	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 1 {
 		t.Errorf("expected 1 active chip for bob, got %d", got)
 	}
-	if !strings.Contains(page, `title="joy (2)"`) {
-		t.Errorf("bob's view should show the same grouped counts")
+	if !strings.Contains(page, `title="Reacted by: fp_ally, fp_bob (you)"`) {
+		t.Errorf("bob's front-page view should list the same reactants with himself marked")
 	}
 
 	// 3. Toggling from the front page uses the same endpoint and returns

@@ -10,7 +10,7 @@
       hx-target="closest .reaction-bar"
       hx-swap="outerHTML"
       hx-vals='{"emoji_id": {{.EmojiID}}}'
-      title="{{.Name}} ({{.Count}})">
+      title="Reacted by: {{joinNames .Users}}{{if .You}} (you){{end}}">
     {{if eq .Source "unicode"}}
       <span class="reaction-emoji" aria-hidden="true">{{.Glyph}}</span>
     {{else}}

@@ -209,6 +209,7 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 			source:      r.EmojiSource,
 			glyph:       r.EmojiGlyph,
 			storagePath: r.EmojiStoragePath,
+			username:    r.Username,
 		})
 	}
 	currentUserID := int64(0)

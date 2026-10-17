@@ -1020,9 +1020,11 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE r.post_id = ?
 ORDER BY r.emoji_id ASC, r.id ASC
 `
@@ -1038,6 +1040,7 @@ type ListReactionsByPostIDRow struct {
 	EmojiStoragePath string
 	EmojiMimeType    string
 	EmojiFileSize    int64
+	Username         string
 }
 
 // Reaction rows for a single post with emoji details, for rendering the
@@ -1062,6 +1065,7 @@ func (q *Queries) ListReactionsByPostID(ctx context.Context, postID int64) ([]Li
 			&i.EmojiStoragePath,
 			&i.EmojiMimeType,
 			&i.EmojiFileSize,
+			&i.Username,
 		); err != nil {
 			return nil, err
 		}
@@ -1087,9 +1091,11 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE r.post_id IN (/*SLICE:postIds*/?)
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC
 `
@@ -1105,6 +1111,7 @@ type ListReactionsByPostIDsRow struct {
 	EmojiStoragePath string
 	EmojiMimeType    string
 	EmojiFileSize    int64
+	Username         string
 }
 
 // Reaction rows for a set of posts in one round trip. The front page
@@ -1139,6 +1146,7 @@ func (q *Queries) ListReactionsByPostIDs(ctx context.Context, postids []int64) (
 			&i.EmojiStoragePath,
 			&i.EmojiMimeType,
 			&i.EmojiFileSize,
+			&i.Username,
 		); err != nil {
 			return nil, err
 		}
@@ -1164,10 +1172,12 @@ SELECT
     COALESCE(e.glyph, '') AS emoji_glyph,
     COALESCE(e.storage_path, '') AS emoji_storage_path,
     COALESCE(e.mime_type, '') AS emoji_mime_type,
-    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size,
+    COALESCE(u.username, '') AS username
 FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
 JOIN posts p ON r.post_id = p.id
+LEFT JOIN users u ON r.user_id = u.id
 WHERE p.thread_id = ?
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC
 `
@@ -1183,6 +1193,7 @@ type ListReactionsByThreadIDRow struct {
 	EmojiStoragePath string
 	EmojiMimeType    string
 	EmojiFileSize    int64
+	Username         string
 }
 
 // All reaction rows for a thread's posts, joined with their emoji so the
@@ -1207,6 +1218,7 @@ func (q *Queries) ListReactionsByThreadID(ctx context.Context, threadID int64) (
 			&i.EmojiStoragePath,
 			&i.EmojiMimeType,
 			&i.EmojiFileSize,
+			&i.Username,
 		); err != nil {
 			return nil, err
 		}
