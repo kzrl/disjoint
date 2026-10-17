@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Disjoint
 # Stage 1: Build static binary
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /src
 
@@ -26,8 +26,7 @@ RUN mkdir -p /data/uploads
 
 ENV PORT=8080 \
     DATABASE_PATH=/data/disjoint.db \
-    UPLOAD_DIR=/data/uploads \
-    SESSION_SECRET=""
+    UPLOAD_DIR=/data/uploads
 
 VOLUME ["/data"]
 

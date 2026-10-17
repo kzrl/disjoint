@@ -11,7 +11,6 @@ services:
       - PORT=8080
       - DATABASE_PATH=/data/disjoint.db
       - UPLOAD_DIR=/data/uploads
-      - SESSION_SECRET=change-this-to-a-secure-random-secret-key
     volumes:
       - disjoint_data:/data
 

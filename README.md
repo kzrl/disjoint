@@ -1,5 +1,7 @@
 # Disjoint
 
+[![Go 1.27+](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+
 **Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums with the casual, private, and ephemeral vibe of modern private chat groups — around a single HackerNews-style front page of threads.
 
 Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-first). Zero external JavaScript frameworks.
@@ -9,8 +11,7 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-
 ## Features
 
 - **Global Front Page**: Every thread lives on one HackerNews-style front page, sorted by creation date (newest first), with a reply count and a preview of each thread's latest comment. No boards, no categories.
-- **Ephemerality Twist (Expiring Threads)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
-- **Ephemerality Twist (Expiring Threads)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). A background worker automatically purges expired threads along with all attachments from disk.
+- **Expiring Threads**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
 - **Embedded File Attachments & Media**:
   - Images (`image/jpeg`, `image/png`, `image/webp`, `image/gif`) render responsive inline previews.
@@ -35,19 +36,21 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-
 docker compose up -d
 ```
 
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:8080` in your browser. All data (SQLite database and uploads) persists in the named `disjoint_data` volume, mounted at `/data` inside the container.
 
 ### 2. Build and Run from Source
 
-**Prerequisites**: Go 1.22+
+**Prerequisites**: Go 1.27+
 
 ```bash
-# Build the binary
-go build -o disjoint ./cmd/disjoint
+# Build the binary (CGO disabled, commit-stamped)
+make build
 
-# Run
-./disjoint
+# Run (or: make run, PORT=9090 to override the port)
+./bin/disjoint
 ```
+
+On first run, the SQLite database (`disjoint.db`) and the `uploads/` directory are created in the working directory.
 
 Open `http://localhost:8080` in your browser to complete initial setup.
 
@@ -77,12 +80,47 @@ Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets
 `X-Real-IP` to the real client address on proxied requests, and Disjoint's
 login/register rate limiter uses it — but only when the connection arrives
 from loopback, so the app must not be directly exposed (binding
-`HOST=127.0.0.1` guarantees that).
+`HOST=127.0.0.1` guarantees that). For TLS termination, add a `tls` directive
+(or `internal` for localhost) to the Caddy site block.
 
 ---
 
 ## Running Tests
 
 ```bash
-go test -v ./...
+make test        # go test -v ./...
+make test-race   # data-race detector
 ```
+
+---
+
+## Development
+
+```bash
+make generate    # regenerate sqlc Go code from db/schema.sql
+make css         # re-vendor Bulma and regenerate web/static/disjoint.css
+```
+
+### Project layout
+
+| Path | Purpose |
+|---|---|
+| `cmd/disjoint` | Entry point |
+| `internal/` | Handlers, auth, avatars, markdown, background worker |
+| `db/` | `schema.sql` and sqlc query definitions |
+| `web/` | Templates, vendored static assets (HTMX, Bulma) |
+| `specs/` | Design specs (core app, user/admin flows) |
+
+---
+
+## Security notes
+
+- Sessions are opaque server-side tokens; no shared secret is required or read from the environment.
+- Login and registration are rate-limited; behind a reverse proxy the limiter keys on the real client IP (see above).
+- Avatar and attachment uploads are type- and size-checked.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE)
