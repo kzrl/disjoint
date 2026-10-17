@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +13,28 @@ import (
 	"disjoint/internal/database"
 	"disjoint/internal/middleware"
 )
+
+const maxPostURLLength = 2048
+
+// cleanPostURL trims and validates the optional first-class post link.
+// Empty is fine (text/attachment post). Otherwise it must be an absolute
+// http(s) URL with a host. The scheme check is the security boundary:
+// html/template escapes the href value but would happily pass a
+// javascript: URL through, so non-http(s) schemes are refused here.
+func cleanPostURL(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if len(s) > maxPostURLLength {
+		return "", fmt.Errorf("link is too long (max %d characters)", maxPostURLLength)
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", errors.New("link must be a valid http(s) URL")
+	}
+	return s, nil
+}
 
 // CreatePostSubmit handles creating a reply post, returning an HTML partial for HTMX or redirecting.
 func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
@@ -58,11 +82,17 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A post needs a body OR at least one attachment, so image-only
-	// replies (e.g. a screenshot pasted from the clipboard) are allowed.
+	// A post needs a body OR at least one attachment OR a first-class
+	// link, so image-only replies (e.g. a screenshot pasted from the
+	// clipboard) and link-only replies are both allowed.
 	body := strings.TrimSpace(r.FormValue("body"))
-	if body == "" && len(uploadedFiles) == 0 {
-		http.Error(w, "reply body cannot be empty", http.StatusBadRequest)
+	postURL, err := cleanPostURL(r.FormValue("url"))
+	if err != nil {
+		http.Error(w, "invalid link: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body == "" && len(uploadedFiles) == 0 && postURL == "" {
+		http.Error(w, "reply needs a body, a link, or at least one attachment", http.StatusBadRequest)
 		return
 	}
 
@@ -80,6 +110,7 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		ThreadID: thread.ID,
 		UserID:   user.ID,
 		Body:     body,
+		Url:      sql.NullString{String: postURL, Valid: postURL != ""},
 	})
 
 	// 2. Insert attachments

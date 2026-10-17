@@ -333,3 +333,12 @@ Plan: [tasks/plan-reactions.md](plan-reactions.md)
   - `handlers_test.go` `TestFrontPageReactions`: per-row chips + grouped counts + custom `<img>` chip, active state per viewer (ally 2 / bob 1), pickers on every row, `hx-post` targets the opening post, toggle from the front page returns the swappable bar — all pass; `-race` suite green
   - Live smoke (fresh instance): react on an opening post, front page shows the active chip + pickers on both rows
   - README + specs/disjoint.md updated
+- [x] First-class post link field (posts.url)  (DONE)
+  - `db/migrations/00012_posts_url.sql`: `ALTER TABLE posts ADD COLUMN url TEXT` (NULL = no link); schema.sql snapshot updated
+  - `db/query.sql`: `CreatePost` takes `url`; `ListPostsByThread` / `GetPostByID` return `COALESCE(p.url, '') AS url`; `sqlc generate` (field is `Url`, not `URL`)
+  - `internal/handlers`: `cleanPostURL` (trim; empty ok; ≤2048; must parse with http/https scheme + host — the scheme check is the XSS boundary since templates would pass javascript: hrefs through); thread + reply creation accept `url`, and a link alone now satisfies the content requirement (body OR link OR attachment)
+  - Templates: optional "Link" input in `new_thread.html` + the reply form; `post_card.html` renders the link card (`target="_blank" rel="noopener noreferrer"`, full URL in `title`) between body and reaction bar — covers thread page + HTMX partial
+  - `web/css/site.css`: `.post-url` card (link color, ellipsis truncation); vendored CSS regenerated
+  - `handlers_test.go` `TestPostURLField`: link-only thread, link-only reply, body+link, rejected `javascript:`/`ftp:`/no-scheme (thread → flash redirect, reply → 400, no rows created), escaped `&amp;` in href, verbatim round trip — all pass; `-race` suite green
+  - Live smoke: link-only thread renders the card on a fresh instance; `javascript:` rejected; existing dev DB migrates 00012 cleanly
+  - README + specs/disjoint.md updated

@@ -212,26 +212,36 @@ const createPost = `-- name: CreatePost :one
 INSERT INTO posts (
     thread_id,
     user_id,
-    body
+    body,
+    url
 ) VALUES (
-    ?, ?, ?
-) RETURNING id, thread_id, user_id, body, created_at
+    ?, ?, ?, ?
+) RETURNING id, thread_id, user_id, body, url, created_at
 `
 
 type CreatePostParams struct {
 	ThreadID int64
 	UserID   int64
 	Body     string
+	Url      sql.NullString
 }
 
+// url is the optional first-class link (NULL when absent); it is stored
+// verbatim after server-side validation and never parsed as markdown.
 func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, error) {
-	row := q.db.QueryRowContext(ctx, createPost, arg.ThreadID, arg.UserID, arg.Body)
+	row := q.db.QueryRowContext(ctx, createPost,
+		arg.ThreadID,
+		arg.UserID,
+		arg.Body,
+		arg.Url,
+	)
 	var i Post
 	err := row.Scan(
 		&i.ID,
 		&i.ThreadID,
 		&i.UserID,
 		&i.Body,
+		&i.Url,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -488,6 +498,7 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
+    COALESCE(p.url, '') AS url,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
@@ -502,6 +513,7 @@ type GetPostByIDRow struct {
 	ThreadID          int64
 	UserID            int64
 	Body              string
+	Url               string
 	CreatedAt         sql.NullTime
 	AuthorUsername    string
 	AuthorAvatar      string
@@ -516,6 +528,7 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 		&i.ThreadID,
 		&i.UserID,
 		&i.Body,
+		&i.Url,
 		&i.CreatedAt,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
@@ -940,6 +953,7 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
+    COALESCE(p.url, '') AS url,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
@@ -955,6 +969,7 @@ type ListPostsByThreadRow struct {
 	ThreadID          int64
 	UserID            int64
 	Body              string
+	Url               string
 	CreatedAt         sql.NullTime
 	AuthorUsername    string
 	AuthorAvatar      string
@@ -975,6 +990,7 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 			&i.ThreadID,
 			&i.UserID,
 			&i.Body,
+			&i.Url,
 			&i.CreatedAt,
 			&i.AuthorUsername,
 			&i.AuthorAvatar,

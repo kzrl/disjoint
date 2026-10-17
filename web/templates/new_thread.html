@@ -19,6 +19,14 @@
       </div>
 
       <div class="field">
+        <label for="post-url" class="label">Link (optional)</label>
+        <div class="control">
+          <input type="text" id="post-url" name="url" class="input" placeholder="https://example.com/...">
+        </div>
+        <p class="help">Share a link as its own field — it renders as a link card under the post and is never parsed as markdown. A link alone is a valid post.</p>
+      </div>
+
+      <div class="field">
         <label for="body" class="label">First Post (Markdown supported)</label>
         <div class="control">
           <textarea id="body" name="body" class="textarea" placeholder="Write your post here... Markdown like **bold**, *italic*, quotes and `code` are supported. Paste images with Ctrl/Cmd+V." rows="8"></textarea>

@@ -2847,3 +2847,173 @@ func TestFrontPageReactions(t *testing.T) {
 		t.Errorf("toggle from the front page failed: %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestPostURLField(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	ally, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "url_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allyCookie := authCookieFor(t, queries, ally.ID)
+
+	submitThread := func(fields map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		for k, v := range fields {
+			if err := w.WriteField(k, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/threads/new", &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(allyCookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. Link-only thread (no body): accepted, link card rendered with
+	//    noopener and an escaped href.
+	rr := submitThread(map[string]string{
+		"title": "link thread",
+		"url":   "https://example.com/a?b=1&c=2",
+	})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/threads/1" {
+		t.Fatalf("link-only thread not created: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	pageReq := httptest.NewRequest(http.MethodGet, "/threads/1", nil)
+	pageReq.AddCookie(allyCookie)
+	pageRR := httptest.NewRecorder()
+	router.ServeHTTP(pageRR, pageReq)
+	page := pageRR.Body.String()
+	for _, want := range []string{
+		`class="post-url"`,
+		`href="https://example.com/a?b=1&amp;c=2"`,
+		`rel="noopener noreferrer"`,
+		`target="_blank"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+
+	// 2. Invalid links are rejected and no thread is created:
+	//    javascript: (the XSS case), a non-http(s) scheme, and a bare
+	//    hostname without scheme.
+	for _, bad := range []string{"javascript:alert(1)", "ftp://example.com/file", "example.com/no-scheme"} {
+		rr = submitThread(map[string]string{"title": "bad link", "url": bad})
+		if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/threads/new" {
+			t.Errorf("invalid url %q: expected redirect back to /threads/new, got %d %q", bad, rr.Code, rr.Header().Get("Location"))
+		}
+	}
+	frontReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	frontReq.AddCookie(allyCookie)
+	frontRR := httptest.NewRecorder()
+	router.ServeHTTP(frontRR, frontReq)
+	if strings.Contains(frontRR.Body.String(), "bad link") {
+		t.Errorf("a thread was created for an invalid link")
+	}
+
+	// 3. Link-only reply (no body, no files) via HTMX: accepted.
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	if err := w.WriteField("url", "https://example.org/reply-link"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/threads/1/posts", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("link-only reply rejected: %d %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `href="https://example.org/reply-link"`) {
+		t.Errorf("appended reply missing the link card")
+	}
+
+	// 4. Body + link reply: both render.
+	b.Reset()
+	w = multipart.NewWriter(&b)
+	if err := w.WriteField("body", "check this out"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteField("url", "https://example.org/with-body"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/threads/1/posts", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if rr.Code != http.StatusOK || !strings.Contains(body, "check this out") || !strings.Contains(body, `href="https://example.org/with-body"`) {
+		t.Errorf("body+link reply wrong: %d\n%s", rr.Code, body)
+	}
+
+	// 5. Invalid reply link: 400, and an empty reply (no body, link, or
+	//    file) stays rejected.
+	b.Reset()
+	w = multipart.NewWriter(&b)
+	if err := w.WriteField("url", "javascript:alert(1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/threads/1/posts", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for javascript: reply link, got %d", rr.Code)
+	}
+
+	b.Reset()
+	w = multipart.NewWriter(&b)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/threads/1/posts", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty reply, got %d", rr.Code)
+	}
+
+	// 6. The stored value is the trimmed, verbatim link (query round trip).
+	rows, err := queries.ListPostsByThread(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 posts, got %d", len(rows))
+	}
+	if rows[0].Url != "https://example.com/a?b=1&c=2" {
+		t.Errorf("opening post url = %q", rows[0].Url)
+	}
+	if rows[1].Url != "https://example.org/reply-link" || rows[2].Url != "https://example.org/with-body" {
+		t.Errorf("reply urls = %q, %q", rows[1].Url, rows[2].Url)
+	}
+}

@@ -51,6 +51,7 @@ CREATE TABLE posts (
     thread_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     body TEXT NOT NULL, -- Stored as raw text/Markdown
+    url TEXT,           -- Optional first-class link (http/https, server-validated), rendered as a link card; never parsed as markdown
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -111,7 +112,7 @@ B. Structure & Organization (Global Front Page)
 
     Front Page (/): A single global list of all non-expired threads, sorted by creation date (newest first), paginated 30 per page (?page=N). Each row shows the thread title (with a dim "expires in …" tag for TTL threads), author, creation time, reply count, and a preview of the thread's most recent comment: author, relative time, and an escaped plain-text snippet (whitespace-flattened, ~120 chars) that links to the /threads/{id}#post-{id} anchor. Threads without replies show "No comments yet". Each row also carries the interactive reaction bar of the thread's opening post (chips, counts, picker; the picker opens downward on the front page), so reactions can be toggled without opening the thread. The page also carries an "On the air" strip of users seen within the last 5 minutes.
 
-    Thread Creation (/threads/new): Global — there are no boards. Form to create a thread with a title, initial post body, optional file attachments, and an expiration selection (e.g., 24 hours, 3 days, 7 days, 30 days, or Never). The selection is stored as threads.ttl_seconds (NULL for Never) and the live deadline expires_at = created_at + ttl (NULL for Never).
+    Thread Creation (/threads/new): Global — there are no boards. Form to create a thread with a title, initial post body, optional first-class link (posts.url), optional file attachments, and an expiration selection (e.g., 24 hours, 3 days, 7 days, 30 days, or Never). The selection is stored as threads.ttl_seconds (NULL for Never) and the live deadline expires_at = created_at + ttl (NULL for Never). The opening post needs a body, a link, or at least one attachment — a link alone is a valid post.
 
 C. The Ephemerality Twist (Expiring Threads)
 
@@ -139,6 +140,8 @@ D. Thread View & Interaction (HTMX Enhanced)
         The thread's updated_at timestamp is updated on insertion, and for TTL threads the expiry deadline is pushed out to now + ttl (never-threads keep a NULL deadline).
 
     Markdown Support: Parse post bodies using a Go Markdown library (e.g., [github.com/yuin/goldmark](https://github.com/yuin/goldmark)) to support basic text formatting, lists, quotes, and code blocks. Goldmark runs with the GFM extension (tables, strikethrough, autolinks, task lists), hard line wraps, and raw HTML neutralized. The same pipeline renders post bodies and user-card bios.
+
+    Post Links: Each post (opening post and replies) accepts an optional first-class link field (posts.url), separate from the markdown body. Server-side validation requires an absolute http(s) URL with a host (≤2048 chars); the scheme check is the security boundary because template escaping alone would pass a javascript: href through. A valid link renders as a link card under the post body (full URL as the label, truncated with an ellipsis; title carries the verbatim URL; target="_blank" rel="noopener noreferrer"). A link alone satisfies the post-content requirement, so link-only posts are legal. The link is stored verbatim, never re-parsed as markdown, and is excluded from quotes (quotes read the .content body block only).
 
     @User Mentions: An @username token in any Markdown body matching [A-Za-z0-9]{3,32} and not immediately preceded by a word character (letter/digit/underscore) renders as a tinted pill link to the user's card: <a class="mention" href="/users/{name}">@{name}</a>. Rendering is stateless (no DB lookup in the render path), so a mention of an unknown user links to a 404 card — consistent with how author links behave for deleted users. Tokens inside code spans/fences, inside link labels, or in e-mail local parts (user@host) are never linked. The name is alphanumeric by construction, so the href can never carry a scheme or path.
 

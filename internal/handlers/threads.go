@@ -54,6 +54,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	title := strings.TrimSpace(r.FormValue("title"))
 	body := strings.TrimSpace(r.FormValue("body"))
 	expiration := r.FormValue("expiration")
+	postURL, urlErr := cleanPostURL(r.FormValue("url"))
 
 	// Save any uploaded files to disk
 	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
@@ -64,12 +65,17 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A thread needs a title, and a first post with a body OR at least
-	// one attachment (image-only posts, e.g. pasted from the clipboard).
-	if title == "" || (body == "" && len(uploadedFiles) == 0) {
+	// one attachment OR a first-class link (image-only and link-only
+	// posts are both allowed).
+	if urlErr != nil || title == "" || (body == "" && postURL == "" && len(uploadedFiles) == 0) {
 		for _, f := range uploadedFiles {
 			_ = os.Remove(filepath.Join(app.uploadDir, f.StoragePath))
 		}
-		setFlash(w, "flash_error", "Title and post content are required.")
+		if urlErr != nil {
+			setFlash(w, "flash_error", "Invalid link: "+urlErr.Error())
+		} else {
+			setFlash(w, "flash_error", "Title and post content (text, a link, or an attachment) are required.")
+		}
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
@@ -112,6 +118,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 			ThreadID: thread.ID,
 			UserID:   user.ID,
 			Body:     body,
+			Url:      sql.NullString{String: postURL, Valid: postURL != ""},
 		})
 		if err == nil {
 			// 3. Save attachments

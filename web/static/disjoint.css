@@ -1395,6 +1395,42 @@ main.container,
   object-fit: contain;
 }
 
+/* --- Post link ---------------------------------------------------------------------- */
+
+/* The first-class post link (posts.url) renders as a link card under the
+   body, separate from the markdown content. The full URL is the label
+   (truncated with an ellipsis when wide) and lives verbatim in title. */
+.post-url {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--bulma-border);
+  border-radius: var(--bulma-radius);
+  background-color: var(--bulma-scheme-main-ter);
+  color: var(--bulma-primary);
+  text-decoration: none;
+  min-width: 0;
+}
+
+.post-url:hover,
+.post-url:focus {
+  border-color: var(--bulma-primary);
+}
+
+.post-url-icon {
+  flex-shrink: 0;
+}
+
+.post-url-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+}
+
 /* --- Reactions ---------------------------------------------------------------------- */
 
 /* Front-page rows: the picker opens downward instead of upward, so it

@@ -109,6 +109,7 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
+    COALESCE(p.url, '') AS url,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
@@ -124,6 +125,7 @@ SELECT
     p.thread_id,
     p.user_id,
     p.body,
+    COALESCE(p.url, '') AS url,
     p.created_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
@@ -133,12 +135,15 @@ LEFT JOIN users u ON p.user_id = u.id
 WHERE p.id = ? LIMIT 1;
 
 -- name: CreatePost :one
+-- url is the optional first-class link (NULL when absent); it is stored
+-- verbatim after server-side validation and never parsed as markdown.
 INSERT INTO posts (
     thread_id,
     user_id,
-    body
+    body,
+    url
 ) VALUES (
-    ?, ?, ?
+    ?, ?, ?, ?
 ) RETURNING *;
 
 -- name: CreateAttachment :one

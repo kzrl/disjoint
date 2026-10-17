@@ -48,6 +48,13 @@
           action="/threads/{{.Thread.ID}}/posts"
           enctype="multipart/form-data">
       <div class="field">
+        <label for="reply-url" class="label">Link (optional)</label>
+        <div class="control">
+          <input type="text" id="reply-url" name="url" class="input" placeholder="https://example.com/...">
+        </div>
+      </div>
+
+      <div class="field">
         <label for="reply-body" class="label">Message (Markdown supported)</label>
         <div class="control">
           <textarea id="reply-body" name="body" class="textarea" placeholder="Write a response... (paste images with Ctrl/Cmd+V)" rows="4"></textarea>

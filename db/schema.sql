@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS posts (
     thread_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     body TEXT NOT NULL, -- Stored as raw text/Markdown
+    url TEXT,           -- Optional first-class link, rendered as a link card; never parsed as markdown. NULL when absent.
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

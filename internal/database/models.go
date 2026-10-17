@@ -45,6 +45,7 @@ type Post struct {
 	ThreadID  int64
 	UserID    int64
 	Body      string
+	Url       sql.NullString
 	CreatedAt sql.NullTime
 }
 
