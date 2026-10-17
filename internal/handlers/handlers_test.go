@@ -3017,3 +3017,58 @@ func TestPostURLField(t *testing.T) {
 		t.Errorf("reply urls = %q, %q", rows[1].Url, rows[2].Url)
 	}
 }
+
+// TestReplyFormFileInput pins the reply form's single, clean Bulma .file
+// structure: the native input must carry the file-input class (Bulma
+// hides it as an invisible overlay), otherwise the browser's native
+// "Browse…" button renders alongside the styled "Choose files…" CTA.
+func TestReplyFormFileInput(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "fileinput", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{UserID: user.ID, Title: "file input thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, user.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(thread.ID, 10), nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thread page: %d", rr.Code)
+	}
+	body := rr.Body.String()
+
+	// Extract the reply form element.
+	start := strings.Index(body, `id="reply-form"`)
+	if start == -1 {
+		t.Fatalf("reply form not found")
+	}
+	form := body[start:]
+	if end := strings.Index(form, "</form>"); end != -1 {
+		form = form[:end]
+	}
+
+	if got := strings.Count(form, `type="file"`); got != 1 {
+		t.Errorf("reply form should contain exactly one file input, got %d", got)
+	}
+	for _, want := range []string{
+		`class="file"`,
+		`class="file-label"`,
+		`class="file-cta"`,
+		`class="file-name"`,
+		`class="file-input"`,
+	} {
+		if !strings.Contains(form, want) {
+			t.Errorf("reply form missing %s", want)
+		}
+	}
+}
