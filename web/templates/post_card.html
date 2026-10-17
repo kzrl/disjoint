@@ -9,9 +9,12 @@
       <time class="is-size-7 muted" datetime="{{isoTime .Post.CreatedAt.Time}}">{{formatTime .Post.CreatedAt.Time}}</time>
       <button type="button" class="button is-small is-secondary quote-btn">Quote</button>
     </header>
+    {{if .Post.Body}}
     <div class="content is-medium">
       {{renderMarkdown .Post.Body}}
     </div>
+    {{end}}
+    {{template "reaction_bar" (reactionBar .Post.ID .Reactions .Emojis)}}
     {{if .Attachments}}
       <div class="post-attachments">
         <div class="label is-size-7 is-uppercase muted">Attachments ({{len .Attachments}})</div>
@@ -19,7 +22,7 @@
           {{range .Attachments}}
             {{if isImage .MimeType}}
               <div class="attachment-image-card">
-                <a href="/uploads/{{.StoragePath}}" target="_blank">
+                <a href="/uploads/{{.StoragePath}}">
                   <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
                 </a>
               </div>

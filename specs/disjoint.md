@@ -67,6 +67,31 @@ CREATE TABLE attachments (
     FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 );
 
+CREATE TABLE emojis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,      -- 'joy' or 'mario_fire' (used as :name:)
+    source TEXT NOT NULL,           -- 'unicode' (built-in, seeded) | 'custom' (uploaded)
+    glyph TEXT,                     -- unicode emoji only
+    storage_path TEXT,              -- custom emoji only (served from the uploads dir)
+    mime_type TEXT,                 -- custom emoji only: image/png or image/gif
+    file_size INTEGER,              -- custom emoji only, bytes
+    created_by INTEGER,             -- custom emoji only
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    emoji_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (post_id, user_id, emoji_id),  -- one reaction per user per emoji per post
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (emoji_id) REFERENCES emojis(id) ON DELETE CASCADE
+);
+
 -- Indexes for performance
 CREATE INDEX idx_threads_created_at ON threads(created_at DESC);
 CREATE INDEX idx_posts_thread_id ON posts(thread_id);
@@ -97,7 +122,7 @@ C. The Ephemerality Twist (Expiring Threads)
 
     DELETE FROM threads WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP;
 
-    Note: Foreign key cascading deletes must automatically remove associated posts, attachments, and files stored on disk.
+    Note: Foreign key cascading deletes must automatically remove associated posts, attachments, reactions, and files stored on disk. Deleting a custom emoji also cascades every reaction that used it.
 
 D. Thread View & Interaction (HTMX Enhanced)
 
@@ -126,6 +151,8 @@ D. Thread View & Interaction (HTMX Enhanced)
         > — [view original](/threads/{id}#post-{id})
 
     Every physical line is > -prefixed (blank lines as bare >), so the quote renders as a single blockquote. The quoted text is soft-capped at 500 characters (truncated with …) while the permalink line is always kept; attachments are excluded from quotes by construction. The quote is stored in the reply's body as ordinary Markdown — no schema change, and since posts are immutable a stored quote can never go stale.
+
+    Slack-Style Reactions: Every post — the thread's opening post included — carries a reaction bar below its body: one chip per reacted emoji (glyph for built-in unicode emoji, a scaled image for custom uploads) with a count, highlighted when the viewer has reacted, plus a “+” trigger opening a picker grid of every emoji (built-in and custom). POST /posts/{id}/reactions toggles the viewer's reaction for the given emoji_id (INSERT OR IGNORE, then delete on the no-op), and responds with only the re-rendered bar, which HTMX swaps in place (hx-swap="outerHTML") — no full post re-render. The UNIQUE (post_id, user_id, emoji_id) constraint makes concurrent toggles safe. Custom emoji are PNG/GIF only (≤256 KB, ≤256×256 px), named [a-z0-9_]{2,64}, uploaded on the /emojis community page where any member can delete any custom emoji (deletion cascades its reactions).
 
 E. File Uploads & Media Rendering
 

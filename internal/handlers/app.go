@@ -26,6 +26,7 @@ type App struct {
 	staticFS        fs.FS
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
+	reactionBarTmpl *template.Template
 	middleware      *middleware.Middleware
 	// authLimiter bounds brute-force attempts at login/register per IP.
 	authLimiter *middleware.RateLimiter
@@ -134,6 +135,11 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// deterministic pixel-art default. The ?v= parameter carries the
 		// user's avatar nonce so a shuffled avatar busts the browser's 1-day
 		// cache of the /avatars URL. An empty username renders nothing.
+		// reactionBar assembles the reaction_bar partial context from a post
+		// card's fields (called as (reactionBar .Post.ID .Reactions .Emojis)).
+		"reactionBar": func(postID int64, reactions []ReactionGroup, emojis []database.ListAllEmojisRow) ReactionBarData {
+			return ReactionBarData{PostID: postID, Reactions: reactions, Emojis: emojis}
+		},
 		"authorAvatar": func(path, username string, nonce int64) template.HTML {
 			if username == "" {
 				return ""
@@ -155,6 +161,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"register.html",
 		"register_closed.html",
 		"invites.html",
+		"emojis.html",
 		"users.html",
 		"setup.html",
 		"user_card.html",
@@ -163,7 +170,9 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	for _, page := range pages {
 		// post_card.html is the shared post-card {{define}} used by thread.html
 		// (and post_partial.html); parsed into every set so the define resolves.
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/"+page)
+		// reaction_bar.html is parsed into every set: post_card includes the
+		// reaction bar, and post_card is included in every set.
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}
@@ -171,11 +180,18 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	}
 
 	// Parse post partial for HTMX reply responses
-	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/post_card.html", "templates/post_partial.html")
+	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/post_card.html", "templates/reaction_bar.html", "templates/post_partial.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse post_partial template: %w", err)
 	}
 	app.postPartialTmpl = postPartialTmpl
+
+	// Parse the reaction bar partial for reaction-toggle responses
+	reactionBarTmpl, err := template.New("reaction_bar.html").Funcs(funcMap).ParseFS(web.Files, "templates/reaction_bar.html")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse reaction_bar template: %w", err)
+	}
+	app.reactionBarTmpl = reactionBarTmpl
 
 	return app, nil
 }
@@ -267,12 +283,18 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
 
+	// Community emoji (browse, upload, delete)
+	mux.HandleFunc("GET /emojis", app.EmojiPage)
+	mux.HandleFunc("POST /emojis", app.CreateEmojiSubmit)
+	mux.HandleFunc("POST /emojis/{id}/delete", app.DeleteEmojiSubmit)
+
 	// Front page & threads
 	mux.HandleFunc("GET /", app.IndexPage)
 	mux.HandleFunc("GET /threads/new", app.NewThreadPage)
 	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)
 	mux.HandleFunc("GET /threads/{id}", app.ThreadPage)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
+	mux.HandleFunc("POST /posts/{id}/reactions", app.ToggleReaction)
 
 	// User cards & profiles
 	mux.HandleFunc("GET /users/{name}", app.UserCardPage)

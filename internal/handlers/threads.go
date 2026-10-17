@@ -3,6 +3,8 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -11,16 +13,21 @@ import (
 	"disjoint/internal/middleware"
 )
 
-// PostViewItem holds post details and its associated attachments.
+// PostViewItem holds post details and its associated attachments and reactions.
 type PostViewItem struct {
 	Post        database.ListPostsByThreadRow
 	Attachments []database.Attachment
+	Reactions   []ReactionGroup
+	Emojis      []database.ListAllEmojisRow // full list, rendered into the picker
 }
 
-// SinglePostViewItem holds post details and its associated attachments for a single post view.
+// SinglePostViewItem holds post details and its associated attachments and reactions
+// for a single post view (the HTMX reply response).
 type SinglePostViewItem struct {
 	Post        database.GetPostByIDRow
 	Attachments []database.Attachment
+	Reactions   []ReactionGroup
+	Emojis      []database.ListAllEmojisRow
 }
 
 // NewThreadPage renders the global thread creation form.
@@ -48,7 +55,20 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	body := strings.TrimSpace(r.FormValue("body"))
 	expiration := r.FormValue("expiration")
 
-	if title == "" || body == "" {
+	// Save any uploaded files to disk
+	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
+	if err != nil {
+		setFlash(w, "flash_error", "Error uploading files: "+err.Error())
+		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
+		return
+	}
+
+	// A thread needs a title, and a first post with a body OR at least
+	// one attachment (image-only posts, e.g. pasted from the clipboard).
+	if title == "" || (body == "" && len(uploadedFiles) == 0) {
+		for _, f := range uploadedFiles {
+			_ = os.Remove(filepath.Join(app.uploadDir, f.StoragePath))
+		}
 		setFlash(w, "flash_error", "Title and post content are required.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
@@ -67,14 +87,6 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	}[expiration]; ok {
 		ttlSeconds = sql.NullInt64{Int64: int64(duration.Seconds()), Valid: true}
 		expiresAt = sql.NullTime{Time: time.Now().UTC().Add(duration).Round(0), Valid: true}
-	}
-
-	// Save any uploaded files to disk
-	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
-	if err != nil {
-		setFlash(w, "flash_error", "Error uploading files: "+err.Error())
-		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
-		return
 	}
 
 	// Thread, initial post, and attachments commit together: a failed
@@ -173,11 +185,45 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		attMap[att.PostID] = append(attMap[att.PostID], att)
 	}
 
+	// Reactions: one query for the whole thread, grouped per post in Go. A
+	// guest has no user ID, so no chip ever shows the active state for them.
+	reactionRows, err := app.queries.ListReactionsByThreadID(ctx, thread.ID)
+	if err != nil {
+		http.Error(w, "failed to load reactions", http.StatusInternalServerError)
+		return
+	}
+	var rRows []reactionRow
+	for _, r := range reactionRows {
+		rRows = append(rRows, reactionRow{
+			postID:      r.PostID,
+			userID:      r.UserID,
+			emojiID:     r.EmojiID,
+			name:        r.EmojiName,
+			source:      r.EmojiSource,
+			glyph:       r.EmojiGlyph,
+			storagePath: r.EmojiStoragePath,
+		})
+	}
+	currentUserID := int64(0)
+	if u := middleware.UserFromContext(ctx); u != nil {
+		currentUserID = u.ID
+	}
+	reactionGroups := groupReactions(rRows, currentUserID)
+
+	// Every bar carries the full emoji list for its picker.
+	emojis, err := app.queries.ListAllEmojis(ctx)
+	if err != nil {
+		http.Error(w, "failed to load emojis", http.StatusInternalServerError)
+		return
+	}
+
 	var postViews []PostViewItem
 	for _, p := range posts {
 		postViews = append(postViews, PostViewItem{
 			Post:        p,
 			Attachments: attMap[p.ID],
+			Reactions:   reactionGroups[p.ID],
+			Emojis:      emojis,
 		})
 	}
 

@@ -19,6 +19,18 @@ type Attachment struct {
 	CreatedAt   sql.NullTime
 }
 
+type Emoji struct {
+	ID          int64
+	Name        string
+	Source      string
+	Glyph       sql.NullString
+	StoragePath sql.NullString
+	MimeType    sql.NullString
+	FileSize    sql.NullInt64
+	CreatedBy   sql.NullInt64
+	CreatedAt   sql.NullTime
+}
+
 type Invite struct {
 	ID        int64
 	Code      string
@@ -33,6 +45,14 @@ type Post struct {
 	ThreadID  int64
 	UserID    int64
 	Body      string
+	CreatedAt sql.NullTime
+}
+
+type Reaction struct {
+	ID        int64
+	PostID    int64
+	UserID    int64
+	EmojiID   int64
 	CreatedAt sql.NullTime
 }
 

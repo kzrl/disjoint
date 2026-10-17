@@ -285,3 +285,43 @@ Resolved decisions: boards **removed entirely** (tables + routes + unread state)
 - [x] All acceptance criteria met
 - [x] Manual: front page, thread creation, reply resets expiry, worker purge
 - [ ] Review with human
+
+# Task List: Slack-Style Reactions
+
+Plan: [tasks/plan-reactions.md](plan-reactions.md)
+
+- [x] Task 1: Migrations + queries + sqlc  (DONE)
+  - `db/migrations/00011_emojis_and_reactions.sql` (goose single-file, plain additive DDL): `emojis` table (name UNIQUE, source unicode/custom, glyph, storage_path, mime_type, file_size, created_by FK users ON DELETE SET NULL) + `reactions` table (UNIQUE (post_id, user_id, emoji_id), all FKs ON DELETE CASCADE) + 12 seeded built-in unicode rows (joy, excited, tada, clap, heart, eyes, thinking, thumbsup, thumbsdown, fire, rocket, party)
+  - `db/schema.sql` snapshot updated to match (sqlc input)
+  - `db/query.sql`: `AddReaction :execrows` (INSERT OR IGNORE — rowsAffected 0 = toggle-off), `RemoveReaction :execrows`, `ListReactionsByThreadID :many` (JOINs emojis + posts, COALESCE'd emoji columns), `ListAllEmojis :many`, `GetEmojiByID :one`, `GetEmojiByName :one`, `CreateEmoji :one`, `DeleteEmoji :exec`
+  - `sqlc generate`; `go build ./...` clean
+  - Verified: fresh DB → goose v11 with 12 seeded emoji rows; `goose down` (via temp helper, goose CLI not in go.sum) → v10 with both tables dropped; pre-existing dev `disjoint.db` backed up to `disjoint.db.bak-pre00011` and upgraded v10→v11 (posts intact); `go test ./...` green
+- [x] Task 2: Custom emoji upload + management page  (DONE)
+  - `internal/handlers/emojis.go`: `EmojiPage` (auth-gated grid), `CreateEmojiSubmit` (multipart `file` + `name`; Slack-style name regex `^[a-z0-9_]{2,64}$`; duplicate-name check via `GetEmojiByName`; sniff + stdlib `image.Decode` validation), `DeleteEmojiSubmit` (owner or admin; built-ins undeletable; removes file, reactions cascade via FK)
+  - `saveEmojiFile`: 256KB cap, 256×256px max, PNG/GIF only — WEBP dropped vs plan (not sniffable by `http.DetectContentType`, no stdlib decoder; zero-dep policy)
+  - `db/query.sql`: `ListAllEmojis` now joins uploader username (`created_by_username`) instead of raw ID; `sqlc generate`
+  - Routes `GET /emojis`, `POST /emojis`, `POST /emojis/{id}/delete`; "Emoji" navbar link for signed-in users; `web/templates/emojis.html` (Bulma, upload form + tile grid, delete button for owner/admin)
+  - `web/css/site.css`: `.emojis-grid`, `.emoji-tile`, `.emoji-glyph`, `.emoji-thumb` (`.emoji-thumb` is the pinned class Task 4 chips reuse); vendored CSS regenerated via `make css`
+  - `handlers_test.go` `TestCustomEmojiUploads` (11 sections): guest redirect, 12 built-in tiles, PNG + GIF happy paths (row/file/render/attribution), duplicate name, invalid name, non-image, oversized dims, oversized file, delete permissions (stranger/built-in/owner), admin delete, reaction cascade on emoji delete — all pass; full suite green
+- [x] Task 3: Reaction toggle handler + route  (DONE)
+  - `db/query.sql`: `ListReactionsByPostID :many` (per-post rows for the toggle response); `sqlc generate`
+  - `internal/handlers/reactions.go`: `ToggleReaction` — auth gate (HTMX 401 + `HX-Redirect` / non-HTMX 303 to login), post + emoji 404s, toggle via `AddReaction :execrows` (0 rows inserted → `RemoveReaction`), renders the re-grouped bar; `ReactionGroup` / `ReactionBarData` + `groupReactions` helper (shared by the thread page in Task 4)
+  - `web/templates/reaction_bar.html` partial: chips (glyph span or `<img class="emoji-img">`, `is-active` when you reacted, count + title) + `+` button; `reactionBarTmpl` registered in `NewApp`
+  - Route `POST /posts/{id}/reactions`
+  - `handlers_test.go` `TestReactionToggles`: anonymous HTMX 401+redirect, anonymous 303, toggle-on (active chip, hx-vals, count, title), toggle-off, two-user count 2, custom emoji renders `<img>` chip, unknown post/emoji 404s — all pass; full suite green
+- [x] Task 4: Reaction bar, picker, thread-page wiring, CSS  (DONE)
+  - `reaction_bar.html`: chips + `+` trigger + server-rendered `.emoji-picker` grid (every emoji, glyph or `<img>`), whole bar re-rendered per toggle so counts/active state stay current
+  - `ReactionBarData.Emojis` + `ListAllEmojis` in the toggle handler, `ThreadPage`, and the HTMX reply path; `PostViewItem`/`SinglePostViewItem` gain `Reactions` + `Emojis`; bar included once in `post_card.html` (covers thread page + HTMX partial)
+  - `threads.go` `ThreadPage`: one `ListReactionsByThreadID` + one `ListAllEmojis` per page load, grouped via the shared `groupReactions`
+  - `app.go`: `reactionBar` template func + `reaction_bar.html` parsed into every template set
+  - `web/static/disjoint.js`: picker toggle via document-level click delegation (HTMX-appended bars work), outside-click + Escape close, aria-expanded sync
+  - `web/css/site.css`: `.reaction-bar`, `.reaction-chip` (pill, `is-active` tint via color-mix like `.mention`), `.reaction-emoji`, `.emoji-img` (1.25em), `.reaction-picker-wrap`, `.emoji-picker` (8-col grid, scroll, z-30); vendored CSS regenerated via `make css`
+  - `handlers_test.go` `TestThreadPageReactionBars`: per-user active chips (ally 2 / bob 1), grouped counts `joy (2)`, custom `<img>` chip, picker carries built-ins + customs, `hx-post` targets the post endpoint, HTMX reply appends a bar with a working picker — all pass; full suite green
+  - Smoke: binary boots on the dev DB; login 200, guest /emojis + /threads 303; picker JS + chip CSS present in served static assets
+- [x] Task 5: End-to-end verification + docs  (DONE)
+  - `go test -race -count=1 ./...` green (fresh in-mem DBs per test)
+  - Fresh-DB e2e smoke (temp instance, PORT=8091): /setup → create thread → upload a real 48×48 PNG custom emoji → toggle built-in joy on/off via `POST /posts/1/reactions` (HTMX) → react with the custom emoji (chip renders `<img>`) → HTMX reply appends a bar with a working picker → react on the reply → thread page shows chips + picker → delete the emoji: 2 reactions → 0, chip gone (FK cascade confirmed in SQLite)
+  - Pre-existing-DB boot: dev DB at v11, goose "no migrations to run", login 200, picker JS served
+  - README: "Slack-Style Reactions" feature bullet
+  - specs/disjoint.md: `emojis` + `reactions` tables in the schema section, cascade note in the ephemerality section, reactions item in "Thread View & Interaction"
+  - Dev DB backup `disjoint.db.bak-pre00011` still in repo root — delete when you're happy with the feature

@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"image"
+	"image/gif"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -428,6 +432,144 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	}
 	if !strings.Contains(rr.Header().Get("Cache-Control"), "public") {
 		t.Fatalf("expected Cache-Control header on served upload")
+	}
+}
+
+// TestImageOnlyPosts covers the clipboard-paste path: a post whose body is
+// empty but which carries at least one file must be accepted, while a post
+// with neither is still rejected.
+func TestImageOnlyPosts(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	hash, _ := auth.HashPassword("password123")
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "carol",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	authCookie := authCookieFor(t, queries, user.ID)
+
+	// Minimal bytes that sniff as image/png via http.DetectContentType.
+	pngBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
+
+	// Seed a thread with a normal body.
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("title", "Paste test thread")
+	_ = w.WriteField("body", "Seed post.")
+	_ = w.WriteField("expiration", "never")
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	threadIDStr := strings.TrimPrefix(rr.Header().Get("Location"), "/threads/")
+
+	// 1. Image-only HTMX reply (what a clipboard paste produces: empty
+	//    body, one image file).
+	var replyBuf bytes.Buffer
+	rw := multipart.NewWriter(&replyBuf)
+	_ = rw.WriteField("body", "")
+	part, err := rw.CreateFormFile("files", "clipboard-image-1.png")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = part.Write(pngBytes)
+	_ = rw.Close()
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/"+threadIDStr+"/posts", &replyBuf)
+	req.Header.Set("Content-Type", rw.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected image-only HTMX reply to return 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+	replyHTML := rr.Body.String()
+	if !strings.Contains(replyHTML, "clipboard-image-1.png") {
+		t.Fatalf("expected attachment filename in HTMX reply, got: %s", replyHTML)
+	}
+	if strings.Contains(replyHTML, `class="content is-medium"`) {
+		t.Fatalf("expected no .content div for an empty-body post, got: %s", replyHTML)
+	}
+	if !strings.Contains(replyHTML, "carol") {
+		t.Fatalf("expected author username in HTMX reply")
+	}
+
+	// 2. Empty body AND no files is still rejected.
+	var emptyBuf bytes.Buffer
+	ef := multipart.NewWriter(&emptyBuf)
+	_ = ef.WriteField("body", "")
+	_ = ef.Close()
+	req = httptest.NewRequest(http.MethodPost, "/threads/"+threadIDStr+"/posts", &emptyBuf)
+	req.Header.Set("Content-Type", ef.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty body with no files, got %d", rr.Code)
+	}
+
+	// 3. New thread with an empty body but an image attachment succeeds.
+	var newBuf bytes.Buffer
+	nw := multipart.NewWriter(&newBuf)
+	_ = nw.WriteField("title", "Image-only thread")
+	_ = nw.WriteField("body", "")
+	_ = nw.WriteField("expiration", "never")
+	np, err := nw.CreateFormFile("files", "clipboard-image-1.png")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = np.Write(pngBytes)
+	_ = nw.Close()
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/new", &newBuf)
+	req.Header.Set("Content-Type", nw.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/threads/") {
+		t.Fatalf("expected image-only thread create redirect, got %d -> %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 4. Missing title is still rejected, and the rejected upload must not
+	//    leave orphan files on disk.
+	entriesBefore, _ := os.ReadDir(uploadDir)
+	var badBuf bytes.Buffer
+	bw := multipart.NewWriter(&badBuf)
+	_ = bw.WriteField("title", "")
+	_ = bw.WriteField("body", "")
+	_ = bw.WriteField("expiration", "never")
+	bp, err := bw.CreateFormFile("files", "clipboard-image-1.png")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = bp.Write(pngBytes)
+	_ = bw.Close()
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/new", &badBuf)
+	req.Header.Set("Content-Type", bw.FormDataContentType())
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/threads/new" {
+		t.Fatalf("expected redirect back to /threads/new, got %d -> %s", rr.Code, rr.Header().Get("Location"))
+	}
+	entriesAfter, _ := os.ReadDir(uploadDir)
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Fatalf("rejected upload left orphan files: %d before, %d after", len(entriesBefore), len(entriesAfter))
 	}
 }
 
@@ -1988,5 +2130,597 @@ func TestSecurityHeadersPresent(t *testing.T) {
 		if got := rr.Header().Get(header); got != value {
 			t.Errorf("%s = %q, want %q", header, got, value)
 		}
+	}
+}
+
+// realPNG / realGIF encode small genuine images so the emoji upload pipeline's
+// sniff + image.Decode + dimension checks run against valid bytes (the
+// package-level pngBytes/gifBytes fakes only satisfy the sniffer).
+func realPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func realGIF(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := gif.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// emojiMultipart builds the /emojis upload form (name field + "file" part).
+func emojiMultipart(t *testing.T, name, fileName string, fileBytes []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	if err := w.WriteField("name", name); err != nil {
+		t.Fatal(err)
+	}
+	if fileBytes != nil {
+		fw, err := w.CreateFormFile("file", fileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(fileBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &b, w.FormDataContentType()
+}
+
+func TestCustomEmojiUploads(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	ally, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "emoji_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "emoji_bob", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, ally.ID)
+	bobCookie := authCookieFor(t, queries, bob.ID)
+
+	getPage := func(c *http.Cookie) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/emojis", nil)
+		if c != nil {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /emojis returned %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	upload := func(c *http.Cookie, body *bytes.Buffer, ctype string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/emojis", body)
+		req.Header.Set("Content-Type", ctype)
+		req.AddCookie(c)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	hasFlash := func(rr *httptest.ResponseRecorder, name string) bool {
+		t.Helper()
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == name && c.Value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	deleteEmoji := func(c *http.Cookie, id int64) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/emojis/%d/delete", id), nil)
+		req.AddCookie(c)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	fileCount := func() int {
+		t.Helper()
+		entries, err := os.ReadDir(uploadDir)
+		if err != nil {
+			t.Fatalf("reading uploadDir: %v", err)
+		}
+		return len(entries)
+	}
+
+	// 1. Unauthenticated: redirect to login; signed-in: page lists built-ins.
+	req := httptest.NewRequest(http.MethodGet, "/emojis", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("expected 303 to /login for guest, got %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	page := getPage(cookie)
+	for _, name := range []string{":joy:", ":party:", "Community Emoji", "Add Emoji"} {
+		if !strings.Contains(page, name) {
+			t.Errorf("emoji page missing %q", name)
+		}
+	}
+	if got := strings.Count(page, "built-in"); got != 12 {
+		t.Errorf("expected 12 built-in tiles, got %d", got)
+	}
+
+	// 2. PNG upload succeeds: row, file on disk, rendered tile with uploader.
+	body, ctype := emojiMultipart(t, "mario_fire", "mario.png", realPNG(t, 64, 64))
+	rr = upload(cookie, body, ctype)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected clean 303 after PNG upload, got %d (err=%v)", rr.Code, hasFlash(rr, "flash_error"))
+	}
+	mario, err := queries.GetEmojiByName(ctx, "mario_fire")
+	if err != nil {
+		t.Fatalf("expected mario_fire row: %v", err)
+	}
+	if mario.Source != "custom" || !mario.StoragePath.Valid || !strings.HasSuffix(mario.StoragePath.String, ".png") {
+		t.Fatalf("unexpected mario_fire row: %+v", mario)
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, mario.StoragePath.String)); err != nil {
+		t.Fatalf("emoji file not saved: %v", err)
+	}
+	page = getPage(cookie)
+	if !strings.Contains(page, ":mario_fire:") || !strings.Contains(page, "/uploads/"+mario.StoragePath.String) {
+		t.Errorf("page did not render mario_fire tile:\n%s", page)
+	}
+	if !strings.Contains(page, `/users/emoji_ally">emoji_ally</a>`) {
+		t.Errorf("page did not attribute mario_fire to emoji_ally")
+	}
+
+	// 3. GIF upload succeeds (animated GIFs are the slackmojis.com staple).
+	body, ctype = emojiMultipart(t, "star_wink", "star.gif", realGIF(t, 32, 32))
+	rr = upload(cookie, body, ctype)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected clean 303 after GIF upload, got %d", rr.Code)
+	}
+	if _, err := queries.GetEmojiByName(ctx, "star_wink"); err != nil {
+		t.Fatalf("expected star_wink row: %v", err)
+	}
+
+	// 4. Duplicate name: rejected, row and disk untouched.
+	before := fileCount()
+	body, ctype = emojiMultipart(t, "mario_fire", "again.png", realPNG(t, 8, 8))
+	rr = upload(cookie, body, ctype)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error for duplicate name")
+	}
+	again, err := queries.GetEmojiByName(ctx, "mario_fire")
+	if err != nil || again.StoragePath.String != mario.StoragePath.String {
+		t.Fatalf("duplicate upload must not replace the existing emoji: %+v (err %v)", again, err)
+	}
+	if got := fileCount(); got != before {
+		t.Errorf("rejected upload left a file behind: %d -> %d", before, got)
+	}
+
+	// 5. Invalid name: rejected, no row.
+	body, ctype = emojiMultipart(t, "Bad-Name", "x.png", realPNG(t, 8, 8))
+	rr = upload(cookie, body, ctype)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error for invalid name")
+	}
+	if _, err := queries.GetEmojiByName(ctx, "bad-name"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected no row for invalid name, got %v", err)
+	}
+
+	// 6. Non-image upload: rejected, nothing written to disk.
+	before = fileCount()
+	body, ctype = emojiMultipart(t, "not_image", "evil.html", txtBytes)
+	rr = upload(cookie, body, ctype)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error for non-image upload")
+	}
+	if _, err := queries.GetEmojiByName(ctx, "not_image"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected no row for non-image upload, got %v", err)
+	}
+	if got := fileCount(); got != before {
+		t.Errorf("rejected non-image left a file behind: %d -> %d", before, got)
+	}
+
+	// 7. Oversized dimensions: rejected.
+	body, ctype = emojiMultipart(t, "too_wide", "wide.png", realPNG(t, 300, 10))
+	rr = upload(cookie, body, ctype)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error for oversized image")
+	}
+	if _, err := queries.GetEmojiByName(ctx, "too_wide"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected no row for oversized image, got %v", err)
+	}
+
+	// 8. Oversized file: rejected by the size cap (before sniffing).
+	big := append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, make([]byte, 300<<10)...)
+	body, ctype = emojiMultipart(t, "too_big", "big.png", big)
+	rr = upload(cookie, body, ctype)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error for oversized file")
+	}
+	if _, err := queries.GetEmojiByName(ctx, "too_big"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected no row for oversized file, got %v", err)
+	}
+
+	// 9. Deletion permissions: stranger no, built-in never, owner yes.
+	rr = deleteEmoji(bobCookie, mario.ID)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error when stranger deletes someone else's emoji")
+	}
+	if _, err := queries.GetEmojiByID(ctx, mario.ID); err != nil {
+		t.Fatalf("mario_fire should still exist: %v", err)
+	}
+	rr = deleteEmoji(cookie, 1) // built-in row (first seeded ID)
+	if !hasFlash(rr, "flash_error") {
+		t.Fatalf("expected flash_error deleting a built-in")
+	}
+	if _, err := queries.GetEmojiByID(ctx, 1); err != nil {
+		t.Fatalf("built-in emoji must not be deletable: %v", err)
+	}
+	star, err := queries.GetEmojiByName(ctx, "star_wink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	starFile := filepath.Join(uploadDir, star.StoragePath.String)
+	rr = deleteEmoji(cookie, star.ID)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected clean delete by owner, got %d", rr.Code)
+	}
+	if _, err := queries.GetEmojiByID(ctx, star.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected star_wink row gone, got %v", err)
+	}
+	if _, err := os.Stat(starFile); !os.IsNotExist(err) {
+		t.Errorf("expected star_wink file removed, stat err=%v", err)
+	}
+
+	// 10. Admin can delete another user's emoji.
+	if err := queries.SetUserAdmin(ctx, bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	rr = deleteEmoji(bobCookie, mario.ID)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected clean admin delete, got %d", rr.Code)
+	}
+	if _, err := queries.GetEmojiByID(ctx, mario.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("expected mario_fire row gone after admin delete, got %v", err)
+	}
+
+	// 11. Deleting an emoji cascades its reactions away.
+	body, ctype = emojiMultipart(t, "cascade_emoji", "c.png", realPNG(t, 16, 16))
+	upload(cookie, body, ctype)
+	cascade, err := queries.GetEmojiByName(ctx, "cascade_emoji")
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: ally.ID, Title: "emoji cascade",
+		ExpiresAt: sql.NullTime{}, TtlSeconds: sql.NullInt64{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: ally.ID, Body: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: post.ID, UserID: ally.ID, EmojiID: cascade.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := queries.ListReactionsByThreadID(ctx, thread.ID); len(n) != 1 {
+		t.Fatalf("expected 1 reaction before emoji delete, got %d", len(n))
+	}
+	rr = deleteEmoji(cookie, cascade.ID)
+	if rr.Code != http.StatusSeeOther || hasFlash(rr, "flash_error") {
+		t.Fatalf("expected clean delete, got %d", rr.Code)
+	}
+	if n, err := queries.ListReactionsByThreadID(ctx, thread.ID); err != nil || len(n) != 0 {
+		t.Errorf("expected reactions to cascade away with the emoji, got %d (err %v)", len(n), err)
+	}
+}
+
+func TestReactionToggles(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	_ = uploadDir
+	router := app.Routes()
+	ctx := context.Background()
+
+	ally, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "react_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "react_bob", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allyCookie := authCookieFor(t, queries, ally.ID)
+	bobCookie := authCookieFor(t, queries, bob.ID)
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: ally.ID, Title: "reaction thread",
+		ExpiresAt: sql.NullTime{}, TtlSeconds: sql.NullInt64{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: ally.ID, Body: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joy, err := queries.GetEmojiByName(ctx, "joy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toggle := func(c *http.Cookie, postID int64, emojiID int64, htmx bool) *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{}
+		form.Set("emoji_id", strconv.FormatInt(emojiID, 10))
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/posts/%d/reactions", postID), strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c != nil {
+			req.AddCookie(c)
+		}
+		if htmx {
+			req.Header.Set("HX-Request", "true")
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	reactionCount := func(postID int64) int {
+		t.Helper()
+		n, err := queries.ListReactionsByPostID(ctx, postID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(n)
+	}
+
+	// 1. HTMX request without a session: 401 + HX-Redirect to login.
+	rr := toggle(nil, post.ID, joy.ID, true)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous HTMX toggle, got %d", rr.Code)
+	}
+	if loc := rr.Header().Get("HX-Redirect"); loc != "/login" {
+		t.Fatalf("expected HX-Redirect /login, got %q", loc)
+	}
+
+	// 2. Standard (non-HTMX) request without a session: redirect to login.
+	rr = toggle(nil, post.ID, joy.ID, false)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("expected 303 to /login for anonymous toggle, got %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 3. Toggle on: bar renders an active chip with count 1.
+	rr = toggle(allyCookie, post.ID, joy.ID, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 from HTMX toggle, got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`class="reaction-chip is-active"`,
+		`hx-vals='{"emoji_id": ` + strconv.FormatInt(joy.ID, 10) + `}'`,
+		`>1<`,     // count
+		"joy (1)", // title
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("toggled-on bar missing %q in:\n%s", want, body)
+		}
+	}
+	if n := reactionCount(post.ID); n != 1 {
+		t.Errorf("expected 1 reaction row after toggle-on, got %d", n)
+	}
+
+	// 4. Toggle off: the same click removes it again.
+	rr = toggle(allyCookie, post.ID, joy.ID, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 from toggle-off, got %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "is-active") {
+		t.Errorf("expected no active chip after toggle-off:\n%s", rr.Body.String())
+	}
+	if n := reactionCount(post.ID); n != 0 {
+		t.Errorf("expected 0 reaction rows after toggle-off, got %d", n)
+	}
+
+	// 5. Second user reacts: count 2, active only for the requesting user.
+	toggle(allyCookie, post.ID, joy.ID, true)
+	rr = toggle(bobCookie, post.ID, joy.ID, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body = rr.Body.String()
+	if !strings.Contains(body, ">2<") || !strings.Contains(body, "joy (2)") {
+		t.Errorf("expected count 2 in bar:\n%s", body)
+	}
+	if !strings.Contains(body, `class="reaction-chip is-active"`) {
+		t.Errorf("expected active chip for the requesting user (bob):\n%s", body)
+	}
+	// The same bar rendered for ally must also be active (ally reacted too),
+	// and both views agree on the count.
+	rr = toggle(allyCookie, post.ID, joy.ID, true) // ally toggles OFF
+	if n := reactionCount(post.ID); n != 1 {
+		t.Errorf("expected 1 reaction row after ally toggled off, got %d", n)
+	}
+
+	// 6. Custom emoji renders as an <img> chip, not a glyph.
+	png, ctype := emojiMultipart(t, "react_custom", "c.png", realPNG(t, 24, 24))
+	ur := httptest.NewRequest(http.MethodPost, "/emojis", png)
+	ur.Header.Set("Content-Type", ctype)
+	ur.AddCookie(allyCookie)
+	urr := httptest.NewRecorder()
+	router.ServeHTTP(urr, ur)
+	if urr.Code != http.StatusSeeOther {
+		t.Fatalf("emoji upload failed: %d", urr.Code)
+	}
+	custom, err := queries.GetEmojiByName(ctx, "react_custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr = toggle(bobCookie, post.ID, custom.ID, true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 toggling custom emoji, got %d", rr.Code)
+	}
+	body = rr.Body.String()
+	if !strings.Contains(body, `<img class="emoji-img" src="/uploads/`+custom.StoragePath.String) {
+		t.Errorf("custom emoji chip did not render an <img>:\n%s", body)
+	}
+	if !strings.Contains(body, `title="react_custom (1)"`) {
+		t.Errorf("custom emoji chip missing name/count title:\n%s", body)
+	}
+
+	// 7. Unknown post / unknown emoji: 404.
+	rr = toggle(allyCookie, 99999, joy.ID, true)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown post, got %d", rr.Code)
+	}
+	rr = toggle(allyCookie, post.ID, 99999, true)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown emoji, got %d", rr.Code)
+	}
+}
+
+func TestThreadPageReactionBars(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	ally, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "bar_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "bar_bob", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allyCookie := authCookieFor(t, queries, ally.ID)
+	bobCookie := authCookieFor(t, queries, bob.ID)
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: ally.ID, Title: "bar thread",
+		ExpiresAt: sql.NullTime{}, TtlSeconds: sql.NullInt64{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: ally.ID, Body: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ally reacts with built-in joy and a custom emoji; bob with joy only.
+	joy, err := queries.GetEmojiByName(ctx, "joy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: post.ID, UserID: ally.ID, EmojiID: joy.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: post.ID, UserID: bob.ID, EmojiID: joy.ID}); err != nil {
+		t.Fatal(err)
+	}
+	custom, err := queries.CreateEmoji(ctx, database.CreateEmojiParams{
+		Name: "bar_custom", Source: "custom",
+		StoragePath: sql.NullString{String: "bar-custom.png", Valid: true},
+		MimeType:    sql.NullString{String: "image/png", Valid: true},
+		FileSize:    sql.NullInt64{Int64: 1, Valid: true},
+		CreatedBy:   sql.NullInt64{Int64: ally.ID, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: post.ID, UserID: ally.ID, EmojiID: custom.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	getThread := func(c *http.Cookie) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+		if c != nil {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET thread returned %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// 1. ally's view: both of her chips active, custom chip is an <img>,
+	//    counts grouped (joy = 2), picker carries the full emoji list.
+	page := getThread(allyCookie)
+	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 2 {
+		t.Errorf("expected 2 active chips for ally, got %d", got)
+	}
+	if !strings.Contains(page, `title="joy (2)"`) {
+		t.Errorf("expected grouped joy (2) chip")
+	}
+	if !strings.Contains(page, `<img class="emoji-img" src="/uploads/bar-custom.png"`) {
+		t.Errorf("custom reaction chip missing <img>")
+	}
+	if !strings.Contains(page, `title="bar_custom (1)"`) {
+		t.Errorf("custom reaction chip missing count title")
+	}
+	if !strings.Contains(page, `title=":joy:"`) || !strings.Contains(page, `title=":party:"`) || !strings.Contains(page, `title=":bar_custom:"`) {
+		t.Errorf("picker missing emoji entries")
+	}
+	if !strings.Contains(page, `hx-post="/posts/`+strconv.FormatInt(post.ID, 10)+`/reactions"`) {
+		t.Errorf("chips missing hx-post to the post's reaction endpoint")
+	}
+
+	// 2. bob's view: only joy active (custom is ally's), same counts.
+	page = getThread(bobCookie)
+	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 1 {
+		t.Errorf("expected 1 active chip for bob, got %d", got)
+	}
+	if !strings.Contains(page, `title="joy (2)"`) {
+		t.Errorf("bob's view should show the same grouped counts")
+	}
+
+	// 3. HTMX reply: the appended post card carries a reaction bar with a
+	//    working picker (no reactions yet on the new post).
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	if err := w.WriteField("body", "a reply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", thread.ID), &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HTMX reply returned %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `class="reaction-bar"`) {
+		t.Errorf("appended post missing reaction bar")
+	}
+	if !strings.Contains(body, `class="emoji-picker is-hidden"`) || !strings.Contains(body, `title=":joy:"`) {
+		t.Errorf("appended post's bar missing working picker")
 	}
 }

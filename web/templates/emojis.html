@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="container is-max-w">
+  <div class="level is-mobile mb-4">
+    <div class="level-left">
+      <h2 class="title is-3">Community Emoji</h2>
+    </div>
+  </div>
+
+  <div class="box mb-5">
+    <form method="POST" action="/emojis" enctype="multipart/form-data" class="mb-3">
+      <div class="field has-addons">
+        <div class="control">
+          <input class="input" type="text" name="name" placeholder="name, e.g. mario_fire"
+                 required pattern="[a-z0-9_]{2,64}" maxlength="64"
+                 title="lowercase letters, digits, underscores; 2-64 characters">
+        </div>
+        <div class="control">
+          <input class="input" type="file" name="file" accept="image/png,image/gif" required>
+        </div>
+        <div class="control">
+          <button type="submit" class="button is-primary">Add Emoji</button>
+        </div>
+      </div>
+    </form>
+    <p class="is-size-7 muted mb-0">
+      PNG or GIF, up to 256KB and 256&times;256px (animated GIFs work).
+      The name becomes <code>:name:</code>. Upload emoji for your own community.
+    </p>
+  </div>
+
+  <div class="emojis-grid">
+    {{range .Emojis}}
+    <div class="box emoji-tile has-text-centered">
+      {{if eq .Source "unicode"}}
+        <span class="emoji-glyph" aria-hidden="true">{{.Glyph}}</span>
+      {{else}}
+        <img class="emoji-thumb" src="/uploads/{{.StoragePath}}" alt="" loading="lazy">
+      {{end}}
+      <div class="is-size-7 mb-2"><code>:{{.Name}}:</code></div>
+      {{if ne .Source "unicode"}}
+        {{if .CreatedByUsername}}
+          <div class="is-size-7 muted mb-2">by {{userLink .CreatedByUsername}}</div>
+        {{else}}
+          <div class="is-size-7 muted mb-2"><span class="muted">unknown uploader</span></div>
+        {{end}}
+        {{if or (eq $.CurrentUser.IsAdmin 1) (eq .CreatedByUsername $.CurrentUser.Username)}}
+        <form method="POST" action="/emojis/{{.ID}}/delete">
+          <button type="submit" class="button is-secondary is-small">Delete</button>
+        </form>
+        {{end}}
+      {{else}}
+        <div class="is-size-7 muted mb-2">built-in</div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

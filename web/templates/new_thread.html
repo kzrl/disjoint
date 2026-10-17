@@ -21,7 +21,7 @@
       <div class="field">
         <label for="body" class="label">First Post (Markdown supported)</label>
         <div class="control">
-          <textarea id="body" name="body" class="textarea" placeholder="Write your post here... Markdown like **bold**, *italic*, quotes and `code` are supported." rows="8" required></textarea>
+          <textarea id="body" name="body" class="textarea" placeholder="Write your post here... Markdown like **bold**, *italic*, quotes and `code` are supported. Paste images with Ctrl/Cmd+V." rows="8"></textarea>
         </div>
         <p class="help">Tip: Use Markdown for rich formatting, tables, lists, and code blocks.</p>
       </div>
@@ -46,8 +46,10 @@
         <label class="label">Attachments (Images, Videos, Files)</label>
         <div class="control">
           <input type="file" name="files" class="input" multiple accept="image/*,video/*,application/pdf,text/*">
+          <div class="pasted-previews" hidden></div>
+          <p class="paste-error notification is-danger is-light is-small" hidden></p>
         </div>
-        <p class="help">Supported media: JPEG, PNG, GIF, WebP, MP4, WebM, and standard documents (up to 50MB per file).</p>
+        <p class="help">Supported media: JPEG, PNG, GIF, WebP, MP4, WebM, and standard documents (up to 50MB per file). Paste images with Ctrl/Cmd+V or drop files on the form.</p>
       </div>
 
       <div class="buttons mt-5">

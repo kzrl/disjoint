@@ -51,15 +51,18 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := strings.TrimSpace(r.FormValue("body"))
-	if body == "" {
-		http.Error(w, "reply body cannot be empty", http.StatusBadRequest)
-		return
-	}
 	// Save attachments
 	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
 	if err != nil {
 		http.Error(w, "failed to upload files: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// A post needs a body OR at least one attachment, so image-only
+	// replies (e.g. a screenshot pasted from the clipboard) are allowed.
+	body := strings.TrimSpace(r.FormValue("body"))
+	if body == "" && len(uploadedFiles) == 0 {
+		http.Error(w, "reply body cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -130,9 +133,18 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// A freshly created post has no reactions yet, but its bar still
+		// carries the full emoji list so its picker works.
+		newPostEmojis, err := app.queries.ListAllEmojis(ctx)
+		if err != nil {
+			http.Error(w, "failed to load emojis", http.StatusInternalServerError)
+			return
+		}
+
 		viewItem := SinglePostViewItem{
 			Post:        postWithAuthor,
 			Attachments: attachments,
+			Emojis:      newPostEmojis,
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -249,3 +249,92 @@ DELETE FROM sessions WHERE user_id = ?;
 
 -- name: PruneExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at <= ?;
+
+-- name: ListAllEmojis :many
+-- Every available emoji (built-in unicode + custom uploads), stable
+-- name order for the reaction picker. The uploader's username (not just the
+-- ID) is joined in so the emoji page can attribute custom uploads; empty
+-- when the uploader was deleted (created_by is SET NULL).
+SELECT
+    e.id,
+    e.name,
+    e.source,
+    COALESCE(e.glyph, '') AS glyph,
+    COALESCE(e.storage_path, '') AS storage_path,
+    COALESCE(e.mime_type, '') AS mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS file_size,
+    COALESCE(uc.username, '') AS created_by_username
+FROM emojis e
+LEFT JOIN users uc ON e.created_by = uc.id
+ORDER BY e.name ASC;
+
+-- name: GetEmojiByID :one
+SELECT * FROM emojis WHERE id = ? LIMIT 1;
+
+-- name: GetEmojiByName :one
+SELECT * FROM emojis WHERE name = ? LIMIT 1;
+
+-- name: CreateEmoji :one
+INSERT INTO emojis (
+    name,
+    source,
+    glyph,
+    storage_path,
+    mime_type,
+    file_size,
+    created_by
+) VALUES (
+    ?, ?, ?, ?, ?, ?, ?
+) RETURNING *;
+
+-- name: DeleteEmoji :exec
+DELETE FROM emojis WHERE id = ?;
+
+-- name: AddReaction :execrows
+-- Returns the number of rows inserted: 0 means this (post, user, emoji)
+-- combination already exists (the UNIQUE constraint), i.e. the click is a
+-- toggle-off. Concurrent toggles are safe: one request wins the insert, the
+-- other's insert is ignored and it deletes.
+INSERT OR IGNORE INTO reactions (post_id, user_id, emoji_id) VALUES (?, ?, ?);
+
+-- name: RemoveReaction :execrows
+DELETE FROM reactions WHERE post_id = ? AND user_id = ? AND emoji_id = ?;
+
+-- name: ListReactionsByPostID :many
+-- Reaction rows for a single post with emoji details, for rendering the
+-- post's reaction bar after a toggle.
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+WHERE r.post_id = ?
+ORDER BY r.emoji_id ASC, r.id ASC;
+
+-- name: ListReactionsByThreadID :many
+-- All reaction rows for a thread's posts, joined with their emoji so the
+-- handler can group counts per post in Go without a second query.
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+JOIN posts p ON r.post_id = p.id
+WHERE p.thread_id = ?
+ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;

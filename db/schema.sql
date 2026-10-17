@@ -77,3 +77,32 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS emojis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,       -- 'joy' or 'mario_fire' (used as :name:)
+    source TEXT NOT NULL,            -- 'unicode' | 'custom'
+    glyph TEXT,                      -- unicode emoji only, e.g. '🙂'
+    storage_path TEXT,               -- custom emoji only; NULL for unicode
+    mime_type TEXT,                  -- custom emoji only, e.g. image/png
+    file_size INTEGER,               -- custom emoji only, bytes
+    created_by INTEGER,              -- custom emoji only; NULL for unicode
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_emojis_name ON emojis(name);
+
+CREATE TABLE IF NOT EXISTS reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    emoji_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (post_id, user_id, emoji_id),
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (emoji_id) REFERENCES emojis(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_reactions_post_id ON reactions(post_id);
+

@@ -1,0 +1,44 @@
+{{define "reaction_bar"}}
+<!-- Reaction bar for one post. Re-rendered whole after every toggle
+     (hx-swap="outerHTML"), so it always shows current counts and its
+     picker. The picker is a server-rendered grid of every emoji. -->
+<div class="reaction-bar">
+  {{range .Reactions}}
+  <button type="button"
+      class="reaction-chip{{if .You}} is-active{{end}}"
+      hx-post="/posts/{{$.PostID}}/reactions"
+      hx-target="closest .reaction-bar"
+      hx-swap="outerHTML"
+      hx-vals='{"emoji_id": {{.EmojiID}}}'
+      title="{{.Name}} ({{.Count}})">
+    {{if eq .Source "unicode"}}
+      <span class="reaction-emoji" aria-hidden="true">{{.Glyph}}</span>
+    {{else}}
+      <img class="emoji-img" src="/uploads/{{.StoragePath}}" alt="" loading="lazy">
+    {{end}}
+    <span class="reaction-count">{{.Count}}</span>
+  </button>
+  {{end}}
+  <div class="reaction-picker-wrap">
+    <button type="button" class="reaction-chip reaction-add"
+            title="Add reaction" aria-label="Add reaction"
+            aria-expanded="false" aria-haspopup="true">+</button>
+    <div class="emoji-picker is-hidden" aria-label="Emoji picker">
+      {{range .Emojis}}
+      <button type="button" class="emoji-picker-btn"
+          hx-post="/posts/{{$.PostID}}/reactions"
+          hx-target="closest .reaction-bar"
+          hx-swap="outerHTML"
+          hx-vals='{"emoji_id": {{.ID}}}'
+          title=":{{.Name}}:">
+        {{if eq .Source "unicode"}}
+          <span aria-hidden="true">{{.Glyph}}</span>
+        {{else}}
+          <img class="emoji-img" src="/uploads/{{.StoragePath}}" alt="" loading="lazy">
+        {{end}}
+      </button>
+      {{end}}
+    </div>
+  </div>
+</div>
+{{end}}

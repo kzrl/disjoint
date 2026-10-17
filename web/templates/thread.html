@@ -50,7 +50,7 @@
       <div class="field">
         <label for="reply-body" class="label">Message (Markdown supported)</label>
         <div class="control">
-          <textarea id="reply-body" name="body" class="textarea" placeholder="Write a response..." rows="4" required></textarea>
+          <textarea id="reply-body" name="body" class="textarea" placeholder="Write a response... (paste images with Ctrl/Cmd+V)" rows="4"></textarea>
         </div>
       </div>
 
@@ -68,6 +68,9 @@
               <input type="file" name="files" multiple accept="image/*,video/*,application/pdf,text/*">
             </label>
           </div>
+          <div class="pasted-previews" hidden></div>
+          <p class="paste-error notification is-danger is-light is-small" hidden></p>
+          <p class="help">Tip: Paste an image (Ctrl/Cmd+V) or drop files anywhere on this form.</p>
         </div>
       </div>
 

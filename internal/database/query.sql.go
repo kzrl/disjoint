@@ -11,6 +11,28 @@ import (
 	"time"
 )
 
+const addReaction = `-- name: AddReaction :execrows
+INSERT OR IGNORE INTO reactions (post_id, user_id, emoji_id) VALUES (?, ?, ?)
+`
+
+type AddReactionParams struct {
+	PostID  int64
+	UserID  int64
+	EmojiID int64
+}
+
+// Returns the number of rows inserted: 0 means this (post, user, emoji)
+// combination already exists (the UNIQUE constraint), i.e. the click is a
+// toggle-off. Concurrent toggles are safe: one request wins the insert, the
+// other's insert is ignored and it deletes.
+func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addReaction, arg.PostID, arg.UserID, arg.EmojiID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bumpThreadExpiration = `-- name: BumpThreadExpiration :exec
 UPDATE threads
 SET updated_at = CURRENT_TIMESTAMP,
@@ -108,6 +130,55 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		&i.StoragePath,
 		&i.MimeType,
 		&i.FileSize,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createEmoji = `-- name: CreateEmoji :one
+INSERT INTO emojis (
+    name,
+    source,
+    glyph,
+    storage_path,
+    mime_type,
+    file_size,
+    created_by
+) VALUES (
+    ?, ?, ?, ?, ?, ?, ?
+) RETURNING id, name, source, glyph, storage_path, mime_type, file_size, created_by, created_at
+`
+
+type CreateEmojiParams struct {
+	Name        string
+	Source      string
+	Glyph       sql.NullString
+	StoragePath sql.NullString
+	MimeType    sql.NullString
+	FileSize    sql.NullInt64
+	CreatedBy   sql.NullInt64
+}
+
+func (q *Queries) CreateEmoji(ctx context.Context, arg CreateEmojiParams) (Emoji, error) {
+	row := q.db.QueryRowContext(ctx, createEmoji,
+		arg.Name,
+		arg.Source,
+		arg.Glyph,
+		arg.StoragePath,
+		arg.MimeType,
+		arg.FileSize,
+		arg.CreatedBy,
+	)
+	var i Emoji
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Glyph,
+		&i.StoragePath,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CreatedBy,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -248,6 +319,15 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteEmoji = `-- name: DeleteEmoji :exec
+DELETE FROM emojis WHERE id = ?
+`
+
+func (q *Queries) DeleteEmoji(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteEmoji, id)
+	return err
+}
+
 const deleteExpiredThreads = `-- name: DeleteExpiredThreads :exec
 DELETE FROM threads
 WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
@@ -339,6 +419,48 @@ func (q *Queries) GetAttachmentsForExpiredThreads(ctx context.Context) ([]GetAtt
 		return nil, err
 	}
 	return items, nil
+}
+
+const getEmojiByID = `-- name: GetEmojiByID :one
+SELECT id, name, source, glyph, storage_path, mime_type, file_size, created_by, created_at FROM emojis WHERE id = ? LIMIT 1
+`
+
+func (q *Queries) GetEmojiByID(ctx context.Context, id int64) (Emoji, error) {
+	row := q.db.QueryRowContext(ctx, getEmojiByID, id)
+	var i Emoji
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Glyph,
+		&i.StoragePath,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getEmojiByName = `-- name: GetEmojiByName :one
+SELECT id, name, source, glyph, storage_path, mime_type, file_size, created_by, created_at FROM emojis WHERE name = ? LIMIT 1
+`
+
+func (q *Queries) GetEmojiByName(ctx context.Context, name string) (Emoji, error) {
+	row := q.db.QueryRowContext(ctx, getEmojiByName, name)
+	var i Emoji
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Glyph,
+		&i.StoragePath,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getInviteByCode = `-- name: GetInviteByCode :one
@@ -517,6 +639,68 @@ func (q *Queries) GetUserPresence(ctx context.Context, userID int64) (time.Time,
 	var last_seen_at time.Time
 	err := row.Scan(&last_seen_at)
 	return last_seen_at, err
+}
+
+const listAllEmojis = `-- name: ListAllEmojis :many
+SELECT
+    e.id,
+    e.name,
+    e.source,
+    COALESCE(e.glyph, '') AS glyph,
+    COALESCE(e.storage_path, '') AS storage_path,
+    COALESCE(e.mime_type, '') AS mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS file_size,
+    COALESCE(uc.username, '') AS created_by_username
+FROM emojis e
+LEFT JOIN users uc ON e.created_by = uc.id
+ORDER BY e.name ASC
+`
+
+type ListAllEmojisRow struct {
+	ID                int64
+	Name              string
+	Source            string
+	Glyph             string
+	StoragePath       string
+	MimeType          string
+	FileSize          int64
+	CreatedByUsername string
+}
+
+// Every available emoji (built-in unicode + custom uploads), stable
+// name order for the reaction picker. The uploader's username (not just the
+// ID) is joined in so the emoji page can attribute custom uploads; empty
+// when the uploader was deleted (created_by is SET NULL).
+func (q *Queries) ListAllEmojis(ctx context.Context) ([]ListAllEmojisRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAllEmojis)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllEmojisRow
+	for rows.Next() {
+		var i ListAllEmojisRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Source,
+			&i.Glyph,
+			&i.StoragePath,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CreatedByUsername,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAttachmentsByThreadID = `-- name: ListAttachmentsByThreadID :many
@@ -803,6 +987,141 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 	return items, nil
 }
 
+const listReactionsByPostID = `-- name: ListReactionsByPostID :many
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+WHERE r.post_id = ?
+ORDER BY r.emoji_id ASC, r.id ASC
+`
+
+type ListReactionsByPostIDRow struct {
+	PostID           int64
+	UserID           int64
+	EmojiID          int64
+	CreatedAt        sql.NullTime
+	EmojiName        string
+	EmojiSource      string
+	EmojiGlyph       string
+	EmojiStoragePath string
+	EmojiMimeType    string
+	EmojiFileSize    int64
+}
+
+// Reaction rows for a single post with emoji details, for rendering the
+// post's reaction bar after a toggle.
+func (q *Queries) ListReactionsByPostID(ctx context.Context, postID int64) ([]ListReactionsByPostIDRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReactionsByPostID, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsByPostIDRow
+	for rows.Next() {
+		var i ListReactionsByPostIDRow
+		if err := rows.Scan(
+			&i.PostID,
+			&i.UserID,
+			&i.EmojiID,
+			&i.CreatedAt,
+			&i.EmojiName,
+			&i.EmojiSource,
+			&i.EmojiGlyph,
+			&i.EmojiStoragePath,
+			&i.EmojiMimeType,
+			&i.EmojiFileSize,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReactionsByThreadID = `-- name: ListReactionsByThreadID :many
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+JOIN posts p ON r.post_id = p.id
+WHERE p.thread_id = ?
+ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC
+`
+
+type ListReactionsByThreadIDRow struct {
+	PostID           int64
+	UserID           int64
+	EmojiID          int64
+	CreatedAt        sql.NullTime
+	EmojiName        string
+	EmojiSource      string
+	EmojiGlyph       string
+	EmojiStoragePath string
+	EmojiMimeType    string
+	EmojiFileSize    int64
+}
+
+// All reaction rows for a thread's posts, joined with their emoji so the
+// handler can group counts per post in Go without a second query.
+func (q *Queries) ListReactionsByThreadID(ctx context.Context, threadID int64) ([]ListReactionsByThreadIDRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReactionsByThreadID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsByThreadIDRow
+	for rows.Next() {
+		var i ListReactionsByThreadIDRow
+		if err := rows.Scan(
+			&i.PostID,
+			&i.UserID,
+			&i.EmojiID,
+			&i.CreatedAt,
+			&i.EmojiName,
+			&i.EmojiSource,
+			&i.EmojiGlyph,
+			&i.EmojiStoragePath,
+			&i.EmojiMimeType,
+			&i.EmojiFileSize,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
 SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC
 `
@@ -849,6 +1168,24 @@ DELETE FROM sessions WHERE expires_at <= ?
 func (q *Queries) PruneExpiredSessions(ctx context.Context, expiresAt int64) error {
 	_, err := q.db.ExecContext(ctx, pruneExpiredSessions, expiresAt)
 	return err
+}
+
+const removeReaction = `-- name: RemoveReaction :execrows
+DELETE FROM reactions WHERE post_id = ? AND user_id = ? AND emoji_id = ?
+`
+
+type RemoveReactionParams struct {
+	PostID  int64
+	UserID  int64
+	EmojiID int64
+}
+
+func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, removeReaction, arg.PostID, arg.UserID, arg.EmojiID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const removeUserAdmin = `-- name: RemoveUserAdmin :exec
