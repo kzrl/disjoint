@@ -8,6 +8,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -751,6 +752,9 @@ SELECT
     t.ttl_seconds,
     COALESCE(u.username, '') AS author_username,
     COUNT(p.id) AS post_count,
+    -- Threads always have an opening post (created in the same transaction);
+    -- COALESCE + CAST keep the column non-NULL and typed for the scanner.
+    CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
     lc.id AS last_comment_id,
     lc.body AS last_comment_body,
     lc.created_at AS last_comment_at,
@@ -784,6 +788,7 @@ type ListFrontPageThreadsRow struct {
 	TtlSeconds        sql.NullInt64
 	AuthorUsername    string
 	PostCount         int64
+	FirstPostID       int64
 	LastCommentID     sql.NullInt64
 	LastCommentBody   sql.NullString
 	LastCommentAt     sql.NullTime
@@ -811,6 +816,7 @@ func (q *Queries) ListFrontPageThreads(ctx context.Context, arg ListFrontPageThr
 			&i.TtlSeconds,
 			&i.AuthorUsername,
 			&i.PostCount,
+			&i.FirstPostID,
 			&i.LastCommentID,
 			&i.LastCommentBody,
 			&i.LastCommentAt,
@@ -1029,6 +1035,83 @@ func (q *Queries) ListReactionsByPostID(ctx context.Context, postID int64) ([]Li
 	var items []ListReactionsByPostIDRow
 	for rows.Next() {
 		var i ListReactionsByPostIDRow
+		if err := rows.Scan(
+			&i.PostID,
+			&i.UserID,
+			&i.EmojiID,
+			&i.CreatedAt,
+			&i.EmojiName,
+			&i.EmojiSource,
+			&i.EmojiGlyph,
+			&i.EmojiStoragePath,
+			&i.EmojiMimeType,
+			&i.EmojiFileSize,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReactionsByPostIDs = `-- name: ListReactionsByPostIDs :many
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+WHERE r.post_id IN (/*SLICE:postIds*/?)
+ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC
+`
+
+type ListReactionsByPostIDsRow struct {
+	PostID           int64
+	UserID           int64
+	EmojiID          int64
+	CreatedAt        sql.NullTime
+	EmojiName        string
+	EmojiSource      string
+	EmojiGlyph       string
+	EmojiStoragePath string
+	EmojiMimeType    string
+	EmojiFileSize    int64
+}
+
+// Reaction rows for a set of posts in one round trip. The front page
+// shows each thread's opening-post reactions for a whole page at once.
+func (q *Queries) ListReactionsByPostIDs(ctx context.Context, postids []int64) ([]ListReactionsByPostIDsRow, error) {
+	query := listReactionsByPostIDs
+	var queryParams []interface{}
+	if len(postids) > 0 {
+		for _, v := range postids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:postIds*/?", strings.Repeat(",?", len(postids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:postIds*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsByPostIDsRow
+	for rows.Next() {
+		var i ListReactionsByPostIDsRow
 		if err := rows.Scan(
 			&i.PostID,
 			&i.UserID,

@@ -30,6 +30,9 @@ SELECT
     t.ttl_seconds,
     COALESCE(u.username, '') AS author_username,
     COUNT(p.id) AS post_count,
+    -- Threads always have an opening post (created in the same transaction);
+    -- COALESCE + CAST keep the column non-NULL and typed for the scanner.
+    CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
     lc.id AS last_comment_id,
     lc.body AS last_comment_body,
     lc.created_at AS last_comment_at,
@@ -337,4 +340,23 @@ FROM reactions r
 JOIN emojis e ON r.emoji_id = e.id
 JOIN posts p ON r.post_id = p.id
 WHERE p.thread_id = ?
+ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;
+
+-- name: ListReactionsByPostIDs :many
+-- Reaction rows for a set of posts in one round trip. The front page
+-- shows each thread's opening-post reactions for a whole page at once.
+SELECT
+    r.post_id,
+    r.user_id,
+    r.emoji_id,
+    r.created_at,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(e.mime_type, '') AS emoji_mime_type,
+    CAST(COALESCE(e.file_size, 0) AS INTEGER) AS emoji_file_size
+FROM reactions r
+JOIN emojis e ON r.emoji_id = e.id
+WHERE r.post_id IN (sqlc.slice('postIds'))
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;

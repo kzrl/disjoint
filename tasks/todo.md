@@ -325,3 +325,11 @@ Plan: [tasks/plan-reactions.md](plan-reactions.md)
   - README: "Slack-Style Reactions" feature bullet
   - specs/disjoint.md: `emojis` + `reactions` tables in the schema section, cascade note in the ephemerality section, reactions item in "Thread View & Interaction"
   - Dev DB backup `disjoint.db.bak-pre00011` still in repo root — delete when you're happy with the feature
+- [x] Reactions on the index page  (DONE)
+  - `db/query.sql`: `ListFrontPageThreads` gains `first_post_id` (MIN post id per thread, CAST to keep it int64); new `ListReactionsByPostIDs :many` (IN-list via `sqlc.slice`) fetches a whole page's opening-post reactions in one query; `sqlc generate`
+  - `internal/handlers/front.go`: `FrontPageThreadItem` gains `Reactions` + `Emojis`; `IndexPage` loads reactions for the page's opening posts (skipped on an empty page — empty `IN ()` is a syntax error), groups via `groupReactions` with the viewer's id, and attaches the full emoji list per row
+  - `web/templates/index.html`: the same `reaction_bar` partial under each row's title — chips toggle via the existing `POST /posts/{id}/reactions`, and the `+` picker works on the front page too
+  - `web/css/site.css`: `.board-row .emoji-picker` opens downward (top-anchored) so it can't run off the viewport top on early rows; vendored CSS regenerated
+  - `handlers_test.go` `TestFrontPageReactions`: per-row chips + grouped counts + custom `<img>` chip, active state per viewer (ally 2 / bob 1), pickers on every row, `hx-post` targets the opening post, toggle from the front page returns the swappable bar — all pass; `-race` suite green
+  - Live smoke (fresh instance): react on an opening post, front page shows the active chip + pickers on both rows
+  - README + specs/disjoint.md updated

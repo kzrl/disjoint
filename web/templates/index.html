@@ -31,6 +31,7 @@
                   <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
               </div>
+              {{template "reaction_bar" (reactionBar .Row.FirstPostID .Reactions .Emojis)}}
             </div>
             <div class="board-activity">
               {{if .Row.LastCommentID.Valid}}

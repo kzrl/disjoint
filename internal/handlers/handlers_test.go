@@ -2724,3 +2724,126 @@ func TestThreadPageReactionBars(t *testing.T) {
 		t.Errorf("appended post's bar missing working picker")
 	}
 }
+
+func TestFrontPageReactions(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	ally, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "fp_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "fp_bob", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allyCookie := authCookieFor(t, queries, ally.ID)
+	bobCookie := authCookieFor(t, queries, bob.ID)
+
+	// Two threads; the first gets reactions on its opening post.
+	threadA, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: ally.ID, Title: "fp thread a",
+		ExpiresAt: sql.NullTime{}, TtlSeconds: sql.NullInt64{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postA, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: threadA.ID, UserID: ally.ID, Body: "opening A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: bob.ID, Title: "fp thread b",
+		ExpiresAt: sql.NullTime{}, TtlSeconds: sql.NullInt64{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ally: joy + a custom emoji; bob: joy.
+	joy, err := queries.GetEmojiByName(ctx, "joy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: postA.ID, UserID: ally.ID, EmojiID: joy.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: postA.ID, UserID: bob.ID, EmojiID: joy.ID}); err != nil {
+		t.Fatal(err)
+	}
+	custom, err := queries.CreateEmoji(ctx, database.CreateEmojiParams{
+		Name: "fp_custom", Source: "custom",
+		StoragePath: sql.NullString{String: "fp-custom.png", Valid: true},
+		MimeType:    sql.NullString{String: "image/png", Valid: true},
+		FileSize:    sql.NullInt64{Int64: 1, Valid: true},
+		CreatedBy:   sql.NullInt64{Int64: ally.ID, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{PostID: postA.ID, UserID: ally.ID, EmojiID: custom.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	getFront := func(c *http.Cookie) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if c != nil {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET / returned %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// 1. ally's front page: thread A's row carries both of her chips
+	//    (active), the grouped joy count, and a full picker; thread B's
+	//    row has a bare bar.
+	page := getFront(allyCookie)
+	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 2 {
+		t.Errorf("expected 2 active chips on the front page, got %d", got)
+	}
+	if !strings.Contains(page, `title="joy (2)"`) {
+		t.Errorf("missing grouped joy (2) chip")
+	}
+	if !strings.Contains(page, `<img class="emoji-img" src="/uploads/fp-custom.png"`) {
+		t.Errorf("custom reaction chip missing <img>")
+	}
+	if !strings.Contains(page, `hx-post="/posts/`+strconv.FormatInt(postA.ID, 10)+`/reactions"`) {
+		t.Errorf("front-page chips missing hx-post to the opening post")
+	}
+	// Both rows carry a picker (thread B has no chips but can still react).
+	if got := strings.Count(page, `class="emoji-picker is-hidden"`); got != 2 {
+		t.Errorf("expected a picker on both rows, got %d", got)
+	}
+	if !strings.Contains(page, `title=":fp_custom:"`) {
+		t.Errorf("picker missing the custom emoji entry")
+	}
+
+	// 2. bob's view: same counts, only joy active.
+	page = getFront(bobCookie)
+	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 1 {
+		t.Errorf("expected 1 active chip for bob, got %d", got)
+	}
+	if !strings.Contains(page, `title="joy (2)"`) {
+		t.Errorf("bob's view should show the same grouped counts")
+	}
+
+	// 3. Toggling from the front page uses the same endpoint and returns
+	//    the bar for the swap.
+	form := url.Values{"emoji_id": {strconv.FormatInt(custom.ID, 10)}}
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/posts/%d/reactions", postA.ID),
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(allyCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `class="reaction-bar"`) {
+		t.Errorf("toggle from the front page failed: %d %s", rr.Code, rr.Body.String())
+	}
+}

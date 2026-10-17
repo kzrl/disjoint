@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"disjoint/internal/database"
+	"disjoint/internal/middleware"
 )
 
 const frontPagePageSize = 30
@@ -25,6 +26,8 @@ type FrontPageThreadItem struct {
 	ReplyCount   int64 // posts minus the opening post
 	ExpiryUrgent bool  // true when ExpiresAt is within expiryBadgeWindow
 	Snippet      string
+	Reactions    []ReactionGroup             // the thread's opening-post reactions
+	Emojis       []database.ListAllEmojisRow // full list, rendered into the picker
 }
 
 // IndexPage renders the global front page: all non-expired threads sorted
@@ -54,6 +57,48 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reactions on each thread's opening post: one query for the whole
+	// page (skipped when the page is empty — an empty IN list is a syntax
+	// error). A FirstPostID of 0 means the thread somehow has no posts; the
+	// reaction lookup simply never matches it.
+	var postIDs []int64
+	for _, row := range rows {
+		if row.FirstPostID > 0 {
+			postIDs = append(postIDs, row.FirstPostID)
+		}
+	}
+	var rRows []reactionRow
+	if len(postIDs) > 0 {
+		reactionRows, err := app.queries.ListReactionsByPostIDs(ctx, postIDs)
+		if err != nil {
+			http.Error(w, "failed to load reactions", http.StatusInternalServerError)
+			return
+		}
+		for _, r := range reactionRows {
+			rRows = append(rRows, reactionRow{
+				postID:      r.PostID,
+				userID:      r.UserID,
+				emojiID:     r.EmojiID,
+				name:        r.EmojiName,
+				source:      r.EmojiSource,
+				glyph:       r.EmojiGlyph,
+				storagePath: r.EmojiStoragePath,
+			})
+		}
+	}
+	currentUserID := int64(0)
+	if u := middleware.UserFromContext(ctx); u != nil {
+		currentUserID = u.ID
+	}
+	reactionGroups := groupReactions(rRows, currentUserID)
+
+	// Every row's bar carries the full emoji list for its picker.
+	emojis, err := app.queries.ListAllEmojis(ctx)
+	if err != nil {
+		http.Error(w, "failed to load emojis", http.StatusInternalServerError)
+		return
+	}
+
 	items := make([]FrontPageThreadItem, 0, len(rows))
 	for i, row := range rows {
 		replyCount := row.PostCount - 1 // the opening post is not a reply
@@ -66,7 +111,9 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 			ReplyCount: replyCount,
 			ExpiryUrgent: row.ExpiresAt.Valid &&
 				time.Until(row.ExpiresAt.Time) <= expiryBadgeWindow,
-			Snippet: commentSnippet(row.LastCommentBody),
+			Snippet:   commentSnippet(row.LastCommentBody),
+			Reactions: reactionGroups[row.FirstPostID],
+			Emojis:    emojis,
 		})
 	}
 
