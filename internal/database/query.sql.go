@@ -411,6 +411,17 @@ func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
+const firstUserID = `-- name: FirstUserID :one
+SELECT id FROM users ORDER BY id ASC LIMIT 1
+`
+
+func (q *Queries) FirstUserID(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, firstUserID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getAttachmentsForExpiredThreads = `-- name: GetAttachmentsForExpiredThreads :many
 SELECT a.id, a.storage_path
 FROM attachments a

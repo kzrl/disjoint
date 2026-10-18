@@ -162,8 +162,8 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 		return fmt.Errorf("avatar is empty")
 	}
 	contentType := http.DetectContentType(buf[:n])
-	// DetectContentType has no WebP signature, so check the RIFF/WEBP
-	// magic bytes explicitly.
+	// DetectContentType only recognizes WebP when a VP* chunk leads the
+	// file; check the RIFF/WEBP magic bytes explicitly for the rest.
 	if contentType == "application/octet-stream" && isWebP(buf[:n]) {
 		contentType = "image/webp"
 	}
@@ -207,7 +207,10 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 	return nil
 }
 
-// isWebP checks the RIFF container magic bytes for a WebP payload.
+// isWebP checks the RIFF container magic bytes for a WebP payload. Shared
+// by the attachment and avatar upload paths because http.DetectContentType
+// only recognizes WebP when a VP* chunk leads the file; an ICCP-led WebP
+// (color profile before image data) sniffs as application/octet-stream.
 func isWebP(b []byte) bool {
 	return len(b) >= 12 && string(b[0:4]) == "RIFF" && string(b[8:12]) == "WEBP"
 }

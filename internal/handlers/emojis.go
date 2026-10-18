@@ -27,8 +27,8 @@ import (
 // Custom emoji limits. Slack allows 128KB/1280px; emoji here render at ~1.25em
 // in reaction chips, so we are much stricter: 256KB file, 256px max side.
 // Only PNG and GIF: both are reliably sniffed by http.DetectContentType and
-// decode with the stdlib (no new deps). WEBP is rejected because its magic
-// bytes are not recognized by the sniffer, so we could not verify uploads.
+// decode with the stdlib (no new deps). WEBP is rejected because the stdlib
+// cannot decode it (no image/webp), so we could not verify dimensions.
 const (
 	maxEmojiSize      = 256 << 10
 	maxEmojiDimension = 256

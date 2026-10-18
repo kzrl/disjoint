@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,6 +198,67 @@ func TestFirstRunSetupAndAuthFlow(t *testing.T) {
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
 		t.Fatalf("expected redirect to / on valid login, got %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+}
+
+// TestSetupRaceLeavesSingleAdmin fires concurrent first-run setup POSTs and
+// asserts the invariant the rollback in SetupSubmit enforces: no matter how
+// the CountUsers-check/CreateUser window interleaves, exactly one admin
+// exists afterwards (the earliest row) and every loser bailed to /login.
+func TestSetupRaceLeavesSingleAdmin(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	const n = 8
+	responses := make([]*httptest.ResponseRecorder, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			form := url.Values{}
+			form.Set("username", fmt.Sprintf("racer%02d", i))
+			form.Set("password", "password123")
+			req := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+			responses[i] = rr
+		}(i)
+	}
+	wg.Wait()
+
+	for i, rr := range responses {
+		if rr.Code != http.StatusSeeOther {
+			t.Errorf("setup %d: expected 303 redirect, got %d", i, rr.Code)
+		}
+		if loc := rr.Header().Get("Location"); loc != "/" && loc != "/login" {
+			t.Errorf("setup %d: expected redirect to / or /login, got %s", i, loc)
+		}
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		t.Fatalf("failed to count users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("exactly one admin may win the first-run race, got %d users", count)
+	}
+
+	// The winner is the response that landed on /; that username must be the
+	// surviving row.
+	winner := -1
+	for i, rr := range responses {
+		if rr.Header().Get("Location") == "/" {
+			winner = i
+		}
+	}
+	if winner == -1 {
+		t.Fatalf("expected one setup to succeed (redirect to /)")
+	}
+	if _, err := queries.GetUserByUsername(context.Background(), fmt.Sprintf("racer%02d", winner)); err != nil {
+		t.Fatalf("expected the winning setup user to exist: %v", err)
 	}
 }
 
@@ -1949,6 +2011,35 @@ func TestAttachmentTypeEnforcementAndServing(t *testing.T) {
 	}
 	if nFinal != threadsBefore+2 {
 		t.Fatalf("rejected zip upload must not create a thread")
+	}
+
+	// 5. WebP content whose first chunk is not a VP* chunk (here an ICCP
+	// color profile) sniffs as octet-stream, so it is only accepted via the
+	// RIFF/WEBP magic fallback; stored with the .webp extension, served
+	// inline.
+	rr = postThreadWithFile(t, router, authCookie, "anim.dat",
+		[]byte("RIFF\x24\x00\x00\x00WEBPICCP\x00\x00\x00\x00\x00\x00\x00\x00"))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected thread create redirect, got %d", rr.Code)
+	}
+	var webp string
+	for _, f := range listUploadFiles(t, uploadDir) {
+		if strings.HasSuffix(f, ".webp") {
+			webp = f
+		}
+	}
+	if webp == "" {
+		t.Fatalf("expected WebP content stored with .webp extension, got %v", listUploadFiles(t, uploadDir))
+	}
+	req = httptest.NewRequest(http.MethodGet, "/uploads/"+webp, nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 serving webp, got %d", rr.Code)
+	}
+	if cd := rr.Header().Get("Content-Disposition"); cd != "inline" {
+		t.Fatalf("expected Content-Disposition: inline for webp, got %q", cd)
 	}
 }
 

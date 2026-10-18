@@ -1,3 +1,6 @@
+-- name: FirstUserID :one
+SELECT id FROM users ORDER BY id ASC LIMIT 1;
+
 -- name: CountUsers :one
 SELECT COUNT(*) FROM users;
 

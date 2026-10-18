@@ -109,6 +109,13 @@ func saveSingleFile(header *multipart.FileHeader, uploadDir string) (UploadedFil
 	if idx := strings.Index(mimeType, ";"); idx != -1 {
 		mimeType = strings.TrimSpace(mimeType[:idx])
 	}
+	// DetectContentType only recognizes WebP when a VP* chunk leads the
+	// file; an ICCP-led WebP sniffs as octet-stream, so check the RIFF/WEBP
+	// magic bytes explicitly - the same fallback the avatar upload path
+	// applies.
+	if mimeType == "application/octet-stream" && isWebP(buf[:n]) {
+		mimeType = "image/webp"
+	}
 	storedExt, ok := allowedMIMEExtensions[mimeType]
 	if !ok {
 		return UploadedFileInfo{}, fmt.Errorf("file %q: unsupported type %s", header.Filename, mimeType)

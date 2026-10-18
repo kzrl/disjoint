@@ -102,6 +102,21 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// First-run race: a concurrent POST /setup may have created the initial
+	// user between the CountUsers check above and this insert. Exactly one
+	// admin may win: the earliest row (lowest id) keeps its account, any
+	// later racer rolls its own row back and bails to the login page (the
+	// same rollback pattern as invite consumption in RegisterSubmit).
+	if count, err := app.queries.CountUsers(ctx); err == nil && count > 1 {
+		if firstID, err := app.queries.FirstUserID(ctx); err == nil && firstID != user.ID {
+			_ = app.queries.DeleteUser(ctx, user.ID)
+			app.middleware.RefreshUserCount(ctx)
+			setFlash(w, "flash_error", "Setup already completed.")
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+	}
+
 	_ = app.queries.SetUserAdmin(ctx, user.ID)
 
 	app.middleware.RefreshUserCount(ctx)
