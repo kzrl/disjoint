@@ -19,6 +19,25 @@ import (
 // values only; pre-existing long titles remain viewable.
 const maxThreadTitleLength = 200
 
+// expirationToTTL maps the thread form's lifespan choice to its stored
+// duration. "never" (and any unknown value) reports ok=false, which the
+// callers store as NULL ttl/deadline. Shared by thread creation and the
+// author's post-creation lifespan change so the choice set lives in one
+// place.
+func expirationToTTL(choice string) (time.Duration, bool) {
+	switch choice {
+	case "24h":
+		return 24 * time.Hour, true
+	case "3d":
+		return 3 * 24 * time.Hour, true
+	case "7d":
+		return 7 * 24 * time.Hour, true
+	case "30d":
+		return 30 * 24 * time.Hour, true
+	}
+	return 0, false
+}
+
 // PostViewItem holds post details and its associated attachments and reactions.
 type PostViewItem struct {
 	Post        database.ListPostsByThreadRow
@@ -99,12 +118,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	// "never" stores NULL in both so the worker never touches the thread.
 	var ttlSeconds sql.NullInt64
 	var expiresAt sql.NullTime
-	if duration, ok := map[string]time.Duration{
-		"24h": 24 * time.Hour,
-		"3d":  3 * 24 * time.Hour,
-		"7d":  7 * 24 * time.Hour,
-		"30d": 30 * 24 * time.Hour,
-	}[expiration]; ok {
+	if duration, ok := expirationToTTL(expiration); ok {
 		ttlSeconds = sql.NullInt64{Int64: int64(duration.Seconds()), Valid: true}
 		expiresAt = sql.NullTime{Time: time.Now().UTC().Add(duration).Round(0), Valid: true}
 	}
@@ -236,6 +250,90 @@ func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) 
 	}
 
 	setFlash(w, "flash_success", "Title updated.")
+	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+}
+
+// UpdateThreadExpirationSubmit handles the author changing their thread's
+// lifespan. The deadline resets to now + new ttl (or NULL for Never) — the
+// same "ttl of silence from now" rule every reply applies. Ownership is
+// enforced in the UPDATE's WHERE clause; a Go-side check right after
+// loading puts the 404 ahead of any validation error so a non-author never
+// learns whether a thread exists.
+func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := middleware.UserFromContext(ctx)
+	if user == nil {
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", "/login")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	threadID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	thread, err := app.queries.GetThreadByID(ctx, threadID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if thread.UserID != user.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	choice := r.FormValue("expiration")
+	duration, hasTTL := expirationToTTL(choice) // "never" and unknown both report false
+	if choice != "never" && !hasTTL {
+		setFlash(w, "flash_error", "Unknown lifespan.")
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		return
+	}
+
+	// No-op detection: resubmitting the current choice must leave expires_at
+	// byte-identical (the reset would otherwise quietly shorten the deadline).
+	currentIsNever := !thread.TtlSeconds.Valid
+	if (currentIsNever && choice == "never") ||
+		(!currentIsNever && hasTTL && int64(duration.Seconds()) == thread.TtlSeconds.Int64) {
+		setFlash(w, "flash_success", "No changes to save.")
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		return
+	}
+
+	var ttlSeconds sql.NullInt64
+	var expiresAt sql.NullTime
+	if hasTTL {
+		ttlSeconds = sql.NullInt64{Int64: int64(duration.Seconds()), Valid: true}
+		expiresAt = sql.NullTime{Time: time.Now().UTC().Add(duration).Round(0), Valid: true}
+	}
+
+	rows, err := app.queries.SetThreadExpiration(ctx, database.SetThreadExpirationParams{
+		TtlSeconds: ttlSeconds,
+		ExpiresAt:  expiresAt,
+		ID:         thread.ID,
+		UserID:     user.ID,
+	})
+	if err != nil {
+		http.Error(w, "failed to update thread expiration", http.StatusInternalServerError)
+		return
+	}
+	if rows == 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	setFlash(w, "flash_success", "Expiration updated.")
 	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
 }
 

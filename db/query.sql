@@ -104,6 +104,16 @@ SET updated_at = CURRENT_TIMESTAMP,
     expires_at = ?
 WHERE id = ?;
 
+-- name: SetThreadExpiration :execrows
+-- Author-only lifespan change. expires_at is reset to the caller-computed
+-- value (now + ttl, or NULL for never-threads) - the same "ttl of silence
+-- from now" rule every reply applies. Ownership is enforced in the WHERE
+-- clause (0 rows = not found or not the author). updated_at is
+-- deliberately untouched: a settings change is not a comment.
+UPDATE threads
+SET ttl_seconds = ?, expires_at = ?
+WHERE id = ? AND user_id = ?;
+
 -- name: DeleteThread :exec
 DELETE FROM threads
 WHERE id = ?;

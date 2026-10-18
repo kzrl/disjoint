@@ -3604,3 +3604,211 @@ func TestReplyFormFileInput(t *testing.T) {
 		}
 	}
 }
+
+func TestThreadExpirationEditing(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	author, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "exp_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "exp_other", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorCookie := authCookieFor(t, queries, author.ID)
+	otherCookie := authCookieFor(t, queries, other.ID)
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{UserID: author.ID, Title: "expiry test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: author.ID, Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	setExpiry := func(cookie *http.Cookie, choice string) *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{"expiration": {choice}}
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/expiration", thread.ID), strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	within := func(got, want time.Time, tol time.Duration) bool {
+		return got.Sub(want) < tol && got.Sub(want) > -tol
+	}
+
+	// 1. never -> 7d: ttl stored, deadline reset to ~now+7d, success flash.
+	rr := setExpiry(authorCookie, "7d")
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d", thread.ID) {
+		t.Fatalf("7d change redirect: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	if !flashCookieSet(rr, "flash_success", "Expiration updated.") {
+		t.Errorf("missing 'Expiration updated.' flash")
+	}
+	got, err := queries.GetThreadByID(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TtlSeconds.Valid || got.TtlSeconds.Int64 != 7*24*3600 {
+		t.Errorf("ttl not stored: %+v", got.TtlSeconds)
+	}
+	if !got.ExpiresAt.Valid || !within(got.ExpiresAt.Time, time.Now().UTC().Add(7*24*time.Hour), 10*time.Second) {
+		t.Errorf("deadline not ~now+7d: %v", got.ExpiresAt)
+	}
+	deadlineBeforeReset := got.ExpiresAt.Time
+
+	// 2. 7d -> 24h: the deadline resets EARLIER (now + 24h), not kept.
+	rr = setExpiry(authorCookie, "24h")
+	if rr.Code != http.StatusSeeOther || !flashCookieSet(rr, "flash_success", "Expiration updated.") {
+		t.Errorf("24h change: %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if !got.TtlSeconds.Valid || got.TtlSeconds.Int64 != 24*3600 {
+		t.Errorf("ttl not updated: %+v", got.TtlSeconds)
+	}
+	if !got.ExpiresAt.Valid || !within(got.ExpiresAt.Time, time.Now().UTC().Add(24*time.Hour), 10*time.Second) {
+		t.Errorf("deadline not ~now+24h: %v", got.ExpiresAt)
+	}
+	if !got.ExpiresAt.Time.Before(deadlineBeforeReset) {
+		t.Errorf("reset did not move the deadline earlier: %v >= %v", got.ExpiresAt.Time, deadlineBeforeReset)
+	}
+
+	// 3. -> never: both columns NULL again; header shows "Never expires".
+	rr = setExpiry(authorCookie, "never")
+	if rr.Code != http.StatusSeeOther || !flashCookieSet(rr, "flash_success", "Expiration updated.") {
+		t.Errorf("never change: %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if got.TtlSeconds.Valid || got.ExpiresAt.Valid {
+		t.Errorf("never change left values: ttl=%+v expires=%+v", got.TtlSeconds, got.ExpiresAt)
+	}
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+	req.AddCookie(authorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "Never expires") {
+		t.Errorf("thread page after ->never: %d, missing 'Never expires'", rr.Code)
+	}
+
+	// 4. Invalid choice rejected, thread untouched.
+	rr = setExpiry(authorCookie, "forever")
+	if rr.Code != http.StatusSeeOther || !flashCookieSet(rr, "flash_error", "Unknown lifespan.") {
+		t.Errorf("invalid choice: %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if got.TtlSeconds.Valid || got.ExpiresAt.Valid {
+		t.Errorf("invalid choice changed the thread: %+v %+v", got.TtlSeconds, got.ExpiresAt)
+	}
+
+	// 5. No-op resubmit: success flash, expires_at byte-identical (no reset).
+	rr = setExpiry(authorCookie, "24h")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("pre-setup 24h: %d", rr.Code)
+	}
+	before, _ := queries.GetThreadByID(ctx, thread.ID)
+	rr = setExpiry(authorCookie, "24h")
+	if rr.Code != http.StatusSeeOther || !flashCookieSet(rr, "flash_success", "No changes to save.") {
+		t.Errorf("no-op change: %d", rr.Code)
+	}
+	after, _ := queries.GetThreadByID(ctx, thread.ID)
+	if before.ExpiresAt != after.ExpiresAt || before.TtlSeconds != after.TtlSeconds {
+		t.Errorf("no-op resubmit reset the deadline: %v -> %v", before.ExpiresAt, after.ExpiresAt)
+	}
+
+	// 6. Non-author: 404, thread untouched.
+	rr = setExpiry(otherCookie, "7d")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("non-author change: expected 404, got %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if !got.TtlSeconds.Valid || got.TtlSeconds.Int64 != 24*3600 {
+		t.Errorf("non-author change altered the thread: %+v", got.TtlSeconds)
+	}
+
+	// 7. Expired thread: not editable (404 via the expiry filter).
+	expThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: author.ID, Title: "expired thread",
+		ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/expiration", expThread.ID), strings.NewReader(url.Values{"expiration": {"never"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(authorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expired thread change: expected 404, got %d", rr.Code)
+	}
+
+	// 8. Unauthenticated: redirected to login.
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/expiration", thread.ID), strings.NewReader(url.Values{"expiration": {"7d"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Errorf("unauthenticated change: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 9. UI: the author's thread page carries both toggle buttons and both
+	//    forms starting is-hidden; the select preselects the stored choice
+	//    (24h after step 5). A non-author's page carries neither.
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+	req.AddCookie(authorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("author thread page: %d", rr.Code)
+	}
+	page := rr.Body.String()
+	for _, want := range []string{
+		`id="edit-title-btn" data-toggle-form="#title-edit-form"`,
+		`id="title-edit-form" class="field has-addons mb-1 is-hidden"`,
+		`id="change-expiration-btn" data-toggle-form="#expiration-edit-form"`,
+		`id="expiration-edit-form" class="field has-addons mb-1 is-hidden"`,
+		fmt.Sprintf(`action="/threads/%d/expiration"`, thread.ID),
+		`name="expiration"`,
+		`<option value="24h" selected>24 hours</option>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("author thread page missing %q", want)
+		}
+	}
+	for _, absent := range []string{
+		`<option value="7d" selected`,
+		`<option value="never" selected`,
+	} {
+		if strings.Contains(page, absent) {
+			t.Errorf("author thread page preselects %q alongside 24h", absent)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+	req.AddCookie(otherCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("non-author thread page: %d", rr.Code)
+	}
+	page = rr.Body.String()
+	for _, absent := range []string{
+		`id="change-expiration-btn"`,
+		`id="expiration-edit-form"`,
+		fmt.Sprintf(`action="/threads/%d/expiration"`, thread.ID),
+	} {
+		if strings.Contains(page, absent) {
+			t.Errorf("non-author thread page shows %q", absent)
+		}
+	}
+}

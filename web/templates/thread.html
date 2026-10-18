@@ -20,12 +20,31 @@
       <div class="level-right">
         {{if and .CurrentUser (eq .CurrentUser.ID .Thread.UserID)}}
           <div class="mr-3">
-            <!-- is-hidden (not the hidden attribute): Bulma's .has-addons
-                 sets display:flex, which overrides the UA [hidden] rule. -->
-            <button type="button" class="button is-small is-secondary" id="edit-title-btn">Edit title</button>
+            <!-- Both forms start is-hidden (not the hidden attribute):
+                 Bulma's .has-addons sets display:flex, which overrides the
+                 UA [hidden] rule. The script below toggles via data-toggle-form. -->
+            <button type="button" class="button is-small is-secondary" id="edit-title-btn" data-toggle-form="#title-edit-form">Edit title</button>
             <form method="POST" action="/threads/{{.Thread.ID}}/title" id="title-edit-form" class="field has-addons mb-1 is-hidden">
               <div class="control">
                 <input type="text" name="title" class="input is-small" value="{{.Thread.Title}}" required maxlength="200" placeholder="Thread title">
+              </div>
+              <div class="control">
+                <button type="submit" class="button is-small is-primary">Save</button>
+              </div>
+              <div class="control">
+                <a href="/threads/{{.Thread.ID}}" class="button is-small is-secondary">Cancel</a>
+              </div>
+            </form>
+            <button type="button" class="button is-small is-secondary" id="change-expiration-btn" data-toggle-form="#expiration-edit-form">Change expiration</button>
+            <form method="POST" action="/threads/{{.Thread.ID}}/expiration" id="expiration-edit-form" class="field has-addons mb-1 is-hidden">
+              <div class="control">
+                <select name="expiration" class="input is-small">
+                  <option value="24h" {{if expirationIs .Thread.TtlSeconds 86400}}selected{{end}}>24 hours</option>
+                  <option value="3d" {{if expirationIs .Thread.TtlSeconds 259200}}selected{{end}}>3 days</option>
+                  <option value="7d" {{if expirationIs .Thread.TtlSeconds 604800}}selected{{end}}>7 days</option>
+                  <option value="30d" {{if expirationIs .Thread.TtlSeconds 2592000}}selected{{end}}>30 days</option>
+                  <option value="never" {{if not .Thread.TtlSeconds.Valid}}selected{{end}}>Never</option>
+                </select>
               </div>
               <div class="control">
                 <button type="submit" class="button is-small is-primary">Save</button>
@@ -103,21 +122,24 @@
     </form>
   </div>
 
-  <!-- Title edit: the button toggles the inline form (author-only block,
-       so a plain getElementById suffices — no delegation needed). Same
-       inline-script style as the quote button below. -->
+  <!-- Title edit + expiration change: each button toggles its inline form
+       (data-toggle-form points at the form's id). One delegated listener
+       covers both. Same inline-script style as the quote button below. -->
   <script>
     (function () {
-      var btn = document.getElementById('edit-title-btn');
-      var form = document.getElementById('title-edit-form');
-      if (!btn || !form) return;
-      btn.addEventListener('click', function () {
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('[data-toggle-form]') : null;
+        if (!btn) return;
+        var form = document.querySelector(btn.getAttribute('data-toggle-form'));
+        if (!form) return;
         form.classList.toggle('is-hidden');
         btn.classList.toggle('is-hidden');
         if (!form.classList.contains('is-hidden')) {
-          var input = form.querySelector('input[name="title"]');
-          input.focus();
-          input.select();
+          var input = form.querySelector('input, select');
+          if (input) {
+            input.focus();
+            if (input.select) input.select();
+          }
         }
       });
     })();

@@ -100,6 +100,12 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 			}
 			return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 		},
+		// expirationIs preselects the lifespan choice stored on the thread in
+		// the author's expiration-edit form (the "never" option is selected
+		// directly off !TtlSeconds.Valid in the template).
+		"expirationIs": func(ttl sql.NullInt64, seconds int64) bool {
+			return ttl.Valid && ttl.Int64 == seconds
+		},
 		"isImage": func(mimeType string) bool {
 			return strings.HasPrefix(mimeType, "image/")
 		},
@@ -300,6 +306,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)
 	mux.HandleFunc("GET /threads/{id}", app.ThreadPage)
 	mux.HandleFunc("POST /threads/{id}/title", app.UpdateThreadTitleSubmit)
+	mux.HandleFunc("POST /threads/{id}/expiration", app.UpdateThreadExpirationSubmit)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
 	mux.HandleFunc("GET /posts/{id}/edit", app.EditPostPage)
 	mux.HandleFunc("POST /posts/{id}/edit", app.UpdatePostSubmit)

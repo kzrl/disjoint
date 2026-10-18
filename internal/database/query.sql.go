@@ -1400,6 +1400,37 @@ func (q *Queries) RemoveUserAvatar(ctx context.Context, id int64) error {
 	return err
 }
 
+const setThreadExpiration = `-- name: SetThreadExpiration :execrows
+UPDATE threads
+SET ttl_seconds = ?, expires_at = ?
+WHERE id = ? AND user_id = ?
+`
+
+type SetThreadExpirationParams struct {
+	TtlSeconds sql.NullInt64
+	ExpiresAt  sql.NullTime
+	ID         int64
+	UserID     int64
+}
+
+// Author-only lifespan change. expires_at is reset to the caller-computed
+// value (now + ttl, or NULL for never-threads) - the same "ttl of silence
+// from now" rule every reply applies. Ownership is enforced in the WHERE
+// clause (0 rows = not found or not the author). updated_at is
+// deliberately untouched: a settings change is not a comment.
+func (q *Queries) SetThreadExpiration(ctx context.Context, arg SetThreadExpirationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setThreadExpiration,
+		arg.TtlSeconds,
+		arg.ExpiresAt,
+		arg.ID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setUserAdmin = `-- name: SetUserAdmin :exec
 UPDATE users SET is_admin = 1 WHERE id = ?
 `

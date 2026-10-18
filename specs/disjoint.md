@@ -119,6 +119,8 @@ C. The Ephemerality Twist (Expiring Threads)
 
     TTL reset on activity: threads carry a stored lifespan (ttl_seconds) and a live deadline (expires_at). On creation, expires_at = created_at + ttl. On every new comment the handler re-sets expires_at = now + ttl (NULL stays NULL for never-threads), so an active thread keeps living and only dies after ttl of silence. All expiry predicates and the worker operate exclusively on expires_at, so nothing else needs to know about the TTL.
 
+    Author lifespan change: the thread's author may change the lifespan at any time before expiry from the thread header (a toggle button reveals an inline select of the same five choices as creation; POST /threads/{id}/expiration). The deadline resets to now + new ttl (or both columns to NULL for Never) — the same "ttl of silence from now" rule every reply applies — so the next comment then bumps from the new ttl. The change is author-only (non-authors get a 404), and a resubmitted, unchanged choice is a no-op that leaves expires_at untouched.
+
     Background Worker: A Go goroutine running on a ticker (e.g., every 5 minutes) that executes a cleanup query:
     SQL
 
