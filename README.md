@@ -2,15 +2,15 @@
 
 [![Go 1.27+](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
-**Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums with the casual, private, and ephemeral vibe of modern private chat groups — around a single HackerNews-style front page of threads.
+**Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums with the casual, private, and ephemeral vibe of modern private chat groups.
 
-Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1 (vendored, dark-first). Zero external JavaScript frameworks.
+Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1. Zero external JavaScript frameworks.
 
 ---
 
 ## Features
 
-- **Global Front Page**: Every thread lives on one HackerNews-style front page, sorted by creation date (newest first), with a reply count and a preview of each thread's latest comment. No boards, no categories. Rows whose opening post carries image attachments show a horizontal, touch-scrollable thumbnail strip (capped at 8 thumbs, "+N" chip for the rest) so photos are visible without opening the thread.
+- **Global Front Page**: Every thread lives on front page, sorted by creation date (newest first).
 - **Expiring Threads**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
 - **Embedded File Attachments & Media**:

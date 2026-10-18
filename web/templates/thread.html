@@ -20,8 +20,10 @@
       <div class="level-right">
         {{if and .CurrentUser (eq .CurrentUser.ID .Thread.UserID)}}
           <div class="mr-3">
+            <!-- is-hidden (not the hidden attribute): Bulma's .has-addons
+                 sets display:flex, which overrides the UA [hidden] rule. -->
             <button type="button" class="button is-small is-secondary" id="edit-title-btn">Edit title</button>
-            <form method="POST" action="/threads/{{.Thread.ID}}/title" id="title-edit-form" class="field has-addons mb-1" hidden>
+            <form method="POST" action="/threads/{{.Thread.ID}}/title" id="title-edit-form" class="field has-addons mb-1 is-hidden">
               <div class="control">
                 <input type="text" name="title" class="input is-small" value="{{.Thread.Title}}" required maxlength="200" placeholder="Thread title">
               </div>
@@ -110,9 +112,9 @@
       var form = document.getElementById('title-edit-form');
       if (!btn || !form) return;
       btn.addEventListener('click', function () {
-        form.hidden = !form.hidden;
-        btn.hidden = !form.hidden;
-        if (!form.hidden) {
+        form.classList.toggle('is-hidden');
+        btn.classList.toggle('is-hidden');
+        if (!form.classList.contains('is-hidden')) {
           var input = form.querySelector('input[name="title"]');
           input.focus();
           input.select();

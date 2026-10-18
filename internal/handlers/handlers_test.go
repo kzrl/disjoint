@@ -3523,6 +3523,9 @@ func TestThreadTitleEditing(t *testing.T) {
 	page := rr.Body.String()
 	for _, want := range []string{
 		`id="edit-title-btn"`,
+		// The form must start hidden (is-hidden, not the hidden attribute:
+		// Bulma's .has-addons display:flex would override [hidden]).
+		`id="title-edit-form" class="field has-addons mb-1 is-hidden"`,
 		fmt.Sprintf(`action="/threads/%d/title"`, thread.ID),
 		`name="title"`,
 		`value="renamed title"`,
