@@ -53,6 +53,7 @@ CREATE TABLE posts (
     body TEXT NOT NULL, -- Stored as raw text/Markdown
     url TEXT,           -- Optional first-class link (http/https, server-validated), rendered as a link card; never parsed as markdown
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME, -- NULL until first edit; set to the edit time by the edit handler
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -139,6 +140,12 @@ D. Thread View & Interaction (HTMX Enhanced)
 
         The thread's updated_at timestamp is updated on insertion, and for TTL threads the expiry deadline is pushed out to now + ttl (never-threads keep a NULL deadline).
 
+    Editing Posts & Thread Titles: Authors can edit their own content — author-only, no admin override:
+        A post's author may edit the post's **body** and **first-class link**; attachments, expiration, and authorship are immutable on edit. The edit is a standard form on a dedicated page (GET/POST /posts/{id}/edit); the post card shows an author-only "Edit" button, and a successful save flashes and redirects to the post's anchor (/threads/{id}#post-{pid}). Validation mirrors creation: the link must be an absolute http(s) URL with a host (≤2048 chars), and a post with no attachments needs a body or a link (an attachment-only post may be edited down to attachments only). A resubmitted, unchanged form is a no-op that leaves `updated_at` untouched.
+        A thread's author may rename the thread via an inline form in the thread header (POST /threads/{id}/title). Titles are trimmed, required, and capped at 200 characters; the front page reflects renames immediately. The opening post's body is edited through the normal post-edit flow.
+        Ownership is enforced in the UPDATE's WHERE clause (`user_id = ?`): a non-author gets a 404, never a 403, and never a validation error. Expired threads are not editable.
+        `posts.updated_at` (NULL until first edit) is set to the edit time on every successful edit; the post card shows a dim "(edited)" marker — visible to all viewers, with the edit time in its tooltip. `created_at` is never changed and there is no edit-history table. Because posts can now be edited, a stored quote (see Quoting) is a point-in-time copy and can go stale; the "view original" permalink line still resolves to the post. Reactions survive edits (they are per-post, not per-text).
+
     Markdown Support: Parse post bodies using a Go Markdown library (e.g., [github.com/yuin/goldmark](https://github.com/yuin/goldmark)) to support basic text formatting, lists, quotes, and code blocks. Goldmark runs with the GFM extension (tables, strikethrough, autolinks, task lists), hard line wraps, and raw HTML neutralized. The same pipeline renders post bodies and user-card bios.
 
     Post Links: Each post (opening post and replies) accepts an optional first-class link field (posts.url), separate from the markdown body. Server-side validation requires an absolute http(s) URL with a host (≤2048 chars); the scheme check is the security boundary because template escaping alone would pass a javascript: href through. A valid link renders as a link card under the post body (full URL as the label, truncated with an ellipsis; title carries the verbatim URL; target="_blank" rel="noopener noreferrer"). A link alone satisfies the post-content requirement, so link-only posts are legal. The link is stored verbatim, never re-parsed as markdown, and is excluded from quotes (quotes read the .content body block only).
@@ -153,7 +160,7 @@ D. Thread View & Interaction (HTMX Enhanced)
         >
         > — [view original](/threads/{id}#post-{id})
 
-    Every physical line is > -prefixed (blank lines as bare >), so the quote renders as a single blockquote. The quoted text is soft-capped at 500 characters (truncated with …) while the permalink line is always kept; attachments are excluded from quotes by construction. The quote is stored in the reply's body as ordinary Markdown — no schema change, and since posts are immutable a stored quote can never go stale.
+    Every physical line is > -prefixed (blank lines as bare >), so the quote renders as a single blockquote. The quoted text is soft-capped at 500 characters (truncated with …) while the permalink line is always kept; attachments are excluded from quotes by construction. The quote is stored in the reply's body as ordinary Markdown — no schema change. A post may be edited after it was quoted (see Editing), so a stored quote is a point-in-time copy that can go stale; the "view original" permalink line always resolves to the post.
 
     Slack-Style Reactions: Every post — the thread's opening post included — carries a reaction bar — below its body on the thread page, under the title in the front-page thread rows — showing one chip per reacted emoji (glyph for built-in unicode emoji, a scaled image for custom uploads) with a count, highlighted when the viewer has reacted, plus a “+” trigger opening a picker grid of every emoji (built-in and custom). Hovering a chip lists who reacted (native title tooltip: “Reacted by: a, b, c (you)”; the usernames join comes from a LEFT JOIN on the reactions rows, so a dangling user degrades to being skipped rather than breaking the tooltip). POST /posts/{id}/reactions toggles the viewer's reaction for the given emoji_id (INSERT OR IGNORE, then delete on the no-op), and responds with only the re-rendered bar, which HTMX swaps in place (hx-swap="outerHTML") — no full post re-render. The UNIQUE (post_id, user_id, emoji_id) constraint makes concurrent toggles safe. Custom emoji are PNG/GIF only (≤256 KB, ≤256×256 px), named [a-z0-9_]{2,64}, uploaded on the /emojis community page where any member can delete any custom emoji (deletion cascades its reactions).
 

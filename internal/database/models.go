@@ -47,6 +47,7 @@ type Post struct {
 	Body      string
 	Url       sql.NullString
 	CreatedAt sql.NullTime
+	UpdatedAt sql.NullTime
 }
 
 type Reaction struct {

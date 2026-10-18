@@ -18,6 +18,22 @@
         </div>
       </div>
       <div class="level-right">
+        {{if and .CurrentUser (eq .CurrentUser.ID .Thread.UserID)}}
+          <div class="mr-3">
+            <button type="button" class="button is-small is-secondary" id="edit-title-btn">Edit title</button>
+            <form method="POST" action="/threads/{{.Thread.ID}}/title" id="title-edit-form" class="field has-addons mb-1" hidden>
+              <div class="control">
+                <input type="text" name="title" class="input is-small" value="{{.Thread.Title}}" required maxlength="200" placeholder="Thread title">
+              </div>
+              <div class="control">
+                <button type="submit" class="button is-small is-primary">Save</button>
+              </div>
+              <div class="control">
+                <a href="/threads/{{.Thread.ID}}" class="button is-small is-secondary">Cancel</a>
+              </div>
+            </form>
+          </div>
+        {{end}}
         {{if .Thread.ExpiresAt.Valid}}
           <span class="tag is-subtle" title="Expires at {{formatTime .Thread.ExpiresAt.Time}}">
             &#x23F3; {{formatExpiry .Thread.ExpiresAt}}
@@ -84,6 +100,26 @@
       <button type="submit" class="button is-primary">Post Reply</button>
     </form>
   </div>
+
+  <!-- Title edit: the button toggles the inline form (author-only block,
+       so a plain getElementById suffices — no delegation needed). Same
+       inline-script style as the quote button below. -->
+  <script>
+    (function () {
+      var btn = document.getElementById('edit-title-btn');
+      var form = document.getElementById('title-edit-form');
+      if (!btn || !form) return;
+      btn.addEventListener('click', function () {
+        form.hidden = !form.hidden;
+        btn.hidden = !form.hidden;
+        if (!form.hidden) {
+          var input = form.querySelector('input[name="title"]');
+          input.focus();
+          input.select();
+        }
+      });
+    })();
+  </script>
 
   <!-- Quote insertion: one delegated listener on #posts-container so it also
        works on post cards appended by HTMX. If a CSP with script-src is ever

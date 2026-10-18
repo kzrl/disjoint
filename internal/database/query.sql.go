@@ -73,6 +73,20 @@ func (q *Queries) ConsumeInvite(ctx context.Context, arg ConsumeInviteParams) (i
 	return result.RowsAffected()
 }
 
+const countAttachmentsByPostID = `-- name: CountAttachmentsByPostID :one
+SELECT COUNT(*) FROM attachments WHERE post_id = ?
+`
+
+// Used by the edit handler: a post that carries attachments may be saved
+// with an empty body and link (the attachments still satisfy the content
+// rule, and attachments are immutable on edit).
+func (q *Queries) CountAttachmentsByPostID(ctx context.Context, postID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAttachmentsByPostID, postID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPostsByUserID = `-- name: CountPostsByUserID :one
 SELECT COUNT(*) FROM posts WHERE user_id = ?
 `
@@ -216,7 +230,7 @@ INSERT INTO posts (
     url
 ) VALUES (
     ?, ?, ?, ?
-) RETURNING id, thread_id, user_id, body, url, created_at
+) RETURNING id, thread_id, user_id, body, url, created_at, updated_at
 `
 
 type CreatePostParams struct {
@@ -243,6 +257,7 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 		&i.Body,
 		&i.Url,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -500,6 +515,7 @@ SELECT
     p.body,
     COALESCE(p.url, '') AS url,
     p.created_at,
+    p.updated_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
     COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
@@ -515,6 +531,7 @@ type GetPostByIDRow struct {
 	Body              string
 	Url               string
 	CreatedAt         sql.NullTime
+	UpdatedAt         sql.NullTime
 	AuthorUsername    string
 	AuthorAvatar      string
 	AuthorAvatarNonce int64
@@ -530,6 +547,7 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 		&i.Body,
 		&i.Url,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.AuthorUsername,
 		&i.AuthorAvatar,
 		&i.AuthorAvatarNonce,
@@ -1017,6 +1035,7 @@ SELECT
     p.body,
     COALESCE(p.url, '') AS url,
     p.created_at,
+    p.updated_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
     COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
@@ -1033,6 +1052,7 @@ type ListPostsByThreadRow struct {
 	Body              string
 	Url               string
 	CreatedAt         sql.NullTime
+	UpdatedAt         sql.NullTime
 	AuthorUsername    string
 	AuthorAvatar      string
 	AuthorAvatarNonce int64
@@ -1054,6 +1074,7 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 			&i.Body,
 			&i.Url,
 			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.AuthorUsername,
 			&i.AuthorAvatar,
 			&i.AuthorAvatarNonce,
@@ -1414,6 +1435,60 @@ type SetUserAvatarNonceParams struct {
 func (q *Queries) SetUserAvatarNonce(ctx context.Context, arg SetUserAvatarNonceParams) error {
 	_, err := q.db.ExecContext(ctx, setUserAvatarNonce, arg.AvatarNonce, arg.ID)
 	return err
+}
+
+const updatePost = `-- name: UpdatePost :execrows
+UPDATE posts
+SET body = ?, url = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ? AND user_id = ?
+`
+
+type UpdatePostParams struct {
+	Body   string
+	Url    sql.NullString
+	ID     int64
+	UserID int64
+}
+
+// Author-only edit of body and the first-class link. Ownership is enforced
+// in the WHERE clause: 0 rows means the post does not exist OR the caller
+// is not the author (the handler returns 404 for both). updated_at moves
+// to CURRENT_TIMESTAMP on every successful edit (NULL = never edited);
+// created_at is never touched.
+func (q *Queries) UpdatePost(ctx context.Context, arg UpdatePostParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updatePost,
+		arg.Body,
+		arg.Url,
+		arg.ID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateThreadTitle = `-- name: UpdateThreadTitle :execrows
+UPDATE threads
+SET title = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ? AND user_id = ?
+`
+
+type UpdateThreadTitleParams struct {
+	Title  string
+	ID     int64
+	UserID int64
+}
+
+// Author-only thread rename, same WHERE-clause ownership rule as UpdatePost
+// (0 rows = not found or not the author). threads.updated_at is bumped; the
+// expiry deadline (expires_at) is deliberately left alone.
+func (q *Queries) UpdateThreadTitle(ctx context.Context, arg UpdateThreadTitleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateThreadTitle, arg.Title, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateUserBio = `-- name: UpdateUserBio :exec

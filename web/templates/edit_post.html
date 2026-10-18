@@ -1,0 +1,40 @@
+{{define "content"}}
+<div>
+  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
+    <ul>
+      <li><a href="/">Front Page</a></li>
+      <li><a href="/threads/{{.Thread.ID}}#post-{{.Post.ID}}">{{.Thread.Title}}</a></li>
+      <li class="is-active" aria-current="page"><a>Edit Post</a></li>
+    </ul>
+  </nav>
+
+  <div class="box">
+    <h1 class="title is-4 mb-4">Edit Post</h1>
+
+    <form method="POST" action="/posts/{{.Post.ID}}/edit">
+      <div class="field">
+        <label for="post-url" class="label">Link (optional)</label>
+        <div class="control">
+          <input type="text" id="post-url" name="url" class="input" placeholder="https://example.com/..." value="{{.Post.Url}}">
+        </div>
+        <p class="help">Share a link as its own field — it renders as a link card under the post and is never parsed as markdown. A link alone is a valid post.</p>
+      </div>
+
+      <div class="field">
+        <label for="body" class="label">Message (Markdown supported)</label>
+        <div class="control">
+          <textarea id="body" name="body" class="textarea" rows="8" placeholder="Edit your post...">{{.Post.Body}}</textarea>
+        </div>
+        <p class="help">Tip: Use Markdown for rich formatting, tables, lists, and code blocks.</p>
+      </div>
+
+      <p class="help">Attachments cannot be changed here. The post keeps the timestamp it was originally posted with and gains an &ldquo;(edited)&rdquo; marker.</p>
+
+      <div class="buttons mt-5">
+        <button type="submit" class="button is-primary">Save Changes</button>
+        <a href="/threads/{{.Thread.ID}}#post-{{.Post.ID}}" class="button is-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

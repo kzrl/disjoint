@@ -7,7 +7,9 @@
     <header class="post-head">
       <span class="post-author">{{userLink .Post.AuthorUsername}}</span>
       <time class="is-size-7 muted" datetime="{{isoTime .Post.CreatedAt.Time}}">{{formatTime .Post.CreatedAt.Time}}</time>
+      {{if .Post.UpdatedAt.Valid}}<span class="is-size-7 muted" title="Edited {{formatTime .Post.UpdatedAt.Time}}">(edited)</span>{{end}}
       <button type="button" class="button is-small is-secondary quote-btn">Quote</button>
+      {{if .CanEdit}}<a class="button is-small is-secondary" href="/posts/{{.Post.ID}}/edit" title="Edit this post">Edit</a>{{end}}
     </header>
     {{if .Post.Body}}
     <div class="content is-medium">

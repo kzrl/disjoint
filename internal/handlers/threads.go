@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,12 +14,22 @@ import (
 	"disjoint/internal/middleware"
 )
 
+// maxThreadTitleLength bounds the title input. The front-page rows are
+// single-line, so unbounded titles would wreck the layout. Applies to new
+// values only; pre-existing long titles remain viewable.
+const maxThreadTitleLength = 200
+
 // PostViewItem holds post details and its associated attachments and reactions.
 type PostViewItem struct {
 	Post        database.ListPostsByThreadRow
 	Attachments []database.Attachment
 	Reactions   []ReactionGroup
 	Emojis      []database.ListAllEmojisRow // full list, rendered into the picker
+	// CanEdit is true when the viewing user is the post's author; the post
+	// card renders the Edit button from it. Always false for the HTMX
+	// single-post partial (a freshly created post is rendered for its
+	// author, who sees the button on the next full page load).
+	CanEdit bool
 }
 
 // SinglePostViewItem holds post details and its associated attachments and reactions
@@ -28,6 +39,9 @@ type SinglePostViewItem struct {
 	Attachments []database.Attachment
 	Reactions   []ReactionGroup
 	Emojis      []database.ListAllEmojisRow
+	// CanEdit: the only viewer of this partial is the post's own author
+	// (they just created it), so it is always true when rendered.
+	CanEdit bool
 }
 
 // NewThreadPage renders the global thread creation form.
@@ -151,6 +165,80 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/threads/"+strconv.FormatInt(thread.ID, 10), http.StatusSeeOther)
 }
 
+// UpdateThreadTitleSubmit handles the author renaming their thread.
+// Ownership is enforced in the UPDATE's WHERE clause; a Go-side check right
+// after loading puts the 404 ahead of any validation error so a non-author
+// never learns whether a thread exists.
+func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := middleware.UserFromContext(ctx)
+	if user == nil {
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", "/login")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	threadID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	thread, err := app.queries.GetThreadByID(ctx, threadID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if thread.UserID != user.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	title := strings.TrimSpace(r.FormValue("title"))
+	if title == "" {
+		setFlash(w, "flash_error", "Thread title is required.")
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		return
+	}
+	if len(title) > maxThreadTitleLength {
+		setFlash(w, "flash_error", fmt.Sprintf("Title is too long (max %d characters).", maxThreadTitleLength))
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		return
+	}
+
+	if title == thread.Title {
+		setFlash(w, "flash_success", "No changes to save.")
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		return
+	}
+
+	rows, err := app.queries.UpdateThreadTitle(ctx, database.UpdateThreadTitleParams{
+		Title:  title,
+		ID:     thread.ID,
+		UserID: user.ID,
+	})
+	if err != nil {
+		http.Error(w, "failed to update thread title", http.StatusInternalServerError)
+		return
+	}
+	if rows == 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	setFlash(w, "flash_success", "Title updated.")
+	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+}
+
 // ThreadPage renders the thread detail view with all posts and attachments.
 func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -225,6 +313,12 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CanEdit is author-only (no admin override, per tasks/plan-editing.md);
+	// guests have no user so it is always false for them.
+	var viewerID int64
+	if u := middleware.UserFromContext(ctx); u != nil {
+		viewerID = u.ID
+	}
 	var postViews []PostViewItem
 	for _, p := range posts {
 		postViews = append(postViews, PostViewItem{
@@ -232,6 +326,7 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 			Attachments: attMap[p.ID],
 			Reactions:   reactionGroups[p.ID],
 			Emojis:      emojis,
+			CanEdit:     p.UserID == viewerID,
 		})
 	}
 

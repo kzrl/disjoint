@@ -3152,6 +3152,401 @@ func TestPostURLField(t *testing.T) {
 	}
 }
 
+func TestPostEditing(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	author, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "edit_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "edit_other", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorCookie := authCookieFor(t, queries, author.ID)
+	otherCookie := authCookieFor(t, queries, other.ID)
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{UserID: author.ID, Title: "editing thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   author.ID,
+		Body:     "original body",
+		Url:      sql.NullString{String: "https://example.com/orig", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := post.CreatedAt
+
+	editPost := func(id int64, cookie *http.Cookie, fields map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{}
+		for k, v := range fields {
+			form.Set(k, v)
+		}
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/posts/%d/edit", id), strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. Author edit: body + url updated, updated_at set, created_at kept,
+	//    redirect anchors to the post, success flash set.
+	rr := editPost(post.ID, authorCookie, map[string]string{
+		"body": "revised body",
+		"url":  "https://example.com/new",
+	})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d#post-%d", thread.ID, post.ID) {
+		t.Fatalf("edit redirect: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	if !flashCookieSet(rr, "flash_success", "Post updated.") {
+		t.Errorf("missing 'Post updated.' flash")
+	}
+	p, err := queries.GetPostByID(ctx, post.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Body != "revised body" || p.Url != "https://example.com/new" {
+		t.Errorf("post not updated: %q %q", p.Body, p.Url)
+	}
+	if !p.UpdatedAt.Valid || p.CreatedAt != createdAt {
+		t.Errorf("timestamps wrong: created_at %v updated_at %v", p.CreatedAt, p.UpdatedAt)
+	}
+
+	// 2. No-op save (identical body+url): succeeds but leaves updated_at
+	//    untouched.
+	before := p.UpdatedAt.Time
+	rr = editPost(post.ID, authorCookie, map[string]string{
+		"body": "revised body",
+		"url":  "https://example.com/new",
+	})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("no-op save: %d", rr.Code)
+	}
+	p, _ = queries.GetPostByID(ctx, post.ID)
+	if !p.UpdatedAt.Valid || !p.UpdatedAt.Time.Equal(before) {
+		t.Errorf("no-op save changed updated_at: %v -> %v", before, p.UpdatedAt)
+	}
+
+	// 3. Non-author: 404 (not 403), and the post is untouched.
+	rr = editPost(post.ID, otherCookie, map[string]string{"body": "hijacked"})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("non-author edit: expected 404, got %d", rr.Code)
+	}
+	p, _ = queries.GetPostByID(ctx, post.ID)
+	if p.Body != "revised body" {
+		t.Errorf("non-author edit modified the post: %q", p.Body)
+	}
+
+	// 4. Invalid link rejected with 400; stored url unchanged.
+	rr = editPost(post.ID, authorCookie, map[string]string{"body": "x", "url": "javascript:alert(1)"})
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("javascript: url: expected 400, got %d", rr.Code)
+	}
+	p, _ = queries.GetPostByID(ctx, post.ID)
+	if p.Url != "https://example.com/new" {
+		t.Errorf("invalid edit changed url: %q", p.Url)
+	}
+
+	// 5. Empty body + empty link rejected when the post has no attachments.
+	rr = editPost(post.ID, authorCookie, map[string]string{})
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("empty edit: expected 400, got %d", rr.Code)
+	}
+
+	// 6. Empty body + link IS allowed when the post carries attachments
+	//    (they are immutable on edit and still satisfy the content rule).
+	attPost, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID, UserID: author.ID, Body: "will be cleared",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreateAttachment(ctx, database.CreateAttachmentParams{
+		PostID: attPost.ID, Filename: "img.png",
+		StoragePath: "dummy/img.png", MimeType: "image/png", FileSize: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rr = editPost(attPost.ID, authorCookie, map[string]string{})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("attachment-only edit rejected: %d", rr.Code)
+	}
+	p, _ = queries.GetPostByID(ctx, attPost.ID)
+	if p.Body != "" || p.Url != "" {
+		t.Errorf("attachment-only edit left content: %q %q", p.Body, p.Url)
+	}
+
+	// 7. Expired thread: not editable (GetThreadByID filters expired rows,
+	//    so this surfaces as 404 — same behavior as reply creation).
+	expThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: author.ID, Title: "expired",
+		ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expPost, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: expThread.ID, UserID: author.ID, Body: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr = editPost(expPost.ID, authorCookie, map[string]string{"body": "new"})
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expired thread edit: expected 404, got %d", rr.Code)
+	}
+
+	// 8. Unauthenticated: redirected to login.
+	rr = editPost(post.ID, nil, map[string]string{"body": "anon"})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Errorf("unauthenticated edit: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 9. UI: the author's thread page shows the Edit button, the "(edited)"
+	//    marker, and the new content; a non-author sees the marker (it is
+	//    content metadata) but NOT the Edit button; the edit page prefills
+	//    body + url; non-author edit page is a 404.
+	render := func(path string, cookie *http.Cookie) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr = render(fmt.Sprintf("/threads/%d", thread.ID), authorCookie)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("author thread page: %d", rr.Code)
+	}
+	page := rr.Body.String()
+	for _, want := range []string{
+		fmt.Sprintf(`href="/posts/%d/edit"`, post.ID),
+		"(edited)",
+		"revised body",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("author thread page missing %q", want)
+		}
+	}
+
+	rr = render(fmt.Sprintf("/threads/%d", thread.ID), otherCookie)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("non-author thread page: %d", rr.Code)
+	}
+	page = rr.Body.String()
+	if strings.Contains(page, fmt.Sprintf(`/posts/%d/edit`, post.ID)) {
+		t.Errorf("non-author thread page shows the Edit button")
+	}
+	if !strings.Contains(page, "(edited)") {
+		t.Errorf("(edited) marker missing for non-author (it is content metadata)")
+	}
+
+	rr = render(fmt.Sprintf("/posts/%d/edit", post.ID), authorCookie)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("author edit page: %d", rr.Code)
+	}
+	page = rr.Body.String()
+	for _, want := range []string{
+		fmt.Sprintf(`action="/posts/%d/edit"`, post.ID),
+		`value="https://example.com/new"`,
+		"revised body",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("edit page missing %q", want)
+		}
+	}
+
+	rr = render(fmt.Sprintf("/posts/%d/edit", post.ID), otherCookie)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("non-author edit page: expected 404, got %d", rr.Code)
+	}
+}
+
+func TestThreadTitleEditing(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	author, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "title_ally", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "title_other", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorCookie := authCookieFor(t, queries, author.ID)
+	otherCookie := authCookieFor(t, queries, other.ID)
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{UserID: author.ID, Title: "original title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{ThreadID: thread.ID, UserID: author.ID, Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rename := func(cookie *http.Cookie, title string) *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{"title": {title}}
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/title", thread.ID), strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. Author rename: redirect to the thread, success flash, DB updated.
+	rr := rename(authorCookie, "  renamed title  ")
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d", thread.ID) {
+		t.Fatalf("rename redirect: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	if !flashCookieSet(rr, "flash_success", "Title updated.") {
+		t.Errorf("missing 'Title updated.' flash")
+	}
+	got, err := queries.GetThreadByID(ctx, thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "renamed title" {
+		t.Errorf("title not trimmed+stored: %q", got.Title)
+	}
+
+	// 2. New title renders on the thread page and the front page.
+	for _, path := range []string{fmt.Sprintf("/threads/%d", thread.ID), "/"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(authorCookie)
+		rr = httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "renamed title") {
+			t.Errorf("%s missing the renamed title: %d", path, rr.Code)
+		}
+	}
+
+	// 3. No-op rename: succeeds, title untouched.
+	rr = rename(authorCookie, "renamed title")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("no-op rename: %d", rr.Code)
+	}
+	if !flashCookieSet(rr, "flash_success", "No changes to save.") {
+		t.Errorf("missing 'No changes to save.' flash")
+	}
+
+	// 4. Empty / whitespace-only titles rejected, title untouched.
+	for _, bad := range []string{"", "   "} {
+		rr = rename(authorCookie, bad)
+		if rr.Code != http.StatusSeeOther {
+			t.Errorf("empty title %q: expected redirect, got %d", bad, rr.Code)
+		}
+		if !flashCookieSet(rr, "flash_error", "Thread title is required.") {
+			t.Errorf("empty title %q: missing error flash", bad)
+		}
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if got.Title != "renamed title" {
+		t.Errorf("rejected rename changed the title: %q", got.Title)
+	}
+
+	// 5. Over-length titles rejected, title untouched.
+	rr = rename(authorCookie, strings.Repeat("x", 201))
+	if rr.Code != http.StatusSeeOther || !flashCookieSet(rr, "flash_error", "Title is too long (max 200 characters).") {
+		t.Errorf("over-length title: %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if got.Title != "renamed title" {
+		t.Errorf("over-length rename changed the title: %q", got.Title)
+	}
+
+	// 6. Non-author: 404, title untouched.
+	rr = rename(otherCookie, "hijacked")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("non-author rename: expected 404, got %d", rr.Code)
+	}
+	got, _ = queries.GetThreadByID(ctx, thread.ID)
+	if got.Title != "renamed title" {
+		t.Errorf("non-author rename changed the title: %q", got.Title)
+	}
+
+	// 7. Expired thread: not editable (404 via the expiry filter).
+	expThread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: author.ID, Title: "expired thread",
+		ExpiresAt: sql.NullTime{Time: time.Now().UTC().Add(-time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"title": {"new"}}
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/title", expThread.ID), strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(authorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expired thread rename: expected 404, got %d", rr.Code)
+	}
+
+	// 8. Unauthenticated: redirected to login.
+	form = url.Values{"title": {"anon"}}
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/title", thread.ID), strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Errorf("unauthenticated rename: %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 9. UI: the author's thread page carries the toggle button and the
+	//    prefilled inline form; a non-author's page carries neither.
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+	req.AddCookie(authorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("author thread page: %d", rr.Code)
+	}
+	page := rr.Body.String()
+	for _, want := range []string{
+		`id="edit-title-btn"`,
+		fmt.Sprintf(`action="/threads/%d/title"`, thread.ID),
+		`name="title"`,
+		`value="renamed title"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("author thread page missing %q", want)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/threads/%d", thread.ID), nil)
+	req.AddCookie(otherCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("non-author thread page: %d", rr.Code)
+	}
+	page = rr.Body.String()
+	for _, absent := range []string{`id="edit-title-btn"`, fmt.Sprintf(`action="/threads/%d/title"`, thread.ID)} {
+		if strings.Contains(page, absent) {
+			t.Errorf("non-author thread page shows %q", absent)
+		}
+	}
+}
+
 // TestReplyFormFileInput pins the reply form's single, clean Bulma .file
 // structure: the native input must carry the file-input class (Bulma
 // hides it as an invisible overlay), otherwise the browser's native

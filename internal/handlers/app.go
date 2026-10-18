@@ -162,6 +162,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"index.html",
 		"thread.html",
 		"new_thread.html",
+		"edit_post.html",
 		"login.html",
 		"register.html",
 		"register_closed.html",
@@ -298,7 +299,10 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /threads/new", app.NewThreadPage)
 	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)
 	mux.HandleFunc("GET /threads/{id}", app.ThreadPage)
+	mux.HandleFunc("POST /threads/{id}/title", app.UpdateThreadTitleSubmit)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
+	mux.HandleFunc("GET /posts/{id}/edit", app.EditPostPage)
+	mux.HandleFunc("POST /posts/{id}/edit", app.UpdatePostSubmit)
 	mux.HandleFunc("POST /posts/{id}/reactions", app.ToggleReaction)
 
 	// User cards & profiles

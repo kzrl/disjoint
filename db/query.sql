@@ -127,6 +127,7 @@ SELECT
     p.body,
     COALESCE(p.url, '') AS url,
     p.created_at,
+    p.updated_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
     COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
@@ -143,6 +144,7 @@ SELECT
     p.body,
     COALESCE(p.url, '') AS url,
     p.created_at,
+    p.updated_at,
     COALESCE(u.username, '') AS author_username,
     COALESCE(u.avatar_path, '') AS author_avatar,
     COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
@@ -162,6 +164,24 @@ INSERT INTO posts (
     ?, ?, ?, ?
 ) RETURNING *;
 
+-- name: UpdatePost :execrows
+-- Author-only edit of body and the first-class link. Ownership is enforced
+-- in the WHERE clause: 0 rows means the post does not exist OR the caller
+-- is not the author (the handler returns 404 for both). updated_at moves
+-- to CURRENT_TIMESTAMP on every successful edit (NULL = never edited);
+-- created_at is never touched.
+UPDATE posts
+SET body = ?, url = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ? AND user_id = ?;
+
+-- name: UpdateThreadTitle :execrows
+-- Author-only thread rename, same WHERE-clause ownership rule as UpdatePost
+-- (0 rows = not found or not the author). threads.updated_at is bumped; the
+-- expiry deadline (expires_at) is deliberately left alone.
+UPDATE threads
+SET title = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ? AND user_id = ?;
+
 -- name: CreateAttachment :one
 INSERT INTO attachments (
     post_id,
@@ -179,6 +199,12 @@ FROM attachments a
 JOIN posts p ON a.post_id = p.id
 WHERE p.thread_id = ?
 ORDER BY a.id ASC;
+
+-- name: CountAttachmentsByPostID :one
+-- Used by the edit handler: a post that carries attachments may be saved
+-- with an empty body and link (the attachments still satisfy the content
+-- rule, and attachments are immutable on edit).
+SELECT COUNT(*) FROM attachments WHERE post_id = ?;
 
 -- name: SetUserAdmin :exec
 UPDATE users SET is_admin = 1 WHERE id = ?;
