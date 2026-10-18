@@ -32,6 +32,19 @@
                 {{end}}
               </div>
               {{template "reaction_bar" (reactionBar .Row.FirstPostID .Reactions .Emojis)}}
+              {{if .Images}}
+                {{$tid := .Row.ID}}
+                <div class="front-strip" role="list" aria-label="Images in this thread">
+                  {{range .Images}}
+                    <a class="front-strip-thumb" role="listitem" href="/threads/{{$tid}}">
+                      <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
+                    </a>
+                  {{end}}
+                  {{if gt .MoreImages 0}}
+                    <a class="front-strip-more" href="/threads/{{$tid}}">+{{.MoreImages}}</a>
+                  {{end}}
+                </div>
+              {{end}}
             </div>
             <div class="board-activity">
               {{if .Row.LastCommentID.Valid}}

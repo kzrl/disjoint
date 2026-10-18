@@ -621,6 +621,47 @@ main.container,
 /* Mobile range: must stay synced with Bulma's $tablet breakpoint (769px),
    i.e. max-width = tablet - 1px. Bulma v1 compiles breakpoints as literals
    (no CSS variables), so this cannot reference them. */
+/* --- Front-page image strips -----------------------------------------------------
+   Full-width, one-image-per-screen horizontal pager per thread row
+   (opening-post images). Native touch/scroll on all viewports; no JS.
+   The 16:10 ratio keeps heights consistent regardless of native photo
+   dimensions; mandatory snap settles exactly on an image. */
+.front-strip {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.front-strip-thumb,
+.front-strip-more {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+}
+
+.front-strip-thumb img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border: 1px solid var(--bulma-border-weak);
+  border-radius: var(--bulma-radius);
+}
+
+.front-strip-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+  border: 1px dashed var(--bulma-border-weak);
+  border-radius: var(--bulma-radius);
+  color: var(--bulma-text-weak);
+  font-size: 0.75rem;
+}
+
 @media (max-width: 768px) {
   .board-row {
     grid-template-columns: 1fr;
@@ -630,7 +671,6 @@ main.container,
   .board-activity {
     text-align: left;
   }
-
 }
 
 /* --- Pasted attachment previews ---------------------------------------------------- */

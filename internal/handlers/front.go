@@ -13,11 +13,22 @@ import (
 
 const frontPagePageSize = 30
 
+// frontPageImageCap caps the thumbnails shown per row on the front page;
+// the overflow renders as a "+N" chip. Keeps page weight bounded (30 rows ×
+// 8 lazy-loaded images at most).
+const frontPageImageCap = 8
+
 // expiryBadgeWindow is how close to expiration a thread must be for its TTL
 // badge to appear on the front page. Threads with more time left show no
 // badge at all, keeping rows uncluttered; the thread page itself still shows
 // the deadline regardless.
 const expiryBadgeWindow = 48 * time.Hour
+
+// FrontPageImage is one thumbnail on a front-page row's image strip.
+type FrontPageImage struct {
+	StoragePath string
+	Filename    string
+}
 
 // FrontPageThreadItem is one row on the global front page.
 type FrontPageThreadItem struct {
@@ -28,6 +39,8 @@ type FrontPageThreadItem struct {
 	Snippet      string
 	Reactions    []ReactionGroup             // the thread's opening-post reactions
 	Emojis       []database.ListAllEmojisRow // full list, rendered into the picker
+	Images       []FrontPageImage            // opening-post image attachments, capped
+	MoreImages   int                         // image count beyond frontPageImageCap
 }
 
 // IndexPage renders the global front page: all non-expired threads sorted
@@ -93,6 +106,25 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	}
 	reactionGroups := groupReactions(rRows, currentUserID)
 
+	// Opening-post image attachments for the image strips: one query for the
+	// whole page (skipped when the page is empty — an empty IN list is a
+	// syntax error), grouped by thread in attachment order.
+	var imagePathsByThread map[int64][]FrontPageImage
+	if len(postIDs) > 0 {
+		imageRows, err := app.queries.ListFrontPageThreadImages(ctx, postIDs)
+		if err != nil {
+			http.Error(w, "failed to load thread images", http.StatusInternalServerError)
+			return
+		}
+		imagePathsByThread = make(map[int64][]FrontPageImage, len(imageRows))
+		for _, r := range imageRows {
+			imagePathsByThread[r.ThreadID] = append(imagePathsByThread[r.ThreadID], FrontPageImage{
+				StoragePath: r.StoragePath,
+				Filename:    r.Filename,
+			})
+		}
+	}
+
 	// Every row's bar carries the full emoji list for its picker.
 	emojis, err := app.queries.ListAllEmojis(ctx)
 	if err != nil {
@@ -106,15 +138,24 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		if replyCount < 0 {
 			replyCount = 0
 		}
+		images := imagePathsByThread[row.ID]
+		moreImages := len(images) - frontPageImageCap
+		if moreImages < 0 {
+			moreImages = 0
+		} else {
+			images = images[:frontPageImageCap]
+		}
 		items = append(items, FrontPageThreadItem{
 			Row:        row,
 			Rank:       int64((page-1)*frontPagePageSize + i + 1),
 			ReplyCount: replyCount,
 			ExpiryUrgent: row.ExpiresAt.Valid &&
 				time.Until(row.ExpiresAt.Time) <= expiryBadgeWindow,
-			Snippet:   commentSnippet(row.LastCommentBody),
-			Reactions: reactionGroups[row.FirstPostID],
-			Emojis:    emojis,
+			Snippet:    commentSnippet(row.LastCommentBody),
+			Reactions:  reactionGroups[row.FirstPostID],
+			Emojis:     emojis,
+			Images:     images,
+			MoreImages: moreImages,
 		})
 	}
 

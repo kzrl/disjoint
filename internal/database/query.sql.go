@@ -756,6 +756,68 @@ func (q *Queries) ListAttachmentsByThreadID(ctx context.Context, threadID int64)
 	return items, nil
 }
 
+const listFrontPageThreadImages = `-- name: ListFrontPageThreadImages :many
+SELECT
+    p.thread_id,
+    a.id,
+    a.storage_path,
+    a.filename
+FROM attachments a
+JOIN posts p ON a.post_id = p.id
+WHERE p.id IN (/*SLICE:postIds*/?)
+  AND (a.mime_type = 'image/jpeg' OR a.mime_type = 'image/png'
+       OR a.mime_type = 'image/webp' OR a.mime_type = 'image/gif')
+ORDER BY a.id ASC
+`
+
+type ListFrontPageThreadImagesRow struct {
+	ThreadID    int64
+	ID          int64
+	StoragePath string
+	Filename    string
+}
+
+// Front-page image strips: image attachments on the listed opening posts.
+// One round trip per page (same batching pattern as ListReactionsByPostIDs);
+// the caller must not invoke this with an empty postIds slice.
+func (q *Queries) ListFrontPageThreadImages(ctx context.Context, postids []int64) ([]ListFrontPageThreadImagesRow, error) {
+	query := listFrontPageThreadImages
+	var queryParams []interface{}
+	if len(postids) > 0 {
+		for _, v := range postids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:postIds*/?", strings.Repeat(",?", len(postids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:postIds*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFrontPageThreadImagesRow
+	for rows.Next() {
+		var i ListFrontPageThreadImagesRow
+		if err := rows.Scan(
+			&i.ThreadID,
+			&i.ID,
+			&i.StoragePath,
+			&i.Filename,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFrontPageThreads = `-- name: ListFrontPageThreads :many
 SELECT 
     t.id,

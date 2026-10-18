@@ -2848,6 +2848,140 @@ func TestFrontPageReactions(t *testing.T) {
 	}
 }
 
+func TestFrontPageImageStrips(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	hash, _ := auth.HashPassword("password123")
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "strip_user",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	authCookie := authCookieFor(t, queries, user.ID)
+
+	// Minimal bytes that sniff as image/png via http.DetectContentType.
+	pngBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
+
+	// threadWithFiles creates a thread whose opening post carries the given
+	// files and returns its id (map order is random; names are unique).
+	threadWithFiles := func(title string, files map[string][]byte) string {
+		t.Helper()
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		_ = w.WriteField("title", title)
+		_ = w.WriteField("body", "opening post")
+		_ = w.WriteField("expiration", "never")
+		for name, data := range files {
+			part, err := w.CreateFormFile("files", name)
+			if err != nil {
+				t.Fatalf("failed to create form file: %v", err)
+			}
+			_, _ = part.Write(data)
+		}
+		_ = w.Close()
+		req := httptest.NewRequest(http.MethodPost, "/threads/new", &buf)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.AddCookie(authCookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("expected thread create redirect, got %d, body: %s", rr.Code, rr.Body.String())
+		}
+		return strings.TrimPrefix(rr.Header().Get("Location"), "/threads/")
+	}
+
+	// A: two images + one text file (text is not in the strip).
+	threadA := threadWithFiles("strip a", map[string][]byte{
+		"a-1.png":   pngBytes,
+		"a-2.png":   pngBytes,
+		"notes.txt": []byte("plain text, not an image"),
+	})
+	// B: body only — no strip, even after an image reply.
+	threadB := threadWithFiles("strip b", nil)
+	// C: nine images — capped at 8 thumbnails + a "+1" chip.
+	cFiles := make(map[string][]byte, 9)
+	for i := 0; i < 9; i++ {
+		cFiles[fmt.Sprintf("c-%d.png", i)] = pngBytes
+	}
+	threadC := threadWithFiles("strip c", cFiles)
+
+	// An image on a *reply* must not appear in B's strip: the strip shows
+	// opening-post attachments only.
+	var replyBuf bytes.Buffer
+	rw := multipart.NewWriter(&replyBuf)
+	_ = rw.WriteField("body", "a photo in the replies")
+	part, err := rw.CreateFormFile("files", "reply.png")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = part.Write(pngBytes)
+	_ = rw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/threads/"+threadB+"/posts", &replyBuf)
+	req.Header.Set("Content-Type", rw.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(authCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected reply 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d", rr.Code)
+	}
+	page := rr.Body.String()
+
+	// Two strips (A and C), 10 thumbnails (2 + capped 8), one "+1" chip.
+	if got := strings.Count(page, `class="front-strip"`); got != 2 {
+		t.Errorf("expected 2 image strips, got %d", got)
+	}
+	if got := strings.Count(page, `class="front-strip-thumb"`); got != 10 {
+		t.Errorf("expected 10 thumbnails (2 + capped 8), got %d", got)
+	}
+	if !strings.Contains(page, `class="front-strip-more" href="/threads/`+threadC+`">+1`) {
+		t.Errorf("expected a \"+1\" chip linking into thread C")
+	}
+	if !strings.Contains(page, `<a class="front-strip-thumb" role="listitem" href="/threads/`+threadA+`">`) {
+		t.Errorf("thumbnails on thread A should link into the thread")
+	}
+	if !strings.Contains(page, `alt="a-1.png"`) || !strings.Contains(page, `alt="a-2.png"`) {
+		t.Errorf("expected image filenames in alt text")
+	}
+	// Non-image attachments and reply images are never in a strip.
+	for _, unwanted := range []string{"notes.txt", "reply.png"} {
+		if strings.Contains(page, `alt="`+unwanted+`"`) {
+			t.Errorf("front-page strip must not contain %s", unwanted)
+		}
+	}
+	// Thread B's row (bounded by the board-row divs) has no strip at all.
+	titleIdx := strings.Index(page, "strip b")
+	if titleIdx < 0 {
+		t.Fatal("thread B missing from the front page")
+	}
+	rowStart := strings.LastIndex(page[:titleIdx], `<div class="board-row">`)
+	rowEnd := strings.Index(page[titleIdx:], `<div class="board-row">`)
+	if rowStart < 0 {
+		rowStart = 0
+	}
+	if rowEnd >= 0 {
+		rowEnd += titleIdx
+	} else {
+		rowEnd = len(page)
+	}
+	if strings.Contains(page[rowStart:rowEnd], "front-strip") {
+		t.Errorf("image-less thread B must not render a strip: %s", page[rowStart:rowEnd])
+	}
+}
+
 func TestPostURLField(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
 	defer db.Close()

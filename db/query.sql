@@ -52,6 +52,22 @@ GROUP BY t.id
 ORDER BY t.created_at DESC, t.id DESC
 LIMIT ? OFFSET ?;
 
+-- name: ListFrontPageThreadImages :many
+-- Front-page image strips: image attachments on the listed opening posts.
+-- One round trip per page (same batching pattern as ListReactionsByPostIDs);
+-- the caller must not invoke this with an empty postIds slice.
+SELECT
+    p.thread_id,
+    a.id,
+    a.storage_path,
+    a.filename
+FROM attachments a
+JOIN posts p ON a.post_id = p.id
+WHERE p.id IN (sqlc.slice('postIds'))
+  AND (a.mime_type = 'image/jpeg' OR a.mime_type = 'image/png'
+       OR a.mime_type = 'image/webp' OR a.mime_type = 'image/gif')
+ORDER BY a.id ASC;
+
 -- name: GetThreadByID :one
 SELECT 
     t.id,
