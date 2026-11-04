@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,5 +146,36 @@ func TestSecurityHeadersSetOnAllResponses(t *testing.T) {
 		if got := rec.Header().Get(header); got != value {
 			t.Errorf("%s = %q, want %q", header, got, value)
 		}
+	}
+}
+
+func TestMaxBodyRejectsDeclaredOversizeRequest(t *testing.T) {
+	called := false
+	handler := MaxBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", strings.NewReader("payload"))
+	req.ContentLength = MaxRequestBodyBytes + 1
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", rec.Code)
+	}
+	if called {
+		t.Fatal("oversized request must not reach the wrapped handler")
+	}
+}
+
+func TestMaxBodyAllowsNormalRequest(t *testing.T) {
+	handler := MaxBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/threads/new", strings.NewReader("small")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }

@@ -55,6 +55,47 @@ GROUP BY t.id
 ORDER BY t.created_at DESC, t.id DESC
 LIMIT ? OFFSET ?;
 
+-- name: SearchFrontPageThreads :many
+-- Front-page search. Same row shape and ordering as ListFrontPageThreads,
+-- filtered to non-expired threads whose title or any post body matches the
+-- caller-supplied LIKE pattern (wrapped in %...%; % and _ keep their wildcard
+-- meaning in a search term).
+SELECT
+    t.id,
+    t.title,
+    t.created_at,
+    t.expires_at,
+    t.ttl_seconds,
+    COALESCE(u.username, '') AS author_username,
+    COUNT(p.id) AS post_count,
+    CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
+    lc.id AS last_comment_id,
+    lc.body AS last_comment_body,
+    lc.created_at AS last_comment_at,
+    COALESCE(lcu.username, '') AS last_comment_author
+FROM threads t
+LEFT JOIN users u ON t.user_id = u.id
+LEFT JOIN posts p ON p.thread_id = t.id
+LEFT JOIN posts lc ON lc.id = (
+    SELECT MAX(p2.id)
+    FROM posts p2
+    WHERE p2.thread_id = t.id
+      AND p2.id > (SELECT MIN(p3.id) FROM posts p3 WHERE p3.thread_id = t.id)
+)
+LEFT JOIN users lcu ON lc.user_id = lcu.id
+WHERE (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
+  AND (
+    t.title LIKE ?
+    OR EXISTS (
+      SELECT 1 FROM posts sp
+      WHERE sp.thread_id = t.id
+        AND sp.body LIKE ?
+    )
+  )
+GROUP BY t.id
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT ? OFFSET ?;
+
 -- name: ListFrontPageThreadImages :many
 -- Front-page image strips: image attachments on the listed opening posts.
 -- One round trip per page (same batching pattern as ListReactionsByPostIDs);
@@ -261,6 +302,25 @@ ORDER BY i.created_at DESC;
 -- name: DeleteUnusedInvite :exec
 DELETE FROM invites WHERE id = ? AND used_by IS NULL;
 
+-- name: MarkThreadRead :exec
+-- Upsert the viewer's read marker for a thread. Called on every logged-in
+-- thread page view; the front page compares posts.created_at against it.
+INSERT INTO thread_reads (user_id, thread_id, last_read_at)
+VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, thread_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP;
+
+-- name: ListUnreadThreadIDs :many
+-- Thread IDs with at least one post the viewer has not seen. "Seen" is the
+-- read marker, falling back to the account creation time before the first
+-- open (so a new account does not inherit the whole archive as unread).
+-- The viewer's own posts never count as unread.
+SELECT DISTINCT p.thread_id
+FROM posts p
+LEFT JOIN thread_reads r
+    ON r.thread_id = p.thread_id AND r.user_id = sqlc.arg('viewer_id')
+WHERE p.user_id <> sqlc.arg('viewer_id')
+  AND p.created_at > COALESCE(r.last_read_at, sqlc.arg('account_created_at'));
+
 -- name: UpsertUserPresence :exec
 -- Throttled in SQL: the upsert only writes if the stored timestamp is more
 -- than 30 seconds old, so the middleware can call this on every request
@@ -426,3 +486,91 @@ JOIN emojis e ON r.emoji_id = e.id
 LEFT JOIN users u ON r.user_id = u.id
 WHERE r.post_id IN (sqlc.slice('postIds'))
 ORDER BY r.post_id ASC, r.emoji_id ASC, r.id ASC;
+
+-- name: UpsertNotification :exec
+-- Record or bump one inbox entry. A new trigger makes the row unread again,
+-- points it at the newest triggering post, and upgrades 'reply' to 'mention'
+-- (never the reverse). Called inside the post-creation transaction so a post
+-- and its notifications commit together.
+INSERT INTO notifications (user_id, thread_id, post_id, reason)
+VALUES (sqlc.arg('user_id'), sqlc.arg('thread_id'), sqlc.arg('post_id'), sqlc.arg('reason'))
+ON CONFLICT(user_id, thread_id) DO UPDATE SET
+    post_id       = excluded.post_id,
+    reason        = CASE WHEN excluded.reason = 'mention' THEN 'mention' ELSE notifications.reason END,
+    last_event_at = CURRENT_TIMESTAMP,
+    read_at       = NULL;
+
+-- name: ListInbox :many
+-- The viewer's inbox: one row per thread, newest activity first. The actor is
+-- the author of the triggering post (there is no denormalized actor column),
+-- and expired-but-not-yet-purged threads are filtered out so the inbox never
+-- links to a thread that already 404s.
+SELECT
+    n.thread_id,
+    n.post_id,
+    n.reason,
+    n.last_event_at,
+    n.read_at,
+    t.title,
+    p.body,
+    COALESCE(p.url, '') AS url,
+    COALESCE(u.username, '') AS actor_username,
+    COALESCE(u.avatar_path, '') AS actor_avatar,
+    CAST(COALESCE(u.avatar_nonce, 0) AS INTEGER) AS actor_avatar_nonce
+FROM notifications n
+JOIN threads t ON t.id = n.thread_id
+JOIN posts p   ON p.id = n.post_id
+LEFT JOIN users u ON u.id = p.user_id
+WHERE n.user_id = sqlc.arg('user_id')
+  AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_TIMESTAMP)
+ORDER BY n.last_event_at DESC, n.thread_id DESC
+LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+
+-- name: CountUnreadNotifications :one
+-- Navbar badge count. Expired-but-unpurged threads are excluded: the cleanup
+-- worker only runs once a minute, and the badge must not advertise a thread
+-- that already 404s. Both joins are on primary keys, so this stays cheap.
+SELECT COUNT(*)
+FROM notifications n
+JOIN threads t ON t.id = n.thread_id
+WHERE n.user_id = sqlc.arg('user_id')
+  AND n.read_at IS NULL
+  AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_TIMESTAMP);
+
+-- name: MarkAllNotificationsRead :exec
+-- Backs the inbox's "Mark all read" button (POST /inbox/read). Nothing marks
+-- notifications read implicitly except opening the thread; the inbox itself
+-- never clears on view.
+UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+WHERE user_id = sqlc.arg('user_id') AND read_at IS NULL;
+
+-- name: MarkThreadNotificationRead :exec
+-- Read-through: opening a thread counts as dealing with its inbox entry.
+UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+WHERE user_id = sqlc.arg('user_id')
+  AND thread_id = sqlc.arg('thread_id')
+  AND read_at IS NULL;
+
+-- name: ListThreadRecipients :many
+-- Everyone who has posted in the thread. The opening post means the thread's
+-- author is always included; the caller removes the actor.
+SELECT DISTINCT user_id FROM posts WHERE thread_id = sqlc.arg('thread_id');
+
+-- name: ListUserIDsByUsernames :many
+-- Resolve mentioned names to real users in one round trip. Usernames are
+-- case-sensitive everywhere else (login, user cards), so membership is exact;
+-- an unknown mention notifies nobody and still renders as a 404 pill.
+SELECT id, username FROM users
+WHERE username IN (sqlc.slice('usernames'));
+
+-- name: NewPostsAfter :one
+-- The "N new replies" pill on a thread page. Counts other users' posts newer
+-- than the viewer's last rendered post (the viewer's own posts are already in
+-- their DOM, so counting them would offer a reload that shows nothing new).
+-- first_new_id is the anchor to land on after the reload; 0 when the count is 0.
+SELECT COUNT(*) AS new_count,
+       CAST(COALESCE(MIN(p.id), 0) AS INTEGER) AS first_new_id
+FROM posts p
+WHERE p.thread_id = sqlc.arg('thread_id')
+  AND p.id > sqlc.arg('after')
+  AND p.user_id <> sqlc.arg('viewer_id');

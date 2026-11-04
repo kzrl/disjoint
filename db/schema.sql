@@ -108,3 +108,33 @@ CREATE TABLE IF NOT EXISTS reactions (
 
 CREATE INDEX IF NOT EXISTS idx_reactions_post_id ON reactions(post_id);
 
+
+CREATE TABLE IF NOT EXISTS thread_reads (
+    user_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL,
+    last_read_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, thread_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_reads_user ON thread_reads(user_id);
+
+-- Inbox: one row per (recipient, thread). A new mention/reply bumps the row
+-- (newest post, reason upgraded to 'mention', read_at cleared) instead of
+-- adding an event.
+CREATE TABLE IF NOT EXISTS notifications (
+    user_id       INTEGER NOT NULL,
+    thread_id     INTEGER NOT NULL,
+    post_id       INTEGER NOT NULL,
+    reason        TEXT NOT NULL CHECK (reason IN ('mention', 'reply')),
+    last_event_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at       DATETIME,
+    PRIMARY KEY (user_id, thread_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_inbox ON notifications(user_id, last_event_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id) WHERE read_at IS NULL;

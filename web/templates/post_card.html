@@ -6,10 +6,10 @@
   <div class="media-content">
     <header class="post-head">
       <span class="post-author">{{userLink .Post.AuthorUsername}}</span>
-      <time class="is-size-7 muted" datetime="{{isoTime .Post.CreatedAt.Time}}">{{formatTime .Post.CreatedAt.Time}}</time>
+      <time class="is-size-7 muted" datetime="{{isoTime .Post.CreatedAt.Time}}" title="{{formatTime .Post.CreatedAt.Time}}">{{formatRelative .Post.CreatedAt.Time}}</time>
       {{if .Post.UpdatedAt.Valid}}<span class="is-size-7 muted" title="Edited {{formatTime .Post.UpdatedAt.Time}}">(edited)</span>{{end}}
-      <button type="button" class="button is-small is-secondary quote-btn">Quote</button>
-      {{if .CanEdit}}<a class="button is-small is-secondary" href="/posts/{{.Post.ID}}/edit" title="Edit this post">Edit</a>{{end}}
+      <button type="button" class="button is-small post-action quote-btn">Quote</button>
+      {{if .CanEdit}}<a class="button is-small post-action" href="/posts/{{.Post.ID}}/edit" title="Edit this post">Edit</a>{{end}}
     </header>
     {{if .Post.Body}}
     <div class="content is-medium">
@@ -30,8 +30,15 @@
           {{range .Attachments}}
             {{if isImage .MimeType}}
               <div class="attachment-image-card">
-                <a href="/uploads/{{.StoragePath}}">
-                  <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
+                <a href="/uploads/{{.StoragePath}}" class="lightbox-link" aria-label="View {{.Filename}} full size">
+                  <!-- The card box is 4:3 with object-fit: contain, so the
+                       derivative must keep its own aspect ratio; srcset picks
+                       a 2x variant on wide/high-DPI screens. The link still
+                       points at the full-size original. -->
+                  <img src="/thumbs/{{.StoragePath}}?w=640"
+                       srcset="/thumbs/{{.StoragePath}}?w=320 320w, /thumbs/{{.StoragePath}}?w=640 640w, /thumbs/{{.StoragePath}}?w=1280 1280w"
+                       sizes="(max-width: 768px) 100vw, 25vw"
+                       loading="lazy" decoding="async" alt="{{.Filename}}">
                 </a>
               </div>
             {{else if isVideo .MimeType}}

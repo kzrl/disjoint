@@ -40,6 +40,15 @@ type Invite struct {
 	UsedAt    sql.NullTime
 }
 
+type Notification struct {
+	UserID      int64
+	ThreadID    int64
+	PostID      int64
+	Reason      string
+	LastEventAt time.Time
+	ReadAt      sql.NullTime
+}
+
 type Post struct {
 	ID        int64
 	ThreadID  int64
@@ -73,6 +82,12 @@ type Thread struct {
 	UpdatedAt  sql.NullTime
 	ExpiresAt  sql.NullTime
 	TtlSeconds sql.NullInt64
+}
+
+type ThreadRead struct {
+	UserID     int64
+	ThreadID   int64
+	LastReadAt time.Time
 }
 
 type User struct {

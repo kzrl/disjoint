@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"disjoint/internal/database"
+	"disjoint/internal/thumbs"
 )
 
 // Worker handles periodic cleanup of expired threads and their media files.
@@ -67,13 +68,16 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 		return err
 	}
 
-	// 3. Remove physical files from disk.
+	// 3. Remove physical files from disk, including every cached thumbnail.
+	// Thumbnails are derived and unversioned in the DB, so they must follow
+	// their original out the door here.
 	for _, att := range attachments {
 		if att.StoragePath != "" {
 			fullPath := filepath.Join(w.uploadDir, filepath.Clean(att.StoragePath))
 			if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 				log.Printf("[worker] Warning: could not delete expired attachment file %s: %v", fullPath, err)
 			}
+			thumbs.Remove(w.uploadDir, att.StoragePath)
 		}
 	}
 

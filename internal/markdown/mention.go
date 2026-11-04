@@ -124,3 +124,33 @@ func (e *mentionExt) Extend(m goldmark.Markdown) {
 	m.Parser().AddOptions(parser.WithInlineParsers(util.Prioritized(&mentionParser{}, 500)))
 	m.Renderer().AddOptions(renderer.WithNodeRenderers(util.Prioritized(&mentionRenderer{}, 500)))
 }
+
+// Mentions returns the usernames mentioned in source, in first-appearance
+// order, deduplicated. It parses with the same goldmark instance that Render
+// uses, so the result is exactly the set of mention pills that will be
+// rendered: code spans/fences, link labels, escaped tokens, and e-mail local
+// parts are excluded by the parser itself rather than by a second, drifting
+// rule. Unknown usernames are returned as-is; resolving them to users is the
+// caller's job (a mention of a missing user still renders as a 404 pill).
+func Mentions(source string) []string {
+	node := md.Parser().Parse(text.NewReader([]byte(source)))
+
+	seen := make(map[string]struct{})
+	var names []string
+	_ = ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || n.Kind() != KindMention {
+			return ast.WalkContinue, nil
+		}
+		m, ok := n.(*Mention)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if _, dup := seen[m.Name]; dup {
+			return ast.WalkContinue, nil
+		}
+		seen[m.Name] = struct{}{}
+		names = append(names, m.Name)
+		return ast.WalkContinue, nil
+	})
+	return names
+}

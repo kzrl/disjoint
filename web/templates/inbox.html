@@ -1,0 +1,59 @@
+{{define "content"}}
+<div>
+  <section class="card forum-section my-5">
+    <div class="card-header">
+      <p class="card-header-title">Inbox</p>
+      {{if .UnreadNotifications}}
+        <!-- Explicit read: the inbox never clears on view, so this is the
+             only bulk control. Hidden at zero unread (absent from the DOM,
+             not disabled) because there is nothing to clear. -->
+        <form method="POST" action="/inbox/read" class="inbox-mark-all">
+          <button type="submit" class="button is-small is-secondary">Mark all read</button>
+        </form>
+      {{end}}
+    </div>
+
+    {{if .Items}}
+      <div>
+        {{range .Items}}
+          <div class="board-row inbox-row{{if .Unread}} is-unread{{end}}">
+            <div class="board-main">
+              <div class="board-title">
+                {{if .Unread}}<span class="unread-dot" role="img" title="Unread" aria-label="Unread"></span>{{end}}
+                <span class="inbox-actor">{{authorAvatar .ActorAvatar .ActorUsername .ActorAvatarNonce}}{{userLink .ActorUsername}}</span>
+                <span class="inbox-verb">{{if eq .Reason "mention"}}mentioned you{{else}}replied{{end}} in</span>
+                <a href="/threads/{{.ThreadID}}#post-{{.PostID}}">{{.Title}}</a>
+              </div>
+              {{if .Snippet}}
+                <div class="inbox-snippet">{{.Snippet}}</div>
+              {{else if .URL}}
+                <div class="inbox-snippet">{{.URL}}</div>
+              {{end}}
+            </div>
+            <div class="board-activity">
+              <time datetime="{{isoTime .Time}}" title="{{formatTime .Time}}">{{formatRelative .Time}}</time>
+            </div>
+          </div>
+        {{end}}
+      </div>
+
+      {{if or (gt .Page 1) .HasNext}}
+      <div class="pagination-wrap py-3 px-4 has-text-centered">
+        {{if gt .Page 1}}
+          <a class="button is-secondary is-small" href="/inbox?page={{sub .Page 1}}">&larr; Prev</a>
+        {{end}}
+        {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
+        {{if .HasNext}}
+          <a class="button is-secondary is-small" href="/inbox?page={{add .Page 1}}">Next &rarr;</a>
+        {{end}}
+      </div>
+      {{end}}
+    {{else}}
+      <div class="forum-section py-6 has-text-centered">
+        <p class="muted mb-4">Nothing here yet. Mentions and replies land in this inbox.</p>
+        <a href="/" class="button is-secondary">Back to the front page</a>
+      </div>
+    {{end}}
+  </section>
+</div>
+{{end}}

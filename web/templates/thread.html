@@ -3,17 +3,19 @@
   <nav class="breadcrumb my-4" aria-label="breadcrumbs">
     <ul>
       <li><a href="/">Front Page</a></li>
-      <li class="is-active" aria-current="page">{{.Thread.Title}}</li>
+      <li class="is-active" aria-current="page">Thread</li>
     </ul>
   </nav>
 
-  <div class="box mb-4">
+  <div class="box mb-4 thread-header">
     <div class="level is-mobile">
       <div class="level-left">
         <div>
           <h1 class="title is-4 mb-1">{{.Thread.Title}}</h1>
           <div class="is-size-7 muted">
-            Started by <strong>{{authorAvatar .Thread.AuthorAvatar .Thread.AuthorUsername .Thread.AuthorAvatarNonce}}{{userLink .Thread.AuthorUsername}}</strong> &bull; <time datetime="{{isoTime .Thread.CreatedAt.Time}}">{{formatTime .Thread.CreatedAt.Time}}</time>
+            Started by <strong>{{authorAvatar .Thread.AuthorAvatar .Thread.AuthorUsername .Thread.AuthorAvatarNonce}}{{userLink .Thread.AuthorUsername}}</strong> &bull;
+            <time datetime="{{isoTime .Thread.CreatedAt.Time}}" title="{{formatTime .Thread.CreatedAt.Time}}">{{formatRelative .Thread.CreatedAt.Time}}</time>
+            &bull; {{.ReplyCount}} {{if eq .ReplyCount 1}}reply{{else}}replies{{end}}
           </div>
         </div>
       </div>
@@ -64,38 +66,50 @@
         {{end}}
       </div>
     </div>
+    {{if gt .ExpiryPercent 0}}
+      <div class="ttl-bar" role="progressbar" aria-label="Thread lifespan remaining"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.ExpiryPercent}}"
+           title="{{.ExpiryPercent}}% of this thread's lifespan remaining">
+        <span class="ttl-bar-fill {{if le .ExpiryPercent 20}}is-danger{{else if le .ExpiryPercent 50}}is-warning{{else}}is-success{{end}}"
+              style="width: {{.ExpiryPercent}}%"></span>
+      </div>
+    {{end}}
   </div>
 
-  <div id="posts-container" class="posts-container" data-thread-id="{{.Thread.ID}}">
+  <div id="posts-container" class="posts-container" data-thread-id="{{.Thread.ID}}" data-lightbox-group>
     {{range .Posts}}
       {{template "post_card" .}}
     {{end}}
   </div>
 
-  <!-- Reply box with HTMX -->
-  <div class="box mb-5">
-    <h3 class="title is-5 mb-4">Reply to Thread</h3>
+  {{template "new_posts" .NewPosts}}
+
+  <!-- Reply box with HTMX. No heading: the box after the posts is obviously
+       the composer; Ctrl/Cmd+Enter posts (see disjoint.js). -->
+  <div class="box mb-5 composer-box">
     <form id="reply-form"
           hx-post="/threads/{{.Thread.ID}}/posts"
           hx-target="#posts-container"
           hx-swap="beforeend"
           hx-encoding="multipart/form-data"
+          hx-disabled-elt="find button[type='submit']"
           hx-on::after-request="if(event.detail.successful) { this.reset(); }"
           method="POST"
           action="/threads/{{.Thread.ID}}/posts"
           enctype="multipart/form-data">
       <div class="field">
-        <label for="reply-url" class="label">Link (optional)</label>
+        <label for="reply-url" class="label is-size-7">Link (optional)</label>
         <div class="control">
           <input type="text" id="reply-url" name="url" class="input" placeholder="https://example.com/...">
         </div>
       </div>
 
       <div class="field">
-        <label for="reply-body" class="label">Message (Markdown supported)</label>
+        <label for="reply-body" class="label is-size-7">Message (Markdown supported)</label>
         <div class="control">
-          <textarea id="reply-body" name="body" class="textarea" placeholder="Write a response... (paste images with Ctrl/Cmd+V)" rows="4"></textarea>
+          <textarea id="reply-body" name="body" class="textarea" placeholder="Write a reply… (paste images with Ctrl/Cmd+V)" rows="4"></textarea>
         </div>
+        <p class="help">Ctrl/Cmd + Enter posts.</p>
       </div>
 
       <div class="field">

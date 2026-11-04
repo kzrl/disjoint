@@ -13,6 +13,7 @@ var md = goldmark.New(
 	goldmark.WithExtensions(
 		extension.GFM, // Tables, Strikethrough, Autolinks, Task lists
 		&mentionExt{}, // @username mentions (see mention.go)
+		&emojiExt{},   // :name: inline emoji (see emoji.go)
 	),
 	goldmark.WithRendererOptions(
 		html.WithHardWraps(), // Preserve line breaks

@@ -12,9 +12,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxUploadSize caps a single uploaded file (and the in-memory multipart
-// budget) at 50MB.
-const maxUploadSize = 50 << 20
+const (
+	// maxUploadSize caps a single uploaded file at 50MB.
+	maxUploadSize = 50 << 20
+	// maxUploadFilesPerPost bounds how many attachments one post/thread may
+	// carry. Without this, a single request could stream an unlimited number
+	// of 50MB files (and exhaust the upload volume). It is above the front
+	// page's 8-image strip so the "+N" overflow remains reachable.
+	maxUploadFilesPerPost = 16
+	// maxUploadTotalSize bounds the combined size of one post's attachments.
+	// It is much lower than files × per-file cap so a single post cannot fill
+	// a small self-hosted disk with sixteen 50MB videos.
+	maxUploadTotalSize = 100 << 20
+)
 
 // allowedMIMEExtensions maps a SNIFFED content type to the extension used
 // for the stored file. The browser-provided Content-Type header and the
@@ -49,6 +59,15 @@ type UploadedFileInfo struct {
 	FileSize     int64
 }
 
+// removeUploadedFiles cleans up files written for a post that never made it
+// into the database (validation failure, transaction rollback, commit error).
+// Best-effort: an orphaned file is preferable to failing the request twice.
+func removeUploadedFiles(uploadDir string, files []UploadedFileInfo) {
+	for _, f := range files {
+		_ = os.Remove(filepath.Join(uploadDir, f.StoragePath))
+	}
+}
+
 // saveUploadedFiles validates and saves uploaded files into uploadDir.
 func saveUploadedFiles(r *http.Request, uploadDir string) ([]UploadedFileInfo, error) {
 	if r.MultipartForm == nil || r.MultipartForm.File == nil {
@@ -65,21 +84,30 @@ func saveUploadedFiles(r *http.Request, uploadDir string) ([]UploadedFileInfo, e
 	}
 
 	var saved []UploadedFileInfo
+	var totalSize int64
 
 	for _, fileHeader := range files {
-		if fileHeader.Size == 0 {
+		if fileHeader.Size <= 0 {
 			continue
 		}
+		if len(saved) >= maxUploadFilesPerPost {
+			removeUploadedFiles(uploadDir, saved)
+			return nil, fmt.Errorf("a post can include at most %d attachments", maxUploadFilesPerPost)
+		}
 		if fileHeader.Size > maxUploadSize {
+			removeUploadedFiles(uploadDir, saved)
 			return nil, fmt.Errorf("file %q exceeds maximum allowed size of 50MB", fileHeader.Filename)
+		}
+		totalSize += fileHeader.Size
+		if totalSize > maxUploadTotalSize {
+			removeUploadedFiles(uploadDir, saved)
+			return nil, fmt.Errorf("attachments exceed the maximum combined size of 100MB per post")
 		}
 
 		info, err := saveSingleFile(fileHeader, uploadDir)
 		if err != nil {
 			// Clean up previously saved files on error
-			for _, s := range saved {
-				_ = os.Remove(filepath.Join(uploadDir, s.StoragePath))
-			}
+			removeUploadedFiles(uploadDir, saved)
 			return nil, err
 		}
 		saved = append(saved, info)

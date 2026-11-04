@@ -1,0 +1,17 @@
+{{define "new_posts"}}
+<!-- Polls for replies that arrived after this page rendered. The container
+     replaces itself whole, so the hx-* attributes live on the container; an
+     empty poll response would otherwise delete the element and stop the loop.
+     The pill is a reload link (not an HTMX append) because the viewer's own
+     HTMX replies can be interleaved with other users' posts — appending only
+     the missing ones would break chronological order, and a reload also
+     refreshes the unread/notification markers. -->
+<div id="new-posts" class="new-posts{{if gt .Count 0}} has-pill{{end}}"
+     {{if .Poll}}hx-get="{{.UpdatesURL}}" hx-trigger="every 20s [!document.hidden]" hx-swap="outerHTML"{{end}}>
+  {{if gt .Count 0}}
+    <a class="button is-small is-primary new-posts-pill" href="{{.ReloadURL}}">
+      {{.Count}} new {{if eq .Count 1}}reply{{else}}replies{{end}} &darr;
+    </a>
+  {{end}}
+</div>
+{{end}}

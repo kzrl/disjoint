@@ -5,22 +5,28 @@
 
 /* --- Theme direction & accent ------------------------------------------- */
 
+/* Dark is the default regardless of OS preference; light comes from the
+   system (when the user has not chosen) or from the explicit
+   data-theme="light" set by the navbar toggle (cookie-backed). The
+   generated half of disjoint.css mirrors this three-scope structure. */
+
 :root {
   color-scheme: dark;
   /* Re-tint Bulma's primary from teal to the classic Disjoint blue. Every
      --bulma-primary* shade (light/dark/bold/invert/full ladder) derives
      from these hue/saturation variables, so one override re-tints the whole
-     family in both themes. Lightness is set per theme below: this top-level
-     block (60%) is the dark default, and the light media block later in this
-     file (41%) overrides it for light-mode users. The light override must
-     live in its own @media block — a bare :root declaration here would come
-     after the generated theme in disjoint.css and win in BOTH themes,
-     leaving the light theme at 60% (~#3b82f6, 3.7:1 on white, fails WCAG
-     AA). */
+     family in both themes. Lightness is set per theme: this top-level block
+     (60%) is the dark default; the light rules below set 41% (the value
+     that meets WCAG AA on white). */
   --bulma-primary-h: 217deg;
   --bulma-primary-s: 91%;
   --bulma-primary-l: 60%;
   --bulma-primary-rgb: 60, 131, 246;
+  /* Dark-theme body text: Bulma's 71% is technically 8.5:1 but reads as dim
+     gray on near-black surfaces. 80% (~10.5:1) matches the brightness
+     dark-mode users expect (GitHub/Discord class), while keeping a clear
+     hierarchy vs titles (93%) and muted metadata (53%). */
+  --bulma-text-l: 80%;
   /* Disjoint's sans-serif stack: pure system fonts (no webfont to load —
      keeps the offline/self-hosted property). Overrides Bulma's Inter-first
      --bulma-family-primary/-secondary for body and heading text alike. */
@@ -30,25 +36,25 @@
   --bulma-family-secondary: var(--bulma-family-primary);
 }
 
+/* System light, unless the user explicitly chose dark. The :not() selector
+   has higher specificity than the plain :root dark defaults above, which is
+   what lets this section win without depending on source order. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     color-scheme: light;
     --bulma-primary-l: 41%;
     --bulma-primary-rgb: 9, 82, 200;
+    --bulma-text-l: 29%;
   }
 }
 
-/* Dark-theme body text: Bulma's 71% is technically 8.5:1 on the scheme but
-   reads as dim gray on the near-black surfaces. 80% (~10.5:1) matches the
-   brightness dark-mode users expect (GitHub/Discord class), while keeping a
-   clear hierarchy vs titles (93%) and muted metadata (53%). Scoped to the
-   dark media query on purpose: a bare :root override here would come after
-   the generated theme in disjoint.css and also override the LIGHT theme's
-   29% (same cascade trap as the primary fix above). */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bulma-text-l: 80%;
-  }
+/* Explicit light choice from the toggle (must also beat the generated dark
+   defaults when the OS prefers dark). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bulma-primary-l: 41%;
+  --bulma-primary-rgb: 9, 82, 200;
+  --bulma-text-l: 29%;
 }
 
 /* --- App frame ------------------------------------------------------------ */
@@ -79,6 +85,71 @@ main.container,
 
 .logo span {
   color: var(--bulma-primary);
+}
+
+/* --- Theme toggle --------------------------------------------------------- */
+
+/* Sun when the effective theme is dark (click → light), moon when light
+   (click → dark). The visibility rules below mirror the three theme scopes:
+   dark default, system light, and the explicit data-theme cookie. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--bulma-border);
+  border-radius: var(--bulma-radius);
+  background: var(--bulma-scheme-main-ter);
+  color: var(--bulma-text);
+  cursor: pointer;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus {
+  background: var(--bulma-scheme-main-bis);
+  border-color: var(--bulma-border);
+  color: var(--bulma-text-strong);
+}
+
+.theme-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.theme-icon-sun {
+  display: block;
+}
+
+.theme-icon-moon {
+  display: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-icon-sun {
+    display: none;
+  }
+
+  :root:not([data-theme="dark"]) .theme-icon-moon {
+    display: block;
+  }
+}
+
+:root[data-theme="dark"] .theme-icon-sun {
+  display: block;
+}
+
+:root[data-theme="dark"] .theme-icon-moon {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-icon-sun {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-icon-moon {
+  display: block;
 }
 
 /* Theme-aware muted text for small metadata (timestamps, counts, hints).
@@ -128,6 +199,213 @@ main.container,
   font-size: 0.75rem;
   color: var(--bulma-text-weak);
   padding: 1.5rem 0;
+}
+
+/* --- Toasts --------------------------------------------------------------- */
+
+/* Flash messages rendered as bottom-right toasts that auto-dismiss (see
+   disjoint.js) instead of banners that push the page content down. */
+.toast-stack {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 50; /* above content, above Bulma's modals (40) */
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--bulma-border);
+  border-left-width: 3px;
+  border-radius: var(--bulma-radius);
+  background: var(--bulma-scheme-main-bis);
+  color: var(--bulma-text);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.35);
+  font-size: 0.875rem;
+}
+
+.toast.is-danger {
+  border-left-color: var(--bulma-danger);
+}
+
+.toast.is-success {
+  border-left-color: var(--bulma-success);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-close {
+  border: none;
+  background: transparent;
+  color: var(--bulma-text-weak);
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.toast-close:hover,
+.toast-close:focus {
+  color: var(--bulma-text-strong);
+}
+
+.toast.is-leaving {
+  opacity: 0;
+  transform: translateY(0.25rem);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+@media (max-width: 768px) {
+  .toast-stack {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+    max-width: none;
+  }
+}
+
+/* --- Image lightbox -------------------------------------------------------- */
+
+/* Native <dialog> so Escape/backdrop handling is free; disjoint.js fills the
+   image and opens it for every .lightbox-link. */
+.lightbox {
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: min(96vw, 90rem);
+  max-height: 92vh;
+  overflow: visible;
+}
+
+.lightbox::backdrop {
+  background: rgb(0 0 0 / 0.82);
+  backdrop-filter: blur(2px);
+}
+
+.lightbox-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(96vw, 90rem);
+  max-height: 88vh;
+  border-radius: var(--bulma-radius);
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.5);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -0.75rem;
+  right: -0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  border: 1px solid var(--bulma-border);
+  background: var(--bulma-scheme-main-bis);
+  color: var(--bulma-text-strong);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* Previous/next overlay the image so the dialog never grows past the
+   viewport. They are direct children of the dialog, which is already a
+   containing block (the modal UA stylesheet gives it position: fixed) — do
+   NOT set position: relative on .lightbox, that breaks the modal centering. */
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  border: 1px solid var(--bulma-border);
+  background: color-mix(in srgb, var(--bulma-scheme-main-bis) 75%, transparent);
+  color: var(--bulma-text-strong);
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lightbox-prev {
+  left: 0.5rem;
+}
+
+.lightbox-next {
+  right: 0.5rem;
+}
+
+.lightbox-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.lightbox-meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: center;
+  padding-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--bulma-text-weak);
+}
+
+.lightbox-name {
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rules above set display, so [hidden] needs an explicit override (the
+   same trap the title-edit form hit with Bulma's flex helpers). */
+.lightbox-nav[hidden],
+.lightbox-meta[hidden] {
+  display: none;
+}
+
+/* Horizontal drags must reach the pointer handlers; vertical panning stays
+   native. Also suppress desktop image drag/selection during a mouse swipe. */
+.lightbox-img {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+@media (max-width: 768px) {
+  .lightbox-close {
+    top: 0.25rem;
+    right: 0.25rem;
+  }
+
+  .lightbox-nav {
+    width: 2.25rem;
+    height: 2.25rem;
+    font-size: 1.5rem;
+  }
+
+  .lightbox-prev {
+    left: 0.25rem;
+  }
+
+  .lightbox-next {
+    right: 0.25rem;
+  }
 }
 
 /* --- Forum sections & rows ------------------------------------------------ */
@@ -192,6 +470,53 @@ main.container,
   color: var(--bulma-primary);
 }
 
+/* Pulsing dot on threads that got a reply within the last hour — the front
+   page equivalent of the on-air indicator. */
+.live-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--bulma-success);
+  flex-shrink: 0;
+}
+
+/* Blue dot on threads with posts the viewer has not seen yet. */
+.unread-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--bulma-primary);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--bulma-primary) 60%, transparent);
+  flex-shrink: 0;
+}
+
+/* --- Front-page search ------------------------------------------------------ */
+
+.search-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.search-bar .control.is-expanded {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.search-bar .icon {
+  color: var(--bulma-text-weak);
+}
+
+@media (max-width: 768px) {
+  .search-bar {
+    flex-wrap: wrap;
+  }
+
+  .search-bar .control.is-expanded {
+    flex: 1 1 100%;
+  }
+}
+
 /* Right-hand activity cell: single line, right-aligned, ellipsized. */
 .board-activity {
   font-size: 0.75rem;
@@ -241,6 +566,54 @@ main.container,
   font-weight: 700;
   color: var(--bulma-text-strong);
   word-break: break-word;
+}
+
+/* Post-header actions (Quote, Edit): quiet text buttons that sit inside the
+   metadata line instead of competing with the post body. */
+.button.post-action {
+  height: auto;
+  min-height: 1.5rem;
+  padding: 0 0.375rem;
+  font-size: 0.75rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--bulma-text-weak);
+}
+
+.button.post-action:hover,
+.button.post-action:focus {
+  background: transparent;
+  border-color: transparent;
+  color: var(--bulma-primary);
+}
+
+/* --- Thread header ------------------------------------------------------------ */
+
+/* Thin lifespan bar under the thread title: how much of the thread's current
+   TTL is left, green → amber → red. The tag next to the title carries the
+   exact deadline; this is the at-a-glance version of the app's core idea. */
+.ttl-bar {
+  height: 3px;
+  margin-top: 0.75rem;
+  border-radius: 999px;
+  background: var(--bulma-border-weak);
+  overflow: hidden;
+}
+
+.ttl-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--bulma-success);
+  transition: width 0.4s ease;
+}
+
+.ttl-bar-fill.is-warning {
+  background: var(--bulma-warning);
+}
+
+.ttl-bar-fill.is-danger {
+  background: var(--bulma-danger);
 }
 
 /* Markdown bodies use Bulma's .content component (class "content is-medium",
@@ -297,10 +670,14 @@ main.container,
 
 .attachment-image-card img {
   width: 100%;
-  max-height: 17.5rem;
-  object-fit: cover;
+  /* Contain instead of cover: thumbnails must not silently crop screenshots
+     or diagrams. A fixed 4:3 card keeps the grid tidy; the lightbox shows
+     the full image. */
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: var(--bulma-scheme-main);
   display: block;
-  cursor: pointer;
+  cursor: zoom-in;
   transition: transform 0.2s ease;
 }
 
@@ -622,30 +999,32 @@ main.container,
    i.e. max-width = tablet - 1px. Bulma v1 compiles breakpoints as literals
    (no CSS variables), so this cannot reference them. */
 /* --- Front-page image strips -----------------------------------------------------
-   Full-width, one-image-per-screen horizontal pager per thread row
-   (opening-post images). Native touch/scroll on all viewports; no JS.
-   The 16:10 ratio keeps heights consistent regardless of native photo
-   dimensions; mandatory snap settles exactly on an image. */
+   Compact thumbnail strip per thread row (opening-post images): several
+   thumbnails visible at once instead of one full-width image per screen, so
+   photo-heavy rows remain scannable. Tap any thumbnail to enter the thread.
+   Native touch/scroll on all viewports; no JS. */
 .front-strip {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.5rem;
+  padding-bottom: 0.125rem;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
+  scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
 }
 
 .front-strip-thumb,
 .front-strip-more {
-  flex: 0 0 100%;
+  flex: 0 0 auto;
+  width: clamp(6.5rem, 18vw, 9rem);
   scroll-snap-align: start;
 }
 
 .front-strip-thumb img {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  height: 5.5rem;
   object-fit: cover;
   border: 1px solid var(--bulma-border-weak);
   border-radius: var(--bulma-radius);
@@ -655,11 +1034,12 @@ main.container,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 16 / 10;
+  height: 5.5rem;
   border: 1px dashed var(--bulma-border-weak);
   border-radius: var(--bulma-radius);
   color: var(--bulma-text-weak);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 @media (max-width: 768px) {
@@ -673,6 +1053,122 @@ main.container,
   }
 }
 
+/* Soft accent glow on focused text fields (composer and forms). */
+.input:focus,
+.textarea:focus,
+.select select:focus {
+  border-color: var(--bulma-primary);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+/* Pending form submissions: dim the submit button and show a spinner. htmx
+   adds .htmx-request to the form for the request's lifetime. */
+form.htmx-request button[type="submit"] {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+form.htmx-request button[type="submit"]::after {
+  content: "";
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-left: 0.5em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.05em;
+}
+
+/* --- Motion ----------------------------------------------------------------
+   Small, purposeful motion only: new posts slide in, reaction chips pop, live
+   dots pulse, toasts slide up. Everything here is optional and disabled for
+   users who prefer reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .live-dot {
+    animation: live-pulse 2s ease-in-out infinite;
+  }
+
+  .on-air-dot {
+    animation: on-air-pulse 2.4s ease-in-out infinite;
+  }
+
+  .toast {
+    animation: toast-in 0.25s ease-out both;
+  }
+
+  .post-card.post-enter {
+    animation: post-in 0.35s ease-out both;
+  }
+
+  .reaction-chip.chip-pop {
+    animation: chip-pop 0.3s ease-out;
+  }
+
+  form.htmx-request button[type="submit"]::after {
+    animation: spin 0.7s linear infinite;
+  }
+}
+
+@keyframes post-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes chip-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--bulma-success) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+@keyframes on-air-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 /* --- Pasted attachment previews ---------------------------------------------------- */
 /* Live mirror of the form's `files` input (see web/static/disjoint.js). */
 
@@ -721,4 +1217,79 @@ main.container,
 .pasted-chip-remove:hover,
 .pasted-chip-remove:focus {
   color: var(--bulma-danger);
+}
+
+/* --- Mentions & replies inbox --------------------------------------------- */
+
+/* Bell in the navbar carrying the unread count. The visual pill duplicates
+   the count already present in the link's aria-label, so it is aria-hidden. */
+.inbox-link {
+  position: relative;
+}
+
+.inbox-badge {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--bulma-primary);
+  color: var(--bulma-primary-invert);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+
+/* "Mark all read" lives in the card header, right of the title. */
+.inbox-mark-all {
+  display: flex;
+  align-items: center;
+  padding: 0 0.75rem;
+}
+
+/* Avatar + actor name as one unit inside the (flex) board title. */
+.inbox-actor {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Read rows recede: .board-title is bold by default, so unread entries keep
+   the weight and read entries drop to normal. */
+.inbox-row .board-title {
+  font-weight: 500;
+}
+
+.inbox-row.is-unread .board-title {
+  font-weight: 700;
+}
+
+.inbox-verb {
+  font-weight: 400;
+  color: var(--bulma-text-weak);
+}
+
+.inbox-snippet {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--bulma-text-weak);
+  overflow-wrap: anywhere;
+}
+
+/* --- Live thread updates --------------------------------------------------- */
+
+/* The container is the polling element, so it must exist even with nothing to
+   show; it only takes up space once the pill is rendered. */
+.new-posts.has-pill {
+  display: flex;
+  justify-content: center;
+  margin: -0.25rem 0 1rem;
+}
+
+.new-posts-pill {
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--bulma-primary) 35%, transparent);
 }

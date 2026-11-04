@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"html/template"
@@ -27,6 +28,8 @@ type App struct {
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
 	reactionBarTmpl *template.Template
+	inboxBellTmpl   *template.Template
+	newPostsTmpl    *template.Template
 	middleware      *middleware.Middleware
 	// authLimiter bounds brute-force attempts at login/register per IP.
 	authLimiter *middleware.RateLimiter
@@ -131,6 +134,9 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"renderMarkdown": func(body string) template.HTML {
 			return markdown.Render(body)
 		},
+		// snippet flattens a raw markdown body into a plain-text preview
+		// (front-page last-comment line, inbox rows). Rendered escaped.
+		"snippet": plainSnippet,
 		// userLink renders a username as a link to its user card
 		// (empty name renders nothing). Every post and thread is
 		// attributed to a real user (posts.user_id is NOT NULL), so there
@@ -177,6 +183,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"users.html",
 		"setup.html",
 		"user_card.html",
+		"inbox.html",
 	}
 
 	for _, page := range pages {
@@ -184,7 +191,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// (and post_partial.html); parsed into every set so the define resolves.
 		// reaction_bar.html is parsed into every set: post_card includes the
 		// reaction bar, and post_card is included in every set.
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/"+page)
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}
@@ -204,6 +211,27 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		return nil, fmt.Errorf("failed to parse reaction_bar template: %w", err)
 	}
 	app.reactionBarTmpl = reactionBarTmpl
+
+	// Parse the navbar bell on its own: the poll endpoint (GET /inbox/count)
+	// re-renders just this element, keeping the hx-* attributes that drive it.
+	inboxBellTmpl, err := template.New("inbox_bell.html").Funcs(funcMap).ParseFS(web.Files, "templates/inbox_bell.html")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse inbox_bell template: %w", err)
+	}
+	app.inboxBellTmpl = inboxBellTmpl
+
+	// Parse the thread page's "new replies" pill on its own: the poll endpoint
+	// re-renders just that container.
+	newPostsTmpl, err := template.New("new_posts.html").Funcs(funcMap).ParseFS(web.Files, "templates/new_posts.html")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse new_posts template: %w", err)
+	}
+	app.newPostsTmpl = newPostsTmpl
+
+	// Seed the inline-emoji renderer (:name: in post bodies/bios) with the
+	// current emoji set. Best-effort: if this load fails, tokens render
+	// literally until the next emoji write or process start.
+	app.refreshEmojiCache(context.Background())
 
 	return app, nil
 }
@@ -229,12 +257,31 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 		http.SetCookie(w, &http.Cookie{Name: "flash_success", Value: "", Path: "/", MaxAge: -1})
 	}
 
+	// Theme choice from the navbar toggle cookie: only the two explicit
+	// values are trusted. No cookie (or an invalid one) means follow the OS,
+	// which the CSS expresses with no data-theme attribute at all.
+	theme := ""
+	if c, err := r.Cookie("disjoint_theme"); err == nil {
+		if c.Value == "light" || c.Value == "dark" {
+			theme = c.Value
+		}
+	}
+
 	// If data is a map, inject CurrentUser and PageTitle into it for template access
 	if m, ok := data.(map[string]any); ok {
 		m["CurrentUser"] = user
 		m["PageTitle"] = pageTitle
 		m["FlashError"] = flashErr
 		m["FlashSuccess"] = flashSucc
+		m["Theme"] = theme
+		// Inbox badge: one indexed count per full-page render, so no handler
+		// has to remember to compute it. On error the badge is simply omitted —
+		// chrome must never break the page.
+		if user != nil {
+			if n, err := app.queries.CountUnreadNotifications(r.Context(), user.ID); err == nil {
+				m["UnreadNotifications"] = n
+			}
+		}
 		// Build commit for the footer; omitted ("dev") when the stamp was
 		// not applied at build time.
 		if buildinfo.Commit != "dev" {
@@ -269,8 +316,12 @@ func (app *App) Routes() http.Handler {
 	// Embedded static assets (/static/*)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(app.staticFS))))
 
+	// Liveness/readiness probe (public; see middleware.FirstRunAndAuth).
+	mux.HandleFunc("GET /healthz", app.Healthz)
+
 	// Uploaded media files (/uploads/{filename})
 	mux.HandleFunc("GET /uploads/{filename}", app.ServeUpload)
+	mux.HandleFunc("GET /thumbs/{filename}", app.ServeThumb)
 	mux.HandleFunc("GET /avatars/{name}", app.ServeAvatar)
 
 	// Auth & First-Run Setup. Login and register are rate-limited per IP
@@ -308,6 +359,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /threads/{id}/title", app.UpdateThreadTitleSubmit)
 	mux.HandleFunc("POST /threads/{id}/expiration", app.UpdateThreadExpirationSubmit)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
+	mux.HandleFunc("GET /threads/{id}/updates", app.ThreadUpdates)
 	mux.HandleFunc("GET /posts/{id}/edit", app.EditPostPage)
 	mux.HandleFunc("POST /posts/{id}/edit", app.UpdatePostSubmit)
 	mux.HandleFunc("POST /posts/{id}/reactions", app.ToggleReaction)
@@ -316,7 +368,12 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /users/{name}", app.UserCardPage)
 	mux.HandleFunc("POST /users/me/profile", app.UpdateProfileSubmit)
 
+	// Mentions & replies inbox
+	mux.HandleFunc("GET /inbox", app.InboxPage)
+	mux.HandleFunc("GET /inbox/count", app.InboxCount)
+	mux.HandleFunc("POST /inbox/read", app.MarkInboxReadSubmit)
+
 	// Security headers go outermost so they are present on every response,
 	// including 302s, 404s, and static files.
-	return middleware.SecurityHeaders(app.middleware.FirstRunAndAuth(mux))
+	return middleware.SecurityHeaders(middleware.MaxBody(app.middleware.FirstRunAndAuth(mux)))
 }

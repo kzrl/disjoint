@@ -12,9 +12,21 @@
     <div class="on-air on-air-empty">No one else is on the air</div>
   {{end}}
 
+  <form class="search-bar" method="GET" action="/" role="search">
+    <div class="control has-icons-left is-expanded">
+      <input class="input" type="search" name="q" value="{{.Query}}" maxlength="100"
+             placeholder="Search threads and posts…" aria-label="Search threads and posts">
+      <span class="icon is-left" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+      </span>
+    </div>
+    <button type="submit" class="button is-secondary">Search</button>
+    {{if .Query}}<a class="button is-secondary" href="/">Clear</a>{{end}}
+  </form>
+
   <section class="card forum-section my-5">
     <div class="card-header">
-      <p class="card-header-title">Threads</p>
+      <p class="card-header-title">{{if .Query}}Results for “{{.Query}}”{{else}}Threads{{end}}</p>
       {{if .CurrentUser}}
         <a class="card-header-icon" href="/threads/new" title="Start a new thread" aria-label="Start a new thread">+</a>
       {{end}}
@@ -25,7 +37,8 @@
           <div class="board-row">
             <div class="board-main">
               <div class="board-title">
-                <span class="is-size-7 muted front-rank">{{.Rank}}.</span>
+                {{if .Unread}}<span class="unread-dot" role="img" title="Unread posts" aria-label="Unread posts"></span>{{end}}
+                {{if .IsLive}}<span class="live-dot" role="img" title="Active in the last hour" aria-label="Active in the last hour"></span>{{end}}
                 <a href="/threads/{{.Row.ID}}">{{.Row.Title}}</a>
                 {{if .ExpiryUrgent}}
                   <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
@@ -37,7 +50,7 @@
                 <div class="front-strip" role="list" aria-label="Images in this thread">
                   {{range .Images}}
                     <a class="front-strip-thumb" role="listitem" href="/threads/{{$tid}}">
-                      <img src="/uploads/{{.StoragePath}}" loading="lazy" alt="{{.Filename}}">
+                      <img src="/thumbs/{{.StoragePath}}?w=320" loading="lazy" alt="{{.Filename}}">
                     </a>
                   {{end}}
                   {{if gt .MoreImages 0}}
@@ -61,19 +74,24 @@
       {{if or (gt .Page 1) .HasNext}}
       <div class="pagination-wrap py-3 px-4 has-text-centered">
         {{if gt .Page 1}}
-          <a class="button is-secondary is-small" href="/?page={{sub .Page 1}}">&larr; Prev</a>
+          <a class="button is-secondary is-small" href="/?page={{sub .Page 1}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">&larr; Prev</a>
         {{end}}
         {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
         {{if .HasNext}}
-          <a class="button is-secondary is-small" href="/?page={{add .Page 1}}">Next &rarr;</a>
+          <a class="button is-secondary is-small" href="/?page={{add .Page 1}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">Next &rarr;</a>
         {{end}}
       </div>
       {{end}}
     {{else}}
       <div class="forum-section py-6 has-text-centered">
-        <p class="muted mb-4">No threads yet.</p>
-        {{if .CurrentUser}}
-          <a href="/threads/new" class="button is-primary">+ Start the first thread</a>
+        {{if .Query}}
+          <p class="muted mb-4">No threads match “{{.Query}}”.</p>
+          <a href="/" class="button is-secondary">Show all threads</a>
+        {{else}}
+          <p class="muted mb-4">It's quiet in here. Be the first to break the silence.</p>
+          {{if .CurrentUser}}
+            <a href="/threads/new" class="button is-primary">+ Start the first thread</a>
+          {{end}}
         {{end}}
       </div>
     {{end}}

@@ -1,30 +1,50 @@
 # Disjoint
 
-[![Go 1.27+](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+**Disjoint** is free & open-source web application that tries to bring the vibes from classic internet forums and BBSes. Another place for the group chat to hang out online.
 
-**Disjoint** is an open-source, self-hosted web application that blends the structured, topic-based asynchronous depth of classic forums with the casual, private, and ephemeral vibe of modern private chat groups.
+Self hosted, not some corporate advertising funnel.
 
-Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1. Zero external JavaScript frameworks.
+Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 ---
 
 ## Features
 
-- **Global Front Page**: Every thread lives on front page, sorted by creation date (newest first).
-- **Expiring Threads**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
+- **Global Front Page**: Every thread lives on the front page, sorted by creation date (newest first).
+
+- **Search**: The front page searches thread titles and post bodies, with paginated results that keep the query in the URL.
+
+- **Unread Markers**: Threads with posts you have not seen yet carry a dot on the front page. Opening a thread clears it; your own posts never count.
+
+- **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
+
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
+
 - **Embedded File Attachments & Media**:
-  - Images (`image/jpeg`, `image/png`, `image/webp`, `image/gif`) render responsive inline previews.
-  - Videos (`video/mp4`, `video/webm`) render with native HTML5 players.
-  - Documents and other files render as downloadable attachment cards.
+  - **Images** (`image/jpeg`, `image/png`, `image/webp`, `image/gif`) render responsive inline previews, served as cached 320/640/1280px thumbnails (`srcset`) with the full-size original one click away in the lightbox.
+  - **Videos** (`video/mp4`, `video/webm`) render with native HTML5 players.
+  - **Documents** and other files render as downloadable attachment cards.
+
+- **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch, with a position counter. The thumbnail paints instantly and sharpens to full resolution in place.
+
 - **Markdown Support**: Rich formatting, tables, task lists, blockquotes, and code blocks powered by Goldmark with safe HTML rendering.
+
 - **@User Mentions**: `@username` tokens in posts (and bios) render as tinted pill links to that user's card. Code spans, e-mail addresses, and malformed tokens are never linked.
-- **Quoting Posts**: A `Quote` button on every post inserts a Markdown blockquote — author attribution, the quoted text (capped at 500 chars), and a “view original” permalink — into the reply box. Works on HTMX-appended replies too; no schema change.
-- **Link Posts**: Every post — opening post or reply — can carry a first-class link field, rendered as a link card under the post and never parsed as markdown. Links are validated to http(s) server-side, and a link alone (no body) is a valid post, so sharing a URL takes one field instead of a sentence of markdown.
-- **Slack-Style Reactions**: React to any post — the thread's opening post included — with built-in unicode emoji or custom community emoji (PNG/GIF uploads, `:snake_case_name:` style, managed on the `/emojis` page). One reaction per user per emoji per post; clicking a chip toggles it, and hovering a chip shows who reacted. Reaction bars update in place via HTMX, and deleting an emoji removes its reactions. Thread rows on the front page show the opening post's reactions too, so you can react without opening the thread.
+
+- **First-Class Link Posts**: Every post — opening post or reply — can carry a separate link field, rendered as a clean link card under the post. Links are validated to http(s) server-side, making URL sharing instant.
+
+- **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community emoji
+
+- **Inline Emoji**: Type `:joy:` or any community emoji name in a post or your bio and it renders inline — built-ins as their glyph, custom uploads at reaction-chip size. Typos and deleted names stay as plain text.
+
+- **Live Updates**: The navbar bell refreshes itself every minute, and open threads grow a "N new replies" pill as the conversation continues — no manual reload. Polling pauses on hidden tabs.
+
+- **Mentions & Replies Inbox**: A navbar bell counts the conversations waiting for you. An `@mention` notifies exactly the users whose names render as pills, and replies notify everyone in the thread. One row per thread (not per reply), read only when you open the thread or press “Mark all read”.
+
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
-- **Zero-CGO Single Binary**: Pure Go SQLite driver (`modernc.org/sqlite`) and `//go:embed` for static assets and templates.
+
 - **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.
+
 - **First-Run Setup**: Automatic detection on initial launch to create the administrator account.
 
 ---
@@ -33,11 +53,33 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1. Zero external J
 
 ### 1. Run with Docker Compose (Recommended)
 
+Create a `docker-compose.yml` file:
+
+```yaml
+services:
+  disjoint:
+    image: ghcr.io/kzrl/disjoint:latest
+    container_name: disjoint
+    ports:
+      - "8080:8080"
+    volumes:
+      - disjoint_data:/data
+    restart: unless-stopped
+
+volumes:
+  disjoint_data:
+```
+
+Then run:
 ```bash
 docker compose up -d
 ```
 
-Open `http://localhost:8080` in your browser. All data (SQLite database and uploads) persists in the named `disjoint_data` volume, mounted at `/data` inside the container.
+Open `http://localhost:8080` in your browser. All data persists in the `disjoint_data` volume.
+
+The image runs as UID 10001. If you bind-mount host directories instead of using the named volume, make them writable by that UID.
+
+Images are published to GHCR by CI on pushes to `master` (tag `latest`) and on `v*` tags. You can also build the repository's own compose file locally with `docker compose up -d --build`.
 
 ### 2. Build and Run from Source
 
@@ -51,9 +93,7 @@ make build
 ./bin/disjoint
 ```
 
-On first run, the SQLite database (`disjoint.db`) and the `uploads/` directory are created in the working directory.
-
-Open `http://localhost:8080` in your browser to complete initial setup.
+On first run, the SQLite database (`disjoint.db`) and the `uploads/` directory are created in the working directory. Open `http://localhost:8080` to complete initial setup.
 
 ---
 
@@ -69,20 +109,23 @@ Disjoint is configured via environment variables:
 | `UPLOAD_DIR` | `uploads` | Directory for stored media attachments |
 | `COOKIE_SECURE` | _(auto: TLS detected per request)_ | Force `Secure` on session cookies: `1` behind a TLS-terminating reverse proxy, `0` to disable |
 
+### Uploads
+
+A single post (opening post or reply) accepts at most **16 attachments**, **50 MB per file**, and **100 MB combined**; any request body is capped at 128 MB. Accepted types are JPEG, PNG, WebP, GIF, MP4, WebM, PDF, and plain text.
+
+### Health check
+
+`GET /healthz` is public (it bypasses login and first-run setup) and returns `200 ok` when the database answers, or `503` when it does not. The Docker image ships a `HEALTHCHECK` that probes this endpoint.
+
 ### Behind a reverse proxy (Caddy)
 
 ```caddyfile
 example.com {
-	reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:8080
 }
 ```
 
-Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets
-`X-Real-IP` to the real client address on proxied requests, and Disjoint's
-login/register rate limiter uses it — but only when the connection arrives
-from loopback, so the app must not be directly exposed (binding
-`HOST=127.0.0.1` guarantees that). For TLS termination, add a `tls` directive
-(or `internal` for localhost) to the Caddy site block.
+Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets `X-Real-IP` to the real client address on proxied requests, which Disjoint's login/register rate limiter uses (when connections arrive from loopback).
 
 ---
 
@@ -112,13 +155,6 @@ make css         # re-vendor Bulma and regenerate web/static/disjoint.css
 | `web/` | Templates, vendored static assets (HTMX, Bulma) |
 | `specs/` | Design specs (core app, user/admin flows) |
 
----
-
-## Security notes
-
-- Sessions are opaque server-side tokens; no shared secret is required or read from the environment.
-- Login and registration are rate-limited; behind a reverse proxy the limiter keys on the real client IP (see above).
-- Avatar and attachment uploads are type- and size-checked.
 
 ---
 

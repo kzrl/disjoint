@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -101,9 +99,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	// one attachment OR a first-class link (image-only and link-only
 	// posts are both allowed).
 	if urlErr != nil || title == "" || (body == "" && postURL == "" && len(uploadedFiles) == 0) {
-		for _, f := range uploadedFiles {
-			_ = os.Remove(filepath.Join(app.uploadDir, f.StoragePath))
-		}
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		if urlErr != nil {
 			setFlash(w, "flash_error", "Invalid link: "+urlErr.Error())
 		} else {
@@ -127,6 +123,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	// step must not leave a title-only thread behind.
 	tx, err := app.db.BeginTx(ctx, nil)
 	if err != nil {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		setFlash(w, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
@@ -140,37 +137,51 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:  expiresAt,
 		TtlSeconds: ttlSeconds,
 	})
+
+	// 2. Create initial post. Note the `=` (not `:=`): declaring `post` here
+	// and assigning to the outer `err` keeps a failed insert inside the same
+	// transaction's error path instead of shadowing it in this block.
+	var post database.Post
 	if err == nil {
-		// 2. Create initial post
-		post, err := qtx.CreatePost(ctx, database.CreatePostParams{
+		post, err = qtx.CreatePost(ctx, database.CreatePostParams{
 			ThreadID: thread.ID,
 			UserID:   user.ID,
 			Body:     body,
 			Url:      sql.NullString{String: postURL, Valid: postURL != ""},
 		})
-		if err == nil {
-			// 3. Save attachments
-			for _, f := range uploadedFiles {
-				if _, err = qtx.CreateAttachment(ctx, database.CreateAttachmentParams{
-					PostID:      post.ID,
-					Filename:    f.OriginalName,
-					StoragePath: f.StoragePath,
-					MimeType:    f.MimeType,
-					FileSize:    f.FileSize,
-				}); err != nil {
-					break
-				}
+	}
+
+	// 3. Save attachments
+	if err == nil {
+		for _, f := range uploadedFiles {
+			if _, err = qtx.CreateAttachment(ctx, database.CreateAttachmentParams{
+				PostID:      post.ID,
+				Filename:    f.OriginalName,
+				StoragePath: f.StoragePath,
+				MimeType:    f.MimeType,
+				FileSize:    f.FileSize,
+			}); err != nil {
+				break
 			}
 		}
 	}
 
+	// 4. Inbox entries for anyone mentioned in the opening post. The opening
+	// post is the only participation at this point, so the participant pass
+	// resolves to the author and is dropped as the actor; no special case.
+	if err == nil {
+		err = app.notifyPostRecipients(ctx, qtx, thread.ID, post.ID, user.ID, body)
+	}
+
 	if err != nil {
 		tx.Rollback()
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		setFlash(w, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		setFlash(w, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
@@ -337,6 +348,24 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
 }
 
+// expiryPercent reports how much of a thread's current lifespan is left, as
+// an integer percentage, for the header's TTL bar. Threads that never expire
+// (or whose deadline is in the past) report 0, which hides the bar.
+func expiryPercent(ttl sql.NullInt64, expiresAt sql.NullTime) int {
+	if !ttl.Valid || ttl.Int64 <= 0 || !expiresAt.Valid {
+		return 0
+	}
+	remaining := time.Until(expiresAt.Time)
+	if remaining <= 0 {
+		return 0
+	}
+	pct := int(float64(remaining) / float64(time.Duration(ttl.Int64)*time.Second) * 100)
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
 // ThreadPage renders the thread detail view with all posts and attachments.
 func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -358,6 +387,26 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	if thread.ExpiresAt.Valid && thread.ExpiresAt.Time.Before(time.Now().UTC()) {
 		http.NotFound(w, r)
 		return
+	}
+
+	viewerID := int64(0)
+	if u := middleware.UserFromContext(ctx); u != nil {
+		viewerID = u.ID
+	}
+
+	// Reading a thread marks it read for the front page's unread dots.
+	// Best-effort: a failed marker must not break the page itself.
+	if viewerID != 0 {
+		_ = app.queries.MarkThreadRead(ctx, database.MarkThreadReadParams{
+			UserID:   viewerID,
+			ThreadID: thread.ID,
+		})
+		// Opening the conversation counts as dealing with its inbox entry, so
+		// the row clears (and the navbar badge drops) without opening /inbox.
+		_ = app.queries.MarkThreadNotificationRead(ctx, database.MarkThreadNotificationReadParams{
+			UserID:   viewerID,
+			ThreadID: thread.ID,
+		})
 	}
 
 	posts, err := app.queries.ListPostsByThread(ctx, thread.ID)
@@ -398,10 +447,7 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 			username:    r.Username,
 		})
 	}
-	currentUserID := int64(0)
-	if u := middleware.UserFromContext(ctx); u != nil {
-		currentUserID = u.ID
-	}
+	currentUserID := viewerID
 	reactionGroups := groupReactions(rRows, currentUserID)
 
 	// Every bar carries the full emoji list for its picker.
@@ -413,10 +459,6 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 
 	// CanEdit is author-only (no admin override, per tasks/plan-editing.md);
 	// guests have no user so it is always false for them.
-	var viewerID int64
-	if u := middleware.UserFromContext(ctx); u != nil {
-		viewerID = u.ID
-	}
 	var postViews []PostViewItem
 	for _, p := range posts {
 		postViews = append(postViews, PostViewItem{
@@ -428,8 +470,119 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	replyCount := len(posts) - 1 // the opening post is not a reply
+	if replyCount < 0 {
+		replyCount = 0
+	}
+
+	// The "N new replies" pill polls for posts newer than the newest one
+	// rendered here. posts are ordered by created_at/id ASC, so the last row
+	// is the highest id; the thread always has at least the opening post.
+	lastPostID := int64(0)
+	if len(posts) > 0 {
+		lastPostID = posts[len(posts)-1].ID
+	}
+
 	app.render(w, r, "thread.html", map[string]any{
-		"Thread": thread,
-		"Posts":  postViews,
+		"Thread":        thread,
+		"Posts":         postViews,
+		"ReplyCount":    replyCount,
+		"ExpiryPercent": expiryPercent(thread.TtlSeconds, thread.ExpiresAt),
+		"NewPosts":      newPostsView(thread.ID, lastPostID, 0, 0),
 	}, thread.Title)
+}
+
+// NewPostsView drives the thread page's "N new replies" pill. The container
+// polls itself (UpdatesURL); when other users have posted since the page
+// rendered, it offers a reload link anchored at the first unseen post. A reload
+// — rather than an HTMX append — keeps chronological order intact when the
+// viewer's own HTMX replies are interleaved with other users' posts, and it
+// refreshes the unread/notification markers for free.
+type NewPostsView struct {
+	Count      int64
+	UpdatesURL string
+	ReloadURL  string
+	Poll       bool
+}
+
+func newPostsView(threadID, after, count, firstNewID int64) NewPostsView {
+	v := NewPostsView{
+		Count:      count,
+		UpdatesURL: fmt.Sprintf("/threads/%d/updates?after=%d", threadID, after),
+		Poll:       true,
+	}
+	if firstNewID != 0 {
+		// ?from=… only exists to make the URL different from the current one:
+		// navigating to the same path with only a fragment change would not
+		// reload the page, so the new posts would never render.
+		v.ReloadURL = fmt.Sprintf("/threads/%d?from=%d#post-%d", threadID, firstNewID, firstNewID)
+	}
+	return v
+}
+
+// ThreadUpdates re-renders the thread page's new-posts pill. It always answers
+// 200 with a container: an empty response swapped into the container would
+// delete the polling element, and a 4xx is not swapped by HTMX, so the client
+// would keep polling a dead URL. A missing or expired thread answers with a
+// container that has no hx-trigger, which ends the loop quietly.
+func (app *App) ThreadUpdates(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := middleware.UserFromContext(ctx)
+	if user == nil {
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", "/login")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	// Poll fragments must never be served from a cache: the whole point is to
+	// observe that something changed since the last tick.
+	noStore := func() {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+	stop := func() {
+		noStore()
+		if err := app.newPostsTmpl.ExecuteTemplate(w, "new_posts", NewPostsView{}); err != nil {
+			http.Error(w, "failed to render new posts", http.StatusInternalServerError)
+		}
+	}
+
+	threadID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		stop()
+		return
+	}
+	thread, err := app.queries.GetThreadByID(ctx, threadID)
+	if err != nil {
+		stop()
+		return
+	}
+	if thread.ExpiresAt.Valid && thread.ExpiresAt.Time.Before(time.Now().UTC()) {
+		stop()
+		return
+	}
+
+	after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if err != nil || after < 0 {
+		after = 0
+	}
+
+	row, err := app.queries.NewPostsAfter(ctx, database.NewPostsAfterParams{
+		ThreadID: thread.ID,
+		After:    after,
+		ViewerID: user.ID,
+	})
+	if err != nil {
+		http.Error(w, "failed to count new posts", http.StatusInternalServerError)
+		return
+	}
+
+	noStore()
+	if err := app.newPostsTmpl.ExecuteTemplate(w, "new_posts", newPostsView(thread.ID, after, row.NewCount, row.FirstNewID)); err != nil {
+		http.Error(w, "failed to render new posts", http.StatusInternalServerError)
+	}
 }

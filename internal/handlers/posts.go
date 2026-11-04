@@ -88,10 +88,12 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	body := strings.TrimSpace(r.FormValue("body"))
 	postURL, err := cleanPostURL(r.FormValue("url"))
 	if err != nil {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "invalid link: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if body == "" && len(uploadedFiles) == 0 && postURL == "" {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "reply needs a body, a link, or at least one attachment", http.StatusBadRequest)
 		return
 	}
@@ -100,6 +102,7 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	// does not leave a post referencing missing rows.
 	tx, err := app.db.BeginTx(ctx, nil)
 	if err != nil {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}
@@ -132,12 +135,19 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 3. Inbox entries for mentioned users and for the thread's participants.
+	if err == nil {
+		err = app.notifyPostRecipients(ctx, qtx, thread.ID, post.ID, user.ID, body)
+	}
+
 	if err != nil {
 		tx.Rollback()
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}

@@ -712,7 +712,7 @@ func TestMentionRendering(t *testing.T) {
 
 	// Quote affordance (Task 3): the single post card carries the Quote
 	// button, and the container carries the thread id for permalinks.
-	if c := strings.Count(page, `class="button is-small is-secondary quote-btn"`); c != 1 {
+	if c := strings.Count(page, `class="button is-small post-action quote-btn"`); c != 1 {
 		t.Errorf("thread page: want exactly 1 quote button (one post), got %d", c)
 	}
 	if !strings.Contains(page, `id="posts-container" class="posts-container" data-thread-id="`) {
@@ -738,7 +738,7 @@ func TestMentionRendering(t *testing.T) {
 	if !strings.Contains(partial, mentionAnchor("bob")) {
 		t.Errorf("HTMX partial: want mention anchor for bob, got: %s", partial)
 	}
-	if c := strings.Count(partial, `class="button is-small is-secondary quote-btn"`); c != 1 {
+	if c := strings.Count(partial, `class="button is-small post-action quote-btn"`); c != 1 {
 		t.Errorf("HTMX partial: want exactly 1 quote button on the appended post, got %d", c)
 	}
 
@@ -3901,5 +3901,1508 @@ func TestThreadExpirationEditing(t *testing.T) {
 		if strings.Contains(page, absent) {
 			t.Errorf("non-author thread page shows %q", absent)
 		}
+	}
+}
+
+// TestFrontPageSearchCoversTitlesAndBodies pins the front-page search: the
+// term matches thread titles and post bodies, is case-insensitive, survives
+// in the input, and has a dedicated no-results state.
+func TestFrontPageSearchCoversTitlesAndBodies(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	u, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "searcher",
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	cookie := authCookieFor(t, queries, u.ID)
+
+	newThread := func(title, body string) {
+		t.Helper()
+		th, err := queries.CreateThread(ctx, database.CreateThreadParams{
+			UserID: u.ID,
+			Title:  title,
+		})
+		if err != nil {
+			t.Fatalf("failed to create thread %q: %v", title, err)
+		}
+		if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+			ThreadID: th.ID,
+			UserID:   u.ID,
+			Body:     body,
+		}); err != nil {
+			t.Fatalf("failed to create opening post for %q: %v", title, err)
+		}
+	}
+
+	newThread("Go concurrency patterns", "channels and goroutines are fun")
+	newThread("Cooking thread", "pasta recipes and sauce")
+	newThread("Goroutine leaks", "memory profiles")
+
+	search := func(q string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/?q="+url.QueryEscape(q), nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		app.Routes().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("search %q: expected 200, got %d", q, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// "goroutine" appears in one title and one body.
+	page := search("goroutine")
+	for _, want := range []string{"Go concurrency patterns", "Goroutine leaks"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("search goroutine: missing %q", want)
+		}
+	}
+	if strings.Contains(page, "Cooking thread") {
+		t.Errorf("search goroutine: unrelated thread leaked into results")
+	}
+	if !strings.Contains(page, `value="goroutine"`) {
+		t.Errorf("search goroutine: query not preserved in the input")
+	}
+	if !strings.Contains(page, "Results for") {
+		t.Errorf("search goroutine: missing results heading")
+	}
+
+	// Body-only match, case-insensitively.
+	page = search("PASTA")
+	if !strings.Contains(page, "Cooking thread") {
+		t.Errorf("search PASTA: expected body match, got none")
+	}
+	if strings.Contains(page, "Goroutine leaks") {
+		t.Errorf("search PASTA: unrelated thread leaked into results")
+	}
+
+	// No matches: dedicated empty state + escape hatch.
+	page = search("zzzz-no-such-thing")
+	if !strings.Contains(page, "No threads match") {
+		t.Errorf("no-results search: missing empty state")
+	}
+	if !strings.Contains(page, "Show all threads") {
+		t.Errorf("no-results search: missing clear-search link")
+	}
+}
+
+// TestUnreadThreadIndicators pins the per-user read markers: another user's
+// post shows a dot, opening the thread clears it, own posts never count, and
+// guests get no dots.
+func TestUnreadThreadIndicators(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	createUser := func(name string) *database.User {
+		t.Helper()
+		u, err := queries.CreateUser(ctx, database.CreateUserParams{
+			Username:     name,
+			PasswordHash: "fakehash",
+		})
+		if err != nil {
+			t.Fatalf("failed to create user %q: %v", name, err)
+		}
+		return &u
+	}
+	alice := createUser("alice")
+	bob := createUser("bob")
+
+	// Backdate both accounts so the opening post (created now) is newer than
+	// the fallback "account created" timestamp on the first visit.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET created_at = datetime('now', '-1 day') WHERE id IN (?, ?)",
+		alice.ID, bob.ID); err != nil {
+		t.Fatalf("failed to backdate users: %v", err)
+	}
+
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: alice.ID,
+		Title:  "unread test thread",
+	})
+	if err != nil {
+		t.Fatalf("failed to create thread: %v", err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   alice.ID,
+		Body:     "opening post",
+	}); err != nil {
+		t.Fatalf("failed to create opening post: %v", err)
+	}
+
+	bobCookie := authCookieFor(t, queries, bob.ID)
+	aliceCookie := authCookieFor(t, queries, alice.ID)
+
+	unreadDots := func(cookie *http.Cookie) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		app.Routes().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("front page: expected 200, got %d", rr.Code)
+		}
+		return strings.Count(rr.Body.String(), `class="unread-dot"`)
+	}
+
+	// Bob has never opened the thread → unread.
+	if got := unreadDots(bobCookie); got != 1 {
+		t.Fatalf("bob before opening: want 1 unread dot, got %d", got)
+	}
+
+	// Alice's own thread is never unread for her.
+	if got := unreadDots(aliceCookie); got != 0 {
+		t.Errorf("alice (own thread): want 0 unread dots, got %d", got)
+	}
+
+	// Opening the thread records the marker and clears the dot.
+	req := httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(thread.ID, 10), nil)
+	req.AddCookie(bobCookie)
+	rr := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bob opening thread: expected 200, got %d", rr.Code)
+	}
+	if got := unreadDots(bobCookie); got != 0 {
+		t.Fatalf("bob after reading: want 0 unread dots, got %d", got)
+	}
+
+	// A new reply from Alice becomes unread again. created_at is bumped past
+	// the read marker explicitly so the test does not depend on second-
+	// resolution timestamps.
+	reply, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   alice.ID,
+		Body:     "new reply",
+	})
+	if err != nil {
+		t.Fatalf("failed to create reply: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"UPDATE posts SET created_at = datetime('now', '+1 second') WHERE id = ?", reply.ID); err != nil {
+		t.Fatalf("failed to bump reply timestamp: %v", err)
+	}
+	if got := unreadDots(bobCookie); got != 1 {
+		t.Fatalf("bob after new reply: want 1 unread dot, got %d", got)
+	}
+}
+
+// TestThemeCookie pins the theme toggle's server half: only light/dark
+// cookies set data-theme on <html>; anything else follows the OS.
+func TestThemeCookie(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	u, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "themed",
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	session := authCookieFor(t, queries, u.ID)
+
+	page := func(cookieValue string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(session)
+		if cookieValue != "" {
+			req.AddCookie(&http.Cookie{Name: "disjoint_theme", Value: cookieValue, Path: "/"})
+		}
+		rr := httptest.NewRecorder()
+		app.Routes().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("front page: expected 200, got %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	if body := page(""); !strings.Contains(body, `<html lang="en">`) {
+		t.Errorf("no cookie: want no data-theme attribute")
+	}
+	if body := page("light"); !strings.Contains(body, `<html lang="en" data-theme="light">`) {
+		t.Errorf("light cookie: want data-theme=light")
+	}
+	if body := page("dark"); !strings.Contains(body, `<html lang="en" data-theme="dark">`) {
+		t.Errorf("dark cookie: want data-theme=dark")
+	}
+	if body := page("banana"); !strings.Contains(body, `<html lang="en">`) {
+		t.Errorf("invalid cookie: want no data-theme attribute")
+	}
+	if body := page(""); !strings.Contains(body, `id="theme-toggle"`) {
+		t.Errorf("want the theme toggle in the navbar")
+	}
+}
+
+// --- Mentions & replies inbox ---------------------------------------------
+
+// inboxTestEnv bundles the pieces the inbox tests share: a running router, the
+// raw DB handle for notification assertions, and multipart form helpers that
+// exercise the real write paths.
+type inboxTestEnv struct {
+	t       *testing.T
+	app     *handlers.App
+	db      *sql.DB
+	queries *database.Queries
+	router  http.Handler
+	ctx     context.Context
+}
+
+func newInboxTestEnv(t *testing.T) *inboxTestEnv {
+	t.Helper()
+	app, db, queries, _ := setupTestApp(t)
+	t.Cleanup(func() { db.Close() })
+	return &inboxTestEnv{
+		t:       t,
+		app:     app,
+		db:      db,
+		queries: queries,
+		router:  app.Routes(),
+		ctx:     context.Background(),
+	}
+}
+
+func (e *inboxTestEnv) user(name string) *database.User {
+	e.t.Helper()
+	u, err := e.queries.CreateUser(e.ctx, database.CreateUserParams{
+		Username:     name,
+		PasswordHash: "fakehash",
+	})
+	if err != nil {
+		e.t.Fatalf("failed to create user %q: %v", name, err)
+	}
+	return &u
+}
+
+// form posts a multipart form as the given user and returns the recorder.
+func (e *inboxTestEnv) form(path string, u *database.User, fields map[string]string) *httptest.ResponseRecorder {
+	e.t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			e.t.Fatalf("failed to write field %q: %v", k, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		e.t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(authCookieFor(e.t, e.queries, u.ID))
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, req)
+	return rr
+}
+
+func (e *inboxTestEnv) newThread(u *database.User, title, body string) int64 {
+	e.t.Helper()
+	rr := e.form("/threads/new", u, map[string]string{
+		"title":      title,
+		"body":       body,
+		"expiration": "never",
+	})
+	if rr.Code != http.StatusSeeOther {
+		e.t.Fatalf("create thread: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+	if err != nil {
+		e.t.Fatalf("create thread: bad redirect %q: %v", rr.Header().Get("Location"), err)
+	}
+	return id
+}
+
+func (e *inboxTestEnv) reply(threadID int64, u *database.User, body string) int64 {
+	e.t.Helper()
+	rr := e.form(fmt.Sprintf("/threads/%d/posts", threadID), u, map[string]string{"body": body})
+	if rr.Code != http.StatusSeeOther {
+		e.t.Fatalf("reply: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	idx := strings.LastIndex(loc, "#post-")
+	if idx < 0 {
+		e.t.Fatalf("reply: redirect %q carries no post anchor", loc)
+	}
+	id, err := strconv.ParseInt(loc[idx+len("#post-"):], 10, 64)
+	if err != nil {
+		e.t.Fatalf("reply: bad post anchor in %q: %v", loc, err)
+	}
+	return id
+}
+
+type inboxNotif struct {
+	Reason string
+	PostID int64
+	Unread bool
+}
+
+func (e *inboxTestEnv) notif(userID, threadID int64) (inboxNotif, bool) {
+	e.t.Helper()
+	var (
+		n      inboxNotif
+		readAt sql.NullTime
+	)
+	err := e.db.QueryRowContext(e.ctx,
+		`SELECT reason, post_id, read_at FROM notifications WHERE user_id = ? AND thread_id = ?`,
+		userID, threadID).Scan(&n.Reason, &n.PostID, &readAt)
+	if err == sql.ErrNoRows {
+		return inboxNotif{}, false
+	}
+	if err != nil {
+		e.t.Fatalf("failed to read notification: %v", err)
+	}
+	n.Unread = !readAt.Valid
+	return n, true
+}
+
+func (e *inboxTestEnv) notifCount(userID int64) int {
+	e.t.Helper()
+	var n int
+	if err := e.db.QueryRowContext(e.ctx,
+		`SELECT COUNT(*) FROM notifications WHERE user_id = ?`, userID).Scan(&n); err != nil {
+		e.t.Fatalf("failed to count notifications: %v", err)
+	}
+	return n
+}
+
+func (e *inboxTestEnv) get(path string, u *database.User) *httptest.ResponseRecorder {
+	e.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if u != nil {
+		req.AddCookie(authCookieFor(e.t, e.queries, u.ID))
+	}
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestInboxRecipientsAndReasonUpgrade(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+	carol := e.user("carol")
+	dave := e.user("dave")
+
+	// Opening post: the author is the only participant and is the actor, so
+	// nobody is notified.
+	threadID := e.newThread(alice, "Thread one", "opening post, no mentions")
+	if n := e.notifCount(alice.ID); n != 0 {
+		t.Fatalf("opening post should notify nobody, alice has %d rows", n)
+	}
+
+	// A reply mentioning carol notifies carol (mention) and the thread author
+	// alice (reply), but never the actor bob.
+	p1 := e.reply(threadID, bob, "hi @carol, look at this")
+	if n, ok := e.notif(carol.ID, threadID); !ok || n.Reason != "mention" || n.PostID != p1 || !n.Unread {
+		t.Fatalf("carol notification = %+v (ok=%v), want mention on post %d unread", n, ok, p1)
+	}
+	if n, ok := e.notif(alice.ID, threadID); !ok || n.Reason != "reply" || n.PostID != p1 {
+		t.Fatalf("alice notification = %+v (ok=%v), want reply on post %d", n, ok, p1)
+	}
+	if _, ok := e.notif(bob.ID, threadID); ok {
+		t.Fatalf("actor must not receive a notification")
+	}
+	if _, ok := e.notif(dave.ID, threadID); ok {
+		t.Fatalf("non-participant must not receive a reply notification")
+	}
+
+	// A second plain reply bumps the author's row (one row per thread) and
+	// does not touch carol, who has not participated in the thread.
+	p2 := e.reply(threadID, bob, "second message")
+	if n, _ := e.notif(alice.ID, threadID); n.PostID != p2 {
+		t.Fatalf("author row should bump to post %d, got %+v", p2, n)
+	}
+	if n, _ := e.notif(carol.ID, threadID); n.PostID != p1 {
+		t.Fatalf("carol's row should still point at post %d, got %+v", p1, n)
+	}
+	if got := e.notifCount(alice.ID); got != 1 {
+		t.Fatalf("alice should have exactly one row for the thread, got %d", got)
+	}
+
+	// Carol's first notification in this thread was a mention, and reason is
+	// sticky: later plain replies bump the row but never downgrade it.
+	e.reply(threadID, carol, "joining in")
+	p4 := e.reply(threadID, bob, "another plain reply")
+	if n, _ := e.notif(carol.ID, threadID); n.Reason != "mention" || n.PostID != p4 {
+		t.Fatalf("carol should keep mention while bumping to %d, got %+v", p4, n)
+	}
+
+	// Dave joins as a participant first, so his first row is a reply; a later
+	// mention upgrades that same row to mention.
+	e.reply(threadID, dave, "dave joins")
+	p6 := e.reply(threadID, bob, "plain reply for dave")
+	if n, _ := e.notif(dave.ID, threadID); n.Reason != "reply" || n.PostID != p6 {
+		t.Fatalf("dave should be notified as reply on %d, got %+v", p6, n)
+	}
+	p7 := e.reply(threadID, bob, "@dave upgraded")
+	if n, _ := e.notif(dave.ID, threadID); n.Reason != "mention" || n.PostID != p7 {
+		t.Fatalf("dave's reason should upgrade to mention on %d, got %+v", p7, n)
+	}
+	if n, _ := e.notif(dave.ID, threadID); !n.Unread {
+		t.Fatalf("a new trigger must make the row unread again")
+	}
+
+	// A read row is re-raised (read_at cleared) by the next trigger.
+	if err := e.queries.MarkAllNotificationsRead(e.ctx, dave.ID); err != nil {
+		t.Fatalf("failed to mark read: %v", err)
+	}
+	e.reply(threadID, bob, "@dave again")
+	if n, _ := e.notif(dave.ID, threadID); !n.Unread {
+		t.Fatalf("re-triggered row should be unread again, got %+v", n)
+	}
+}
+
+func TestInboxMentionExtraction(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	// Self-mention in an opening post notifies nobody.
+	e.newThread(alice, "Self mention", "hello @alice")
+	if n := e.notifCount(alice.ID); n != 0 {
+		t.Fatalf("self-mention must not notify, got %d rows", n)
+	}
+
+	// Unknown users, e-mail addresses, and code spans never notify.
+	threadID := e.newThread(alice, "Extraction", "no mentions")
+	e.reply(threadID, bob, "@nobodyhere hello")
+	e.reply(threadID, bob, "mail user@gmail.com")
+	e.reply(threadID, bob, "code `@alice` only")
+	if n := e.notifCount(alice.ID); n != 1 {
+		t.Fatalf("alice should only have the reply notification, got %d", n)
+	}
+	if n, _ := e.notif(alice.ID, threadID); n.Reason != "reply" {
+		t.Fatalf("non-mention triggers should stay reply, got %+v", n)
+	}
+}
+
+func TestInboxEditsDoNotNotify(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	threadID := e.newThread(alice, "Edits", "opening")
+	postID := e.reply(threadID, bob, "no mention yet")
+	if n := e.notifCount(alice.ID); n != 1 {
+		t.Fatalf("expected one reply notification, got %d", n)
+	}
+
+	// Edit bob's post to mention alice: no new notification, no row change.
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/posts/%d/edit", postID),
+		strings.NewReader("body=now+with+%40alice&url="))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(authCookieFor(t, e.queries, bob.ID))
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("edit: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if n := e.notifCount(alice.ID); n != 1 {
+		t.Fatalf("edit must not create notifications, alice has %d rows", n)
+	}
+	if n, _ := e.notif(alice.ID, threadID); n.PostID != postID || n.Reason != "reply" {
+		t.Fatalf("edit must not touch the existing row, got %+v", n)
+	}
+}
+
+func TestInboxPageBadgeAndMarkAllRead(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	threadID := e.newThread(alice, "Badge thread", "opening")
+	postID := e.reply(threadID, bob, "@alice ping")
+
+	// Guests are redirected (read and bulk-write alike).
+	guestGet := httptest.NewRequest(http.MethodGet, "/inbox", nil)
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, guestGet)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("guest GET /inbox = %d %q, want 303 /login", rr.Code, rr.Header().Get("Location"))
+	}
+	guestPost := httptest.NewRequest(http.MethodPost, "/inbox/read", nil)
+	rr = httptest.NewRecorder()
+	e.router.ServeHTTP(rr, guestPost)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("guest POST /inbox/read = %d %q, want 303 /login", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// First view: highlighted row, badge, and the bulk button — and the view
+	// must NOT mark anything read (explicit-read decision).
+	page := e.get("/inbox", alice)
+	if page.Code != http.StatusOK {
+		t.Fatalf("GET /inbox: expected 200, got %d", page.Code)
+	}
+	html := page.Body.String()
+	for _, want := range []string{
+		"Inbox",
+		"Mark all read",
+		`class="inbox-badge" aria-hidden="true">1<`,
+		`class="board-row inbox-row is-unread"`,
+		"mentioned you in",
+		"/threads/" + strconv.FormatInt(threadID, 10) + "#post-" + strconv.FormatInt(postID, 10),
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("inbox page missing %q", want)
+		}
+	}
+	if n, _ := e.notif(alice.ID, threadID); !n.Unread {
+		t.Fatalf("viewing /inbox must not mark the entry read, got %+v", n)
+	}
+
+	// Reload: still unread (no implicit clearing).
+	if again := e.get("/inbox", alice); !strings.Contains(again.Body.String(), "is-unread") {
+		t.Fatalf("reload should still show the unread highlight")
+	}
+
+	// Mark all read: redirect + flash, then nothing is highlighted, the
+	// button is gone, and the badge is gone.
+	rr = e.form("/inbox/read", alice, nil)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/inbox" {
+		t.Fatalf("POST /inbox/read = %d %q, want 303 /inbox", rr.Code, rr.Header().Get("Location"))
+	}
+	if flash := rr.Result().Cookies(); len(flash) == 0 {
+		t.Errorf("expected a flash cookie on the mark-all-read redirect")
+	}
+	if n, _ := e.notif(alice.ID, threadID); n.Unread {
+		t.Fatalf("mark all read must clear read_at, got %+v", n)
+	}
+	cleared := e.get("/inbox", alice).Body.String()
+	for _, unwanted := range []string{"is-unread", "Mark all read", "inbox-badge"} {
+		if strings.Contains(cleared, unwanted) {
+			t.Errorf("cleared inbox still contains %q", unwanted)
+		}
+	}
+
+	// A fresh trigger re-raises the entry and the badge.
+	e.reply(threadID, bob, "another ping")
+	if raised := e.get("/inbox", alice).Body.String(); !strings.Contains(raised, "inbox-badge") {
+		t.Errorf("new activity should restore the badge")
+	}
+}
+
+func TestInboxReadThroughOnThreadVisit(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	t1 := e.newThread(alice, "First", "opening")
+	t2 := e.newThread(alice, "Second", "opening")
+	e.reply(t1, bob, "reply one")
+	e.reply(t2, bob, "reply two")
+
+	// Opening t1 counts as dealing with its inbox entry only.
+	if page := e.get("/threads/"+strconv.FormatInt(t1, 10), alice); page.Code != http.StatusOK {
+		t.Fatalf("GET thread: expected 200, got %d", page.Code)
+	}
+	if n, _ := e.notif(alice.ID, t1); n.Unread {
+		t.Fatalf("opening the thread must clear its notification")
+	}
+	if n, _ := e.notif(alice.ID, t2); !n.Unread {
+		t.Fatalf("other threads must stay unread, got %+v", n)
+	}
+
+	html := e.get("/inbox", alice).Body.String()
+	if c := strings.Count(html, `class="board-row inbox-row is-unread"`); c != 1 {
+		t.Fatalf("expected exactly 1 unread row, got %d", c)
+	}
+	if !strings.Contains(html, `class="inbox-badge" aria-hidden="true">1<`) {
+		t.Errorf("badge should count only the remaining unread thread")
+	}
+}
+
+func TestInboxPagination(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	// 31 notified threads, seeded directly (the write path is covered above).
+	for i := 0; i < 31; i++ {
+		th, err := e.queries.CreateThread(e.ctx, database.CreateThreadParams{
+			UserID: bob.ID,
+			Title:  fmt.Sprintf("thread %02d", i),
+		})
+		if err != nil {
+			t.Fatalf("failed to create thread %d: %v", i, err)
+		}
+		p, err := e.queries.CreatePost(e.ctx, database.CreatePostParams{
+			ThreadID: th.ID,
+			UserID:   bob.ID,
+			Body:     "hello",
+		})
+		if err != nil {
+			t.Fatalf("failed to create post %d: %v", i, err)
+		}
+		if err := e.queries.UpsertNotification(e.ctx, database.UpsertNotificationParams{
+			UserID:   alice.ID,
+			ThreadID: th.ID,
+			PostID:   p.ID,
+			Reason:   "reply",
+		}); err != nil {
+			t.Fatalf("failed to seed notification %d: %v", i, err)
+		}
+	}
+
+	first := e.get("/inbox", alice).Body.String()
+	if c := strings.Count(first, `class="board-row inbox-row`); c != 30 {
+		t.Fatalf("page 1 should hold 30 rows, got %d", c)
+	}
+	// Match the pagination labels, not the bare words: the shared layout's
+	// lightbox controls also contain "Previous"/"Next" in their aria-labels.
+	if !strings.Contains(first, "Next &rarr;") || strings.Contains(first, "&larr; Prev") {
+		t.Errorf("page 1 should offer Next only")
+	}
+
+	second := e.get("/inbox?page=2", alice).Body.String()
+	if c := strings.Count(second, `class="board-row inbox-row`); c != 1 {
+		t.Fatalf("page 2 should hold 1 row, got %d", c)
+	}
+	if !strings.Contains(second, "&larr; Prev") || strings.Contains(second, "Next &rarr;") {
+		t.Errorf("page 2 should offer Prev only")
+	}
+
+	if beyond := e.get("/inbox?page=99", alice).Body.String(); !strings.Contains(beyond, "Nothing here yet") {
+		t.Errorf("page beyond the end should show the empty state")
+	}
+}
+
+func TestInboxExpiryAndCascade(t *testing.T) {
+	t.Run("expired threads are filtered and purged", func(t *testing.T) {
+		e := newInboxTestEnv(t)
+		alice := e.user("alice")
+		bob := e.user("bob")
+
+		rr := e.form("/threads/new", alice, map[string]string{
+			"title":      "ephemeral",
+			"body":       "opening",
+			"expiration": "24h",
+		})
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("create thread: expected 303, got %d", rr.Code)
+		}
+		threadID, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+		if err != nil {
+			t.Fatalf("bad redirect: %v", err)
+		}
+		e.reply(threadID, bob, "reply before expiry")
+
+		// Expire it without waiting for the clean-up worker.
+		if _, err := e.db.ExecContext(e.ctx,
+			`UPDATE threads SET expires_at = datetime('now', '-1 hour') WHERE id = ?`, threadID); err != nil {
+			t.Fatalf("failed to expire thread: %v", err)
+		}
+
+		// Listing and badge both filter in SQL: no dead links, no phantom count.
+		html := e.get("/inbox", alice).Body.String()
+		if strings.Contains(html, "is-unread") || strings.Contains(html, "inbox-badge") {
+			t.Errorf("expired thread must not appear in the inbox or the badge")
+		}
+		if !strings.Contains(html, "Nothing here yet") {
+			t.Errorf("inbox should show its empty state")
+		}
+
+		// The worker's purge cascades the notification row away.
+		w := worker.New(e.queries, t.TempDir(), time.Minute)
+		if err := w.CleanupOnce(e.ctx); err != nil {
+			t.Fatalf("cleanup failed: %v", err)
+		}
+		if n := e.notifCount(alice.ID); n != 0 {
+			t.Fatalf("purge should cascade notifications, got %d rows", n)
+		}
+	})
+
+	t.Run("deleting a user cascades their notifications", func(t *testing.T) {
+		e := newInboxTestEnv(t)
+		alice := e.user("alice")
+		bob := e.user("bob")
+
+		threadID := e.newThread(alice, "doomed author", "opening")
+		e.reply(threadID, bob, "reply")
+		if n := e.notifCount(alice.ID); n != 1 {
+			t.Fatalf("expected 1 notification, got %d", n)
+		}
+
+		if err := e.queries.DeleteUser(e.ctx, bob.ID); err != nil {
+			t.Fatalf("failed to delete user: %v", err)
+		}
+		if n := e.notifCount(alice.ID); n != 0 {
+			t.Fatalf("deleting the actor should cascade the entry, got %d", n)
+		}
+	})
+}
+
+func TestInboxMentionCap(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	const total = 25
+	names := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		name := fmt.Sprintf("user%02d", i)
+		e.user(name)
+		names = append(names, "@"+name)
+	}
+
+	threadID := e.newThread(alice, "many mentions", "opening")
+	e.reply(threadID, bob, strings.Join(names, " "))
+
+	var stored int
+	if err := e.db.QueryRowContext(e.ctx,
+		`SELECT COUNT(*) FROM notifications WHERE thread_id = ? AND reason = 'mention'`,
+		threadID).Scan(&stored); err != nil {
+		t.Fatalf("failed to count mention rows: %v", err)
+	}
+	if stored != 20 {
+		t.Fatalf("expected the mention cap to store 20 rows, got %d", stored)
+	}
+}
+
+func TestInboxLinkOnlySnippetFallback(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	threadID := e.newThread(alice, "links", "opening")
+	e.form(fmt.Sprintf("/threads/%d/posts", threadID), bob, map[string]string{
+		"url": "https://example.com/a-link-only-reply",
+	})
+
+	html := e.get("/inbox", alice).Body.String()
+	if !strings.Contains(html, "https://example.com/a-link-only-reply") {
+		t.Errorf("link-only replies should preview their URL in the inbox")
+	}
+}
+
+func TestInboxBadgeCapAndGuestBell(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	// Guests never see the bell.
+	guest := e.get("/login", nil)
+	if guest.Code != http.StatusOK {
+		t.Fatalf("GET /login: expected 200, got %d", guest.Code)
+	}
+	if strings.Contains(guest.Body.String(), "inbox-link") {
+		t.Errorf("guest pages must not render the inbox bell")
+	}
+
+	// The visual badge caps at 99+ while the accessible label keeps the real
+	// number. 100 notified threads, seeded directly.
+	for i := 0; i < 100; i++ {
+		th, err := e.queries.CreateThread(e.ctx, database.CreateThreadParams{
+			UserID: bob.ID,
+			Title:  fmt.Sprintf("cap thread %03d", i),
+		})
+		if err != nil {
+			t.Fatalf("failed to create thread %d: %v", i, err)
+		}
+		p, err := e.queries.CreatePost(e.ctx, database.CreatePostParams{
+			ThreadID: th.ID,
+			UserID:   bob.ID,
+			Body:     "ping",
+		})
+		if err != nil {
+			t.Fatalf("failed to create post %d: %v", i, err)
+		}
+		if err := e.queries.UpsertNotification(e.ctx, database.UpsertNotificationParams{
+			UserID:   alice.ID,
+			ThreadID: th.ID,
+			PostID:   p.ID,
+			Reason:   "reply",
+		}); err != nil {
+			t.Fatalf("failed to seed notification %d: %v", i, err)
+		}
+	}
+
+	html := e.get("/inbox", alice).Body.String()
+	if !strings.Contains(html, `class="inbox-badge" aria-hidden="true">99+<`) {
+		t.Errorf("badge should cap at 99+")
+	}
+	if !strings.Contains(html, "aria-label=\"Inbox, 100 unread\"") {
+		t.Errorf("accessible label should carry the real count")
+	}
+}
+
+func TestInlineEmojiInPostsAndBios(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	// 1. Upload a custom emoji through the real endpoint, which also refreshes
+	// the renderer's snapshot.
+	buf, contentType := emojiMultipart(t, "shipit", "shipit.png", realPNG(t, 32, 32))
+	uploadReq := httptest.NewRequest(http.MethodPost, "/emojis", buf)
+	uploadReq.Header.Set("Content-Type", contentType)
+	uploadReq.AddCookie(authCookieFor(t, e.queries, alice.ID))
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, uploadReq)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("emoji upload: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var emojiID int64
+	var storagePath string
+	if err := e.db.QueryRowContext(e.ctx,
+		`SELECT id, storage_path FROM emojis WHERE name = 'shipit'`).Scan(&emojiID, &storagePath); err != nil {
+		t.Fatalf("failed to load uploaded emoji: %v", err)
+	}
+	imgTag := `<img class="emoji-img emoji-inline" src="/uploads/` + storagePath + `" alt=":shipit:" loading="lazy">`
+
+	// 2. Thread body: unicode built-in, custom upload, unknown name, code span.
+	threadID := e.newThread(alice, "Emoji thread",
+		"unicode :joy: custom :shipit: unknown :nope: code `:joy:`")
+	threadPath := "/threads/" + strconv.FormatInt(threadID, 10)
+
+	html := e.get(threadPath, alice).Body.String()
+	for _, want := range []string{"🙂", imgTag, ":nope:", "<code>:joy:</code>"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+	if strings.Contains(html, `alt=":nope:"`) {
+		t.Errorf("unknown token must not become an image")
+	}
+
+	// 3. HTMX reply partial uses the same renderer.
+	var replyBuf bytes.Buffer
+	rw := multipart.NewWriter(&replyBuf)
+	if err := rw.WriteField("body", "reply with :shipit: and :joy:"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replyReq := httptest.NewRequest(http.MethodPost, threadPath+"/posts", &replyBuf)
+	replyReq.Header.Set("Content-Type", rw.FormDataContentType())
+	replyReq.Header.Set("HX-Request", "true")
+	replyReq.AddCookie(authCookieFor(t, e.queries, bob.ID))
+	rr = httptest.NewRecorder()
+	e.router.ServeHTTP(rr, replyReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HTMX reply: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	replyHTML := rr.Body.String()
+	for _, want := range []string{"🙂", imgTag} {
+		if !strings.Contains(replyHTML, want) {
+			t.Errorf("HTMX partial missing %q", want)
+		}
+	}
+
+	// 4. Bios share the pipeline.
+	e.form("/users/me/profile", alice, map[string]string{"bio": "about :joy: and :shipit:"})
+	card := e.get("/users/alice", alice).Body.String()
+	for _, want := range []string{"🙂", imgTag} {
+		if !strings.Contains(card, want) {
+			t.Errorf("user card bio missing %q", want)
+		}
+	}
+
+	// 5. Deleting the custom emoji downgrades every old use to literal text —
+	// on the thread page and in the bio — proving the cache was invalidated,
+	// not just that the parser skips unknown names.
+	if rr := e.form(fmt.Sprintf("/emojis/%d/delete", emojiID), alice, nil); rr.Code != http.StatusSeeOther {
+		t.Fatalf("emoji delete: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+	afterDelete := e.get(threadPath, alice).Body.String()
+	if !strings.Contains(afterDelete, ":shipit:") {
+		t.Errorf("deleted emoji token should render literally on the thread page")
+	}
+	if strings.Contains(afterDelete, storagePath) {
+		t.Errorf("deleted emoji image must disappear from the thread page")
+	}
+	afterBio := e.get("/users/alice", alice).Body.String()
+	if !strings.Contains(afterBio, ":shipit:") || strings.Contains(afterBio, storagePath) {
+		t.Errorf("deleted emoji should fall back to literal text in the bio")
+	}
+}
+
+// --- Liveness: inbox badge poll + thread new-replies pill -------------------
+
+func TestInboxBellPolling(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	// Guests: HX requests get the redirect header, plain requests a 303.
+	guestHX := httptest.NewRequest(http.MethodGet, "/inbox/count", nil)
+	guestHX.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, guestHX)
+	if rr.Code != http.StatusUnauthorized || rr.Header().Get("HX-Redirect") != "/login" {
+		t.Fatalf("guest HX poll = %d %q, want 401 with HX-Redirect", rr.Code, rr.Header().Get("HX-Redirect"))
+	}
+	if rr := e.get("/inbox/count", nil); rr.Code != http.StatusSeeOther {
+		t.Fatalf("guest plain poll = %d, want 303", rr.Code)
+	}
+
+	threadID := e.newThread(alice, "Bell poll", "opening")
+	e.reply(threadID, bob, "@alice ping")
+
+	poll := func() string {
+		e.t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/inbox/count", nil)
+		req.Header.Set("HX-Request", "true")
+		req.AddCookie(authCookieFor(t, e.queries, alice.ID))
+		rr := httptest.NewRecorder()
+		e.router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("inbox count poll: expected 200, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("poll fragments must not be cacheable, got Cache-Control %q", cc)
+		}
+		return rr.Body.String()
+	}
+
+	fragment := poll()
+	for _, want := range []string{
+		`class="navbar-item inbox-link"`,
+		`class="inbox-badge" aria-hidden="true">1<`,
+		// The swapped element must keep polling, so the attributes live on it.
+		`hx-get="/inbox/count" hx-trigger="every 60s [!document.hidden]"`,
+	} {
+		if !strings.Contains(fragment, want) {
+			t.Errorf("bell fragment missing %q", want)
+		}
+	}
+	if strings.Contains(fragment, "<html") {
+		t.Errorf("the poll endpoint must return a fragment, not a page")
+	}
+
+	// The full page ships the same polling attributes on the bell.
+	if page := e.get("/", alice).Body.String(); !strings.Contains(page, `hx-trigger="every 60s [!document.hidden]"`) {
+		t.Errorf("navbar bell is missing its poll trigger")
+	}
+
+	if err := e.queries.MarkAllNotificationsRead(e.ctx, alice.ID); err != nil {
+		t.Fatalf("failed to mark read: %v", err)
+	}
+	if cleared := poll(); strings.Contains(cleared, "inbox-badge") {
+		t.Errorf("cleared bell must not carry a badge: %s", cleared)
+	}
+}
+
+func TestThreadNewPostsPolling(t *testing.T) {
+	e := newInboxTestEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+
+	threadID := e.newThread(alice, "Poll thread", "opening post")
+	threadPath := "/threads/" + strconv.FormatInt(threadID, 10)
+
+	// Derive ids from the DB rather than hardcoding them: the assertions are
+	// about "newest rendered post", not about a particular sequence.
+	postIDs := func() []int64 {
+		e.t.Helper()
+		posts, err := e.queries.ListPostsByThread(e.ctx, threadID)
+		if err != nil {
+			e.t.Fatalf("failed to list posts: %v", err)
+		}
+		ids := make([]int64, 0, len(posts))
+		for _, p := range posts {
+			ids = append(ids, p.ID)
+		}
+		return ids
+	}
+	openingID := postIDs()[0]
+
+	page := e.get(threadPath, alice).Body.String()
+	for _, want := range []string{
+		`id="new-posts"`,
+		fmt.Sprintf(`hx-get="/threads/%d/updates?after=%d"`, threadID, openingID),
+		`every 20s [!document.hidden]`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+	if strings.Contains(page, "new reply") {
+		t.Errorf("a freshly loaded thread must not show a new-replies pill")
+	}
+
+	updates := func(viewer *database.User, after int64) string {
+		e.t.Helper()
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/threads/%d/updates?after=%d", threadID, after), nil)
+		req.Header.Set("HX-Request", "true")
+		req.AddCookie(authCookieFor(t, e.queries, viewer.ID))
+		rr := httptest.NewRecorder()
+		e.router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("updates: expected 200, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("poll fragments must not be cacheable, got Cache-Control %q", cc)
+		}
+		return rr.Body.String()
+	}
+
+	// Bob replies: Alice sees one new reply, anchored at it, and the container
+	// keeps polling.
+	bobPost := e.reply(threadID, bob, "first reply")
+	frag := updates(alice, openingID)
+	for _, want := range []string{
+		"1 new reply",
+		fmt.Sprintf(`href="/threads/%d?from=%d#post-%d"`, threadID, bobPost, bobPost),
+		`hx-trigger="every 20s [!document.hidden]"`,
+	} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("updates fragment missing %q", want)
+		}
+	}
+
+	// The author's own post never counts for them: Bob's "seen" is up to date.
+	if own := updates(bob, bobPost-1); strings.Contains(own, "new repl") {
+		t.Errorf("a viewer's own post must not be offered as a new reply: %s", own)
+	}
+
+	// The count is live, not a snapshot: a second reply raises it.
+	e.reply(threadID, bob, "second reply")
+	if two := updates(alice, openingID); !strings.Contains(two, "2 new replies") {
+		t.Errorf("expected 2 new replies, got %s", two)
+	}
+
+	// Reloading pins the poll past everything rendered, so the pill is gone.
+	all := postIDs()
+	newest := all[len(all)-1]
+	reloaded := e.get(threadPath, alice).Body.String()
+	if !strings.Contains(reloaded, fmt.Sprintf(`hx-get="/threads/%d/updates?after=%d"`, threadID, newest)) {
+		t.Errorf("reloaded thread should poll from the newest post (after=%d)", newest)
+	}
+	if strings.Contains(reloaded, "new repl") {
+		t.Errorf("reloaded thread must not show the pill")
+	}
+
+	// Expired and unknown threads stop polling quietly (200, no trigger).
+	if _, err := e.db.ExecContext(e.ctx,
+		`UPDATE threads SET expires_at = datetime('now','-1 hour') WHERE id = ?`, threadID); err != nil {
+		t.Fatalf("failed to expire thread: %v", err)
+	}
+	if stopped := updates(alice, openingID); strings.Contains(stopped, "hx-trigger") || strings.Contains(stopped, "new repl") {
+		t.Errorf("an expired thread must stop the poll: %s", stopped)
+	}
+	unknown := httptest.NewRequest(http.MethodGet, "/threads/9999/updates?after=0", nil)
+	unknown.Header.Set("HX-Request", "true")
+	unknown.AddCookie(authCookieFor(t, e.queries, alice.ID))
+	rr := httptest.NewRecorder()
+	e.router.ServeHTTP(rr, unknown)
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "hx-trigger") {
+		t.Errorf("an unknown thread must answer 200 with a non-polling container, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- Image thumbnails ------------------------------------------------------
+
+// opaquePNG encodes a genuinely opaque image so the thumbnail pipeline picks
+// JPEG (realPNG's zero-value pixels are fully transparent and select PNG).
+func opaquePNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 0xff
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// uploadThreadWithFiles creates a thread whose opening post carries the given
+// files and returns its id.
+func uploadThreadWithFiles(t *testing.T, router http.Handler, cookie *http.Cookie, files map[string][]byte) int64 {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("title", "Thumb thread"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteField("body", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteField("expiration", "never"); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range files {
+		fw, err := w.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("thread create: expected 303, got %d: %s", rr.Code, rr.Body.String())
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(rr.Header().Get("Location"), "/threads/"), 10, 64)
+	if err != nil {
+		t.Fatalf("bad redirect %q: %v", rr.Header().Get("Location"), err)
+	}
+	return id
+}
+
+func TestThumbnailServing(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, alice.ID)
+
+	uploadThreadWithFiles(t, router, cookie, map[string][]byte{"photo.png": opaquePNG(t, 1000, 500)})
+
+	var storagePath string
+	if err := db.QueryRowContext(ctx,
+		`SELECT storage_path FROM attachments ORDER BY id DESC LIMIT 1`).Scan(&storagePath); err != nil {
+		t.Fatalf("failed to load attachment: %v", err)
+	}
+	base := strings.TrimSuffix(storagePath, filepath.Ext(storagePath))
+
+	get := func(url string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// First request generates and caches a 320-wide JPEG.
+	rr := get("/thumbs/" + storagePath + "?w=320")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thumb: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "image/jpeg") {
+		t.Errorf("Content-Type = %q, want image/jpeg for an opaque source", ct)
+	}
+	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("Cache-Control = %q, want immutable", cc)
+	}
+	img, _, err := image.Decode(bytes.NewReader(rr.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("failed to decode thumbnail: %v", err)
+	}
+	if b := img.Bounds(); b.Dx() != 320 || b.Dy() != 160 {
+		t.Errorf("thumbnail size = %dx%d, want 320x160", b.Dx(), b.Dy())
+	}
+	cachePath := filepath.Join(uploadDir, "thumbs", base+".320.v1.jpg")
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("expected cached thumbnail at %s: %v", cachePath, err)
+	}
+
+	// Second request is a cache hit serving identical bytes.
+	first := rr.Body.Bytes()
+	rr = get("/thumbs/" + storagePath + "?w=320")
+	if rr.Code != http.StatusOK || !bytes.Equal(first, rr.Body.Bytes()) {
+		t.Errorf("second request should be a cache hit with identical bytes")
+	}
+
+	// Default width is 640.
+	rr = get("/thumbs/" + storagePath)
+	img, _, err = image.Decode(bytes.NewReader(rr.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("failed to decode default-width thumbnail: %v", err)
+	}
+	if b := img.Bounds(); b.Dx() != 640 {
+		t.Errorf("default width = %d, want 640", b.Dx())
+	}
+
+	// Whitelist and path-shape errors.
+	if rr := get("/thumbs/" + storagePath + "?w=999"); rr.Code != http.StatusNotFound {
+		t.Errorf("unknown width = %d, want 404", rr.Code)
+	}
+	if rr := get("/thumbs/" + storagePath + "?w=abc"); rr.Code != http.StatusNotFound {
+		t.Errorf("non-numeric width = %d, want 404", rr.Code)
+	}
+	if rr := get("/thumbs/..%2F..%2Fetc%2Fpasswd?w=320"); rr.Code == http.StatusOK {
+		t.Errorf("traversal attempt must not succeed")
+	}
+	if rr := get("/thumbs/does-not-exist.png?w=320"); rr.Code != http.StatusNotFound {
+		t.Errorf("missing file = %d, want 404", rr.Code)
+	}
+
+	// Non-image attachments have no thumbnail view.
+	uploadThreadWithFiles(t, router, cookie, map[string][]byte{"doc.pdf": []byte("%PDF-1.4\nfake")})
+	var pdfPath string
+	if err := db.QueryRowContext(ctx,
+		`SELECT storage_path FROM attachments WHERE mime_type = 'application/pdf' ORDER BY id DESC LIMIT 1`).Scan(&pdfPath); err != nil {
+		t.Fatalf("failed to load pdf attachment: %v", err)
+	}
+	if rr := get("/thumbs/" + pdfPath + "?w=320"); rr.Code != http.StatusNotFound {
+		t.Errorf("pdf thumb = %d, want 404", rr.Code)
+	}
+
+	// Guests are redirected by the global middleware.
+	req := httptest.NewRequest(http.MethodGet, "/thumbs/"+storagePath+"?w=320", nil)
+	guest := httptest.NewRecorder()
+	router.ServeHTTP(guest, req)
+	if guest.Code != http.StatusSeeOther {
+		t.Errorf("guest thumb = %d, want 303", guest.Code)
+	}
+}
+
+func TestThumbnailFallbacks(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, alice.ID)
+
+	fakePNG := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
+	uploadThreadWithFiles(t, router, cookie, map[string][]byte{
+		"small.png":  opaquePNG(t, 200, 100), // narrower than any width
+		"broken.png": fakePNG,                // sniffs as PNG, cannot decode
+		"anim.gif":   realGIF(t, 64, 64),     // never thumbnailed
+	})
+
+	get := func(name string) *httptest.ResponseRecorder {
+		var path string
+		if err := db.QueryRowContext(ctx,
+			`SELECT storage_path FROM attachments WHERE filename = ? ORDER BY id DESC LIMIT 1`, name).Scan(&path); err != nil {
+			t.Fatalf("failed to find attachment %q: %v", name, err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/thumbs/"+path+"?w=640", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Every fallback serves the original bytes with the original type and the
+	// original (short) cache policy, not a broken image.
+	checks := []struct {
+		name string
+		ct   string
+	}{
+		{"small.png", "image/png"},
+		{"broken.png", "image/png"},
+		{"anim.gif", "image/gif"},
+	}
+	for _, c := range checks {
+		rr := get(c.name)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s: expected 200 fallback, got %d", c.name, rr.Code)
+			continue
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, c.ct) {
+			t.Errorf("%s: Content-Type = %q, want %s", c.name, ct, c.ct)
+		}
+		if cc := rr.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+			t.Errorf("%s: fallback responses must not claim immutability (%q)", c.name, cc)
+		}
+	}
+
+	// No cache entries are written for fallbacks.
+	matches, _ := filepath.Glob(filepath.Join(uploadDir, "thumbs", "*"))
+	if len(matches) != 0 {
+		t.Errorf("fallbacks must not create cache files, got %v", matches)
+	}
+}
+
+func TestThumbnailTemplates(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, alice.ID)
+
+	threadID := uploadThreadWithFiles(t, router, cookie, map[string][]byte{"photo.png": opaquePNG(t, 800, 400)})
+	var storagePath string
+	if err := db.QueryRowContext(ctx,
+		`SELECT storage_path FROM attachments ORDER BY id DESC LIMIT 1`).Scan(&storagePath); err != nil {
+		t.Fatalf("failed to load attachment: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(threadID, 10), nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	html := rr.Body.String()
+
+	wants := []string{
+		`src="/thumbs/` + storagePath + `?w=640"`,
+		`srcset="/thumbs/` + storagePath + `?w=320 320w, /thumbs/` + storagePath + `?w=640 640w, /thumbs/` + storagePath + `?w=1280 1280w"`,
+		`sizes="(max-width: 768px) 100vw, 25vw"`,
+		// The lightbox still opens the full-size original.
+		`href="/uploads/` + storagePath + `" class="lightbox-link"`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(html, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+
+	// The front-page strip uses the small variant (tiles are ~144px).
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if !strings.Contains(rr.Body.String(), `src="/thumbs/`+storagePath+`?w=320"`) {
+		t.Errorf("front-page strip should request the 320px variant")
+	}
+}
+
+func TestWorkerRemovesThumbnails(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, alice.ID)
+
+	// TTL thread so the worker's expiry predicate applies.
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("title", "expiring thumb")
+	_ = w.WriteField("body", "seed")
+	_ = w.WriteField("expiration", "24h")
+	fw, _ := w.CreateFormFile("files", "photo.png")
+	_, _ = fw.Write(opaquePNG(t, 900, 450))
+	_ = w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/threads/new", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("create: got %d", rr.Code)
+	}
+
+	var storagePath string
+	if err := db.QueryRowContext(ctx,
+		`SELECT storage_path FROM attachments ORDER BY id DESC LIMIT 1`).Scan(&storagePath); err != nil {
+		t.Fatalf("failed to load attachment: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/thumbs/"+storagePath+"?w=320", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thumb: got %d", rr.Code)
+	}
+	thumbsDir := filepath.Join(uploadDir, "thumbs")
+	if matches, _ := filepath.Glob(filepath.Join(thumbsDir, "*")); len(matches) == 0 {
+		t.Fatalf("expected a cached thumbnail before the purge")
+	}
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE threads SET expires_at = datetime('now','-1 hour') WHERE id = (SELECT thread_id FROM posts WHERE id = (SELECT post_id FROM attachments WHERE storage_path = ?))`,
+		storagePath); err != nil {
+		t.Fatalf("failed to expire thread: %v", err)
+	}
+	worker.New(queries, uploadDir, time.Minute).CleanupOnce(ctx)
+
+	if matches, _ := filepath.Glob(filepath.Join(thumbsDir, "*")); len(matches) != 0 {
+		t.Errorf("purge left thumbnails behind: %v", matches)
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, storagePath)); !os.IsNotExist(err) {
+		t.Errorf("purge should delete the original too")
+	}
+}
+
+func TestLightboxNavigationMarkup(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	alice, err := queries.CreateUser(ctx, database.CreateUserParams{Username: "alice", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, alice.ID)
+
+	threadID := uploadThreadWithFiles(t, router, cookie, map[string][]byte{
+		"one.png": opaquePNG(t, 800, 400),
+		"two.png": opaquePNG(t, 400, 800),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/"+strconv.FormatInt(threadID, 10), nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thread: expected 200, got %d", rr.Code)
+	}
+	html := rr.Body.String()
+
+	// The dialog's controls exist and are labelled; the group attribute on the
+	// posts container is what scopes navigation to one thread's images.
+	wants := []string{
+		`id="lightbox"`,
+		`aria-label="Image viewer"`,
+		`class="lightbox-nav lightbox-prev" aria-label="Previous image" hidden`,
+		`class="lightbox-nav lightbox-next" aria-label="Next image" hidden`,
+		`class="lightbox-img" alt="" draggable="false"`,
+		`class="lightbox-counter" aria-live="polite"`,
+		`id="posts-container" class="posts-container" data-thread-id="` + strconv.FormatInt(threadID, 10) + `" data-lightbox-group`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(html, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+
+	// Every image is a lightbox link to the original (the JS collects these in
+	// document order), while the card shows a thumbnail.
+	if c := strings.Count(html, `class="lightbox-link"`); c != 2 {
+		t.Errorf("expected 2 lightbox links, got %d", c)
+	}
+	if !strings.Contains(html, `href="/uploads/`) || !strings.Contains(html, `srcset="/thumbs/`) {
+		t.Errorf("lightbox links must point at originals while the card uses thumbnails")
+	}
+
+	// The dialog lives in the shared layout, so it is present on other pages
+	// too; navigation is simply inactive outside a group.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	front := rr.Body.String()
+	if !strings.Contains(front, `id="lightbox"`) {
+		t.Errorf("front page should still carry the shared dialog")
+	}
+	if strings.Contains(front, "data-lightbox-group") {
+		t.Errorf("the front page is not a lightbox group; its strip links to the thread")
 	}
 }

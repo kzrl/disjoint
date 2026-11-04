@@ -79,6 +79,28 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// MaxRequestBodyBytes bounds any single HTTP request body. It is a coarse
+// safety net (the per-file and per-post upload limits are enforced by the
+// upload handler): without it, a client could stream unbounded data through
+// multipart parsing, which spills to temporary files on disk.
+const MaxRequestBodyBytes int64 = 128 << 20
+
+// MaxBody rejects requests whose declared Content-Length exceeds the global
+// request cap and wraps the body so a chunked/lying client is stopped at the
+// same limit. Handlers still see read errors and report them as bad input.
+func MaxBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > MaxRequestBodyBytes {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RateLimiter is a fixed-window per-IP request limiter, intended for
 // authentication endpoints (brute-force bounding). It is in-memory, which
 // is correct for a single-process deployment; with multiple instances it
@@ -167,8 +189,10 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		// Static assets are always allowed
-		if strings.HasPrefix(path, "/static/") || path == "/favicon.ico" {
+		// Static assets are always allowed. /healthz must also bypass auth
+		// and the first-run redirect so container probes and external
+		// monitors can check liveness before an admin account exists.
+		if strings.HasPrefix(path, "/static/") || path == "/favicon.ico" || path == "/healthz" {
 			next.ServeHTTP(w, r)
 			return
 		}

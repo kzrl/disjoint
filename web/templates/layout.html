@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{if .Theme}} data-theme="{{.Theme}}"{{end}}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,6 +14,13 @@
   <nav class="navbar has-shadow" role="navigation" aria-label="main navigation">
     <div class="navbar-brand">
       <a class="navbar-item logo" href="/">disjoint<span>_</span></a>
+      <div class="navbar-item">
+        <button type="button" class="theme-toggle" id="theme-toggle"
+                aria-label="Toggle light and dark theme" title="Toggle light and dark theme">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
 
       <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navMenu">
         <span aria-hidden="true"></span>
@@ -39,6 +46,7 @@
 
       <div class="navbar-end">
         {{if .CurrentUser}}
+          {{template "inbox_bell" .}}
           <div class="navbar-item">
             <span class="tag is-medium">
               <svg class="mr-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
@@ -58,13 +66,6 @@
   </nav>
 
   <main class="container">
-    {{if .FlashError}}
-      <div class="notification is-danger">{{.FlashError}}</div>
-    {{end}}
-    {{if .FlashSuccess}}
-      <div class="notification is-success">{{.FlashSuccess}}</div>
-    {{end}}
-
     {{template "content" .}}
   </main>
 
@@ -77,6 +78,36 @@
       {{end}}
     </div>
   </footer>
+
+  <!-- Flash messages surface as auto-dismissing toasts (disjoint.js) instead
+       of pushing the page content down after a redirect. -->
+  <div class="toast-stack" aria-live="polite" aria-atomic="true">
+    {{if .FlashError}}
+      <div class="toast is-danger" role="alert">
+        <span class="toast-text">{{.FlashError}}</span>
+        <button type="button" class="toast-close" aria-label="Dismiss">&times;</button>
+      </div>
+    {{end}}
+    {{if .FlashSuccess}}
+      <div class="toast is-success" role="status">
+        <span class="toast-text">{{.FlashSuccess}}</span>
+        <button type="button" class="toast-close" aria-label="Dismiss">&times;</button>
+      </div>
+    {{end}}
+  </div>
+
+  <!-- Full-size image viewer. Clicking an attachment thumbnail opens it here
+       instead of navigating away (see disjoint.js). -->
+  <dialog id="lightbox" class="lightbox" aria-label="Image viewer">
+    <button type="button" class="lightbox-close" aria-label="Close viewer">&times;</button>
+    <button type="button" class="lightbox-nav lightbox-prev" aria-label="Previous image" hidden>&lsaquo;</button>
+    <img class="lightbox-img" alt="" draggable="false">
+    <button type="button" class="lightbox-nav lightbox-next" aria-label="Next image" hidden>&rsaquo;</button>
+    <div class="lightbox-meta" hidden>
+      <span class="lightbox-counter" aria-live="polite"></span>
+      <span class="lightbox-name"></span>
+    </div>
+  </dialog>
 
   <script>
     // Bulma ships without JS. This is the vanilla toggle from the navbar docs

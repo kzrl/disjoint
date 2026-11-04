@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"strings"
 
 	"disjoint/internal/database"
+	"disjoint/internal/markdown"
 	"disjoint/internal/middleware"
 
 	"github.com/google/uuid"
@@ -64,6 +66,28 @@ func (app *App) EmojiPage(w http.ResponseWriter, r *http.Request) {
 	app.render(w, r, "emojis.html", map[string]any{
 		"Emojis": emojis,
 	}, "Emoji")
+}
+
+// refreshEmojiCache publishes the current emoji set to the markdown renderer so
+// :name: tokens in post bodies resolve immediately after an upload or delete.
+// Best-effort: a failed load leaves the previous snapshot in place (the next
+// write or process start heals it), and it must never fail the emoji write
+// that triggered it.
+func (app *App) refreshEmojiCache(ctx context.Context) {
+	rows, err := app.queries.ListAllEmojis(ctx)
+	if err != nil {
+		return
+	}
+	out := make([]markdown.Emoji, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, markdown.Emoji{
+			Name:        r.Name,
+			Glyph:       r.Glyph,
+			StoragePath: r.StoragePath,
+			Custom:      r.Source == "custom",
+		})
+	}
+	markdown.SetEmojis(out)
 }
 
 // CreateEmojiSubmit handles uploading a new custom emoji.
@@ -125,6 +149,8 @@ func (app *App) CreateEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	app.refreshEmojiCache(ctx)
+
 	setFlash(w, "flash_success", fmt.Sprintf("Emoji :%s: added.", created.Name))
 	http.Redirect(w, r, "/emojis", http.StatusSeeOther)
 }
@@ -175,6 +201,8 @@ func (app *App) DeleteEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		fail("Failed to delete emoji.")
 		return
 	}
+	app.refreshEmojiCache(ctx)
+
 	setFlash(w, "flash_success", fmt.Sprintf("Emoji :%s: deleted.", emoji.Name))
 	http.Redirect(w, r, "/emojis", http.StatusSeeOther)
 }

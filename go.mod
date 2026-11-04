@@ -7,6 +7,7 @@ require (
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.41.0
 	modernc.org/sqlite v1.60.1
 )
 

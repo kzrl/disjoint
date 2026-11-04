@@ -6,7 +6,7 @@ services:
     container_name: disjoint
     restart: unless-stopped
     ports:
-      - "8089:8080"
+      - "8080:8080"
     environment:
       - PORT=8080
       - DATABASE_PATH=/data/disjoint.db

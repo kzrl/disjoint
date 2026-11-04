@@ -342,3 +342,236 @@ Plan: [tasks/plan-reactions.md](plan-reactions.md)
   - `handlers_test.go` `TestPostURLField`: link-only thread, link-only reply, body+link, rejected `javascript:`/`ftp:`/no-scheme (thread → flash redirect, reply → 400, no rows created), escaped `&amp;` in href, verbatim round trip — all pass; `-race` suite green
   - Live smoke: link-only thread renders the card on a fresh instance; `javascript:` rejected; existing dev DB migrates 00012 cleanly
   - README + specs/disjoint.md updated
+
+---
+
+# Task List: Mentions & Replies Inbox
+
+Plan: [tasks/plan-inbox.md](plan-inbox.md) — DONE (all v1 tasks; stretch task 8 open)
+
+Model: one inbox row per (recipient, thread), not per event. Notified users are
+derived from `markdown.Mentions` (the same goldmark AST the renderer uses), so
+"notified" == "rendered pill" by construction. Explicit read: opening the
+thread or pressing "Mark all read"; the inbox never clears itself. No
+email/push.
+
+- [x] Task 1: Migration `00015_notifications.sql` + schema snapshot + queries + sqlc  (DONE)
+  - `notifications(user_id, thread_id, post_id, reason, last_event_at, read_at)`, PK `(user_id, thread_id)`, `CHECK reason IN ('mention','reply')`, all FKs `ON DELETE CASCADE`; schema snapshot + `sqlc generate`
+  - Indexes: `idx_notifications_inbox (user_id, last_event_at DESC)`, partial `idx_notifications_unread (user_id) WHERE read_at IS NULL`
+  - Queries: `UpsertNotification` (bump + `CASE` reason upgrade + `read_at = NULL`), `ListInbox` (expiry-filtered), `CountUnreadNotifications` (joins threads, expiry-filtered), `MarkAllNotificationsRead`, `MarkThreadNotificationRead`, `ListThreadRecipients`, `ListUserIDsByUsernames` (`sqlc.slice`)
+  - Verified: fresh DB → goose 15; copy of dev `disjoint.db` (v14) → 15; `goose down` → 14 (table dropped) → up → 15; `PRAGMA foreign_key_check` clean
+
+- [x] Task 2: `markdown.Mentions(source) []string`  (DONE)
+  - AST walk for `KindMention`, first-appearance order, deduped
+  - `TestMentionsMatchRenderedPills` pins the invariant against the `data-mention` attributes in `Render(body)` for 16 bodies (multi, dup, code span, fence, email, link label, emphasis, 2/33-char, table, blockquote); `TestMentionsOrderAndDedupe` covers the table explicitly
+
+- [x] Task 3: Notifier + write path (`internal/handlers/notify.go`)  (DONE)
+  - `notifyPostRecipients(ctx, qtx, …)`: mentions first (`reason=mention`), then `ListThreadRecipients` (`reason=reply`); actor excluded; `maxMentionNotifications = 20` cap applied before the IN query; empty name list skips the query (empty `IN ()` is a syntax error); recipients sorted for deterministic writes
+  - Called inside the post tx in `CreatePostSubmit` and `CreateThreadSubmit` (no special case for new threads)
+  - **Side fix:** `CreateThreadSubmit` declared `post, err :=` *inside* the `if err == nil` block, shadowing the outer `err` — a failed opening post or attachment would have committed a title-only thread. Now `var post database.Post` + `=`, so all three inserts share one error path
+  - Tests: `TestInboxRecipientsAndReasonUpgrade` (actor excluded, participants, one row per thread, bump, sticky reason, reply→mention upgrade, re-raise), `TestInboxMentionExtraction` (self/unknown/email/code span), `TestInboxEditsDoNotNotify`, `TestInboxMentionCap` (25 mentions → 20 rows)
+
+- [x] Task 4: `GET /inbox` + `POST /inbox/read` — handlers, routes, `inbox.html`  (DONE)
+  - `InboxPage`: auth gate, `?page=` (30/page), `ListInbox`, snippet (URL fallback for link-only posts), empty state, pagination; **marks nothing read**
+  - `MarkInboxReadSubmit`: `MarkAllNotificationsRead` + flash "Inbox cleared." + 303 `/inbox`; error path flashes and redirects without a success message
+  - Header button rendered only when `.UnreadNotifications` > 0
+  - `plainSnippet(string)` extracted from `commentSnippet`; exposed as the `snippet` template func
+  - Reuses `.board-row` / `.unread-dot`; `<time>` with `isoTime`/`formatTime`/`formatRelative`
+  - Tests: `TestInboxPageBadgeAndMarkAllRead` (guest GET+POST redirect, row content incl. `#post-` anchor, reload keeps highlight, mark-all clears + flash, re-raise), `TestInboxPagination` (30/1/empty at page 99), `TestInboxLinkOnlySnippetFallback`
+
+- [x] Task 5: Navbar badge  (DONE)
+  - `render()` injects `UnreadNotifications` via `CountUnreadNotifications`; omitted on error so chrome can never break a page
+  - Bell in `navbar-end` (signed-in only), count in `aria-label`, visual pill `aria-hidden`, `99+` cap
+  - CSS: `.inbox-link`, `.inbox-badge`, `.inbox-mark-all`, `.inbox-actor`, `.inbox-row(.is-unread)`, `.inbox-verb`, `.inbox-snippet`; `make css` regenerated
+  - `TestInboxBadgeCapAndGuestBell`: guest pages carry no bell, 100 unread renders `99+` while `aria-label` keeps "100 unread"; badge presence/absence after mark-all and after a re-raise covered in the page test
+
+- [x] Task 6: Thread read-through  (DONE)
+  - `MarkThreadNotificationRead` beside `MarkThreadRead` in `ThreadPage` (best-effort)
+  - `TestInboxReadThroughOnThreadVisit`: opening one thread clears only its entry; badge shows the remaining 1
+
+- [x] Task 7: Docs + end-to-end smoke  (DONE)
+  - `specs/disjoint.md` §D: new **Mentions & Replies Inbox** bullet (row model, recipients, extraction invariant, explicit read + read-through + mark-all, badge/expiry filter, cascades, no notify on edits); `README.md` feature bullet
+  - Live smoke on a fresh temp instance (v15): `/setup` → invite → register bob → admin thread → bob replies `@admin` → admin inbox shows badge `1`, `is-unread`, "mentioned you in", "Mark all read" → reload unchanged → mark-all clears all three → new reply re-raises → opening the thread clears `read_at`; badge CSS served
+  - `go test -race -count=1 ./...` green; `gofmt -s -l` + `go vet` clean
+
+- [x] Task 8 (was the stretch item): badge liveness — implemented as part of the
+      liveness pass below (`GET /inbox/count` + 60s poll, paused when hidden)
+
+---
+
+# Task List: Inline Emoji in Post Bodies
+
+Plan: [tasks/plan-inline-emoji.md](plan-inline-emoji.md) — DONE
+
+Rendering-only: bodies keep `:name:` verbatim. The parser resolves names
+against a process-wide emoji snapshot and returns `nil` for unknown ones, so
+literal fallback (typos, deleted emoji, code spans) is free. No migration, no
+route, no per-render query.
+
+- [x] Task 1: Cache + token grammar + renderer (`internal/markdown/emoji.go`)  (DONE)
+  - `Emoji{Name, Glyph, StoragePath, Custom}`, `SetEmojis([]Emoji)` behind `atomic.Pointer[map[string]Emoji]`, `lookupEmoji`
+  - `emojiParser`: trigger `:`, `pc.IsInLinkLabel()` guard, `isWordRune(PrecendingCharacter())` left boundary, `[a-z0-9_]{2,64}` + required closing colon, unknown → `nil` (token never consumed)
+  - `emojiRenderer`: glyph for unicode; `<img class="emoji-img emoji-inline" src="/uploads/…" alt=":name:" loading="lazy">` for custom with hand-rolled `util.EscapeHTML` on the DB-sourced path and the name
+  - `emojiExt` registered in `md` beside `&mentionExt{}`
+  - `emoji_test.go`: 19-case render table (glyph, image, adjacency, emphasis, blockquote/heading/table, unknown, 1-char, 65-char, `::`, `:Joy:`, missing close, glued word, `10:30:00`, URL port, code span, fence, link label), escaping test (`<script>` in storage path), empty-cache literal test, `Mentions()` unaffected with both extensions loaded
+  - `util.EscapeHTML` emits `&quot;` (not `&#34;`) — assertion corrected against the real output
+
+- [x] Task 2: Refresh wiring  (DONE)
+  - `app.refreshEmojiCache(ctx)` in `emojis.go`: `ListAllEmojis` → `markdown.SetEmojis`, best-effort
+  - Called from `NewApp` (after template parsing) and the success paths of `CreateEmojiSubmit` / `DeleteEmojiSubmit`
+  - Live: seeded `:joy:` renders on the dev-style DB; an upload is usable immediately, no restart
+
+- [x] Task 3: Handler + template integration tests  (DONE)
+  - `TestInlineEmojiInPostsAndBios`: real `POST /emojis` upload → thread body renders `🙂` + the exact `<img … alt=":shipit:">`; `:nope:` literal (no img); code span preserved; HTMX reply partial renders both; bio on the user card renders both; delete → thread page and bio fall back to literal `:shipit:` with the storage path gone everywhere (cache invalidation, not just parser skip)
+
+- [x] Task 4: Docs + smoke  (DONE)
+  - `specs/disjoint.md` §D **Inline Emoji** bullet; README feature bullet
+  - Live smoke on a fresh temp instance: setup → upload `shipit` PNG → thread `glyph :joy: custom :shipit: unknown :nope: code \`:joy:\`` → glyph + img + literal + code observed → delete emoji → 0 img tags, `:shipit:` literal, storage path absent → bio `:joy:` renders; no errors in the app log
+
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt -s -l` / `go vet` clean
+  - [x] No CSS change needed (`.emoji-img` sizing from the reaction chips is correct inline)
+  - [ ] Review with human
+
+---
+
+# Task List: Liveness Pass (badge polling + thread new-replies pill)
+
+No new dependency, no websockets: two small polling endpoints on the existing
+HTMX setup. Everything returns 200 with the element it replaces, so a swap can
+never delete the poller.
+
+- [x] Task 1: Inbox badge poll  (DONE)
+  - Bell extracted to `web/templates/inbox_bell.html` (`{{define "inbox_bell"}}`), parsed into every page set and into its own set for the endpoint; `layout.html` includes it, so the page and the poll render the same markup
+  - The anchor itself carries `hx-get="/inbox/count" hx-trigger="every 60s [!document.hidden]" hx-swap="outerHTML"` — the endpoint returns the whole anchor, so the trigger survives each swap (a child-only swap would kill polling)
+  - `GET /inbox/count` → `InboxCount`: auth gate (HX 401 + `HX-Redirect`, plain 303), `CountUnreadNotifications`, renders the fragment
+  - Visibility filter verified against the vendored htmx 2.0.4: the `every` trigger spec parses an `eventFilter` and the poll timer re-evaluates it each tick, so hidden tabs skip the request and visible tabs resume
+  - Tests: guest 401/303; fragment has the anchor + badge + poll attrs and is not a page; cleared inbox drops the badge; full page ships the trigger
+
+- [x] Task 2: Thread "N new replies" pill  (DONE)
+  - `NewPostsAfter` query `(thread_id, after, viewer_id)` → count + `first_new_id`, excluding the viewer's own posts (their reply is already in their DOM)
+  - `NewPostsView{Count, UpdatesURL, ReloadURL, Poll}` + `newPostsView`; `ThreadPage` passes the newest rendered post id
+  - `web/templates/new_posts.html` container polls `GET /threads/{id}/updates?after=N` every 20s (hidden-tab filter, `outerHTML`); the pill is a **reload link** `/threads/{id}?from={first}#post-{first}` (`?from=` only forces the navigation; a fragment-only change would not reload)
+  - Why reload instead of an HTMX append: the viewer's own HTMX replies can interleave with others' posts, so appending only the unseen ones would break chronological order; a reload also refreshes the read/notification markers
+  - `ThreadUpdates` always answers 200 with the container; missing/expired thread → non-polling container (stops the loop quietly, since a 4xx would not be swapped and an empty body would delete the poller)
+  - CSS: `.new-posts.has-pill` (only takes space with a pill) + `.new-posts-pill` shadow; `make css`
+  - Tests: page container `after={opening}`; one/two replies raise the count; own posts never count; reload pins `after` to the newest and drops the pill; expired and unknown threads return non-polling containers
+
+- [x] Task 3: Docs + smoke  (DONE)
+  - `specs/disjoint.md` §D **Liveness (polling, no SSE)** bullet; README **Live Updates** bullet
+  - Live smoke on a fresh instance: admin thread → bob `@admin` reply → thread page container `after=1` → `updates?after=1` returns "1 new reply" linking `?from=2#post-2` while still polling → bob's own poll shows no pill → `inbox/count` returns the badge → opening the thread clears the mention (read-through) → new mention re-raises the badge → mark-all zeroes it; polling attrs and CSS served
+
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt -s -l` / `go vet` clean
+  - [ ] Review with human
+
+---
+
+# Task List: Image Wall (`/gallery`)
+
+Plan: [tasks/plan-gallery.md](plan-gallery.md)
+
+Read-only view over existing data: every image attachment on a live thread
+(opening posts **and** replies), newest first, CSS-columns masonry over natural
+aspect ratios, existing lightbox on click, caption links to the post. No
+migration, no schema change, no JS, no new dependency.
+
+- [ ] Task 1: Query + handler + route + template + navbar + CSS
+  - `ListGalleryImages` (image MIME allowlist, `expires_at` filter, `ORDER BY a.id DESC`, LIMIT/OFFSET), `make generate`
+  - `internal/handlers/gallery.go`: `GalleryImage` + `GalleryPage` (48/page, `?page=`, `HasNext` from a full page, no auth code — middleware gates it)
+  - `GET /gallery`, `gallery.html` registered in `pages`, navbar "Gallery" beside "Emoji"
+  - CSS: `.gallery-grid` (`columns: 4 15rem` + `break-inside: avoid`), `.gallery-tile`, `.gallery-caption`; `make css`
+  - Manual: wall renders on a seeded DB; lightbox + caption links work; pagination
+
+- [ ] Task 2: Handler tests
+  - guest 303 `/login`; empty DB → empty state
+  - opening-post **and reply** images render; PDF/video excluded
+  - expired thread's images absent; worker purge removes them (cascade)
+  - newest-first ordering; pagination 48/1/empty-at-99
+  - tile contract: `href="/uploads/{path}"` + `lightbox-link`, `alt` = filename, caption `href="/threads/{tid}#post-{pid}"` + thread title
+
+- [ ] Task 3: Docs + smoke
+  - README feature bullet; `specs/disjoint.md` §E **Gallery** note (all live images incl. replies, 48/page, masonry, lightbox, expiry cascade, no thumbnails yet)
+  - Live smoke: thread with two images and one PDF → wall shows 2, not the PDF → caption jumps to the reply → expire the thread → wall empty
+
+- [ ] Checkpoint: Complete
+  - [ ] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
+  - [ ] No migration, no new JS
+  - [ ] Review with human
+
+---
+
+# Task List: Image Thumbnails
+
+Plan: [tasks/plan-thumbnails.md](plan-thumbnails.md) — DONE
+
+Serve `/thumbs/{storage_path}?w=320|640|1280` from a lazily populated on-disk
+cache. No migration, no upload-path change, no background job, no external
+image tooling; full size stays available through the lightbox.
+
+- [x] Task 1: `internal/thumbs` package (decode → orient → scale → encode)  (DONE)
+  - `Ensure(uploadDir, storagePath, width) (path, derivative)`, `Remove`, `AllowedWidth`, `IsImage`, `Version = "v1"`, `DefaultWidth = 640`
+  - bounds: `MaxSourcePixels = 40_000_000` checked with `image.DecodeConfig` (header only), semaphore `maxConcurrent = 2` held across decode→encode; atomic `CreateTemp` + `Rename`; cache name `<uuid>.<width>.<version>.<ext>`
+  - encoder chosen by alpha scan (JPEG q82 / PNG); no upscale (visual width ≤ requested → original); GIF excluded; visual width accounts for EXIF 5–8 swapping the axes
+  - `golang.org/x/image@v0.41.0` (`draw` + `_ webp` decode); `CGO_ENABLED=0` still builds
+  - tests: 1000×500 → 320×160; 200px source at w=640 → original with no `thumbs/` dir; GIF + PDF → original; opaque → `.jpg`, transparent → `.png`; corrupt and missing → original; a real 100000×100000 IHDR (CRC-valid, `DecodeConfig`-verified) rejected without allocating; 4 concurrent `Ensure` calls → 1 cache file, no temp files; `Remove` clears every width
+
+- [x] Task 2: EXIF orientation  (DONE)
+  - `readJPEGOrientation` (SOI → segment walk with fill-byte handling, APP1/`Exif\0\0`, TIFF `II`/`MM`, IFD0 tag `0x0112`, every offset bounds-checked) and `applyOrientation` (all 8 cases, applied to the *scaled* image so the pixel loop is ~300k pixels, not 12M)
+  - tests: TIFF parser table (both byte orders, missing tag, bad magic/order, truncated, OOB IFD, out-of-range value); JPEG walk table (APP0 skipped, no EXIF, non-JPEG, truncated, fill bytes); 3×2 pixel-matrix assertion for all 8 orientations; alpha preserved through the transform; 5–8 swap dimensions
+
+- [x] Task 3: Handler + route + templates  (DONE)
+  - `ServeThumb`: `filepath.Base` + identity check, image-extension allowlist, width allowlist (default 640, unknown → 404), `immutable` on derivatives / `max-age=86400` on fallbacks, `http.ServeFile`
+  - `GET /thumbs/{filename}` beside `/uploads/`
+  - post card: `src` 640 + `srcset` 320/640/1280 + `sizes` + `decoding="async"`; front-page strip `?w=320`; lightbox `href` still `/uploads/…`
+
+- [x] Task 4: Worker cleanup + handler tests  (DONE)
+  - `thumbs.Remove(w.uploadDir, att.StoragePath)` right after the original is deleted
+  - tests: 200 + `image/jpeg` + 320×160 + cache file created; second request byte-identical; default width 640; `w=999` / `w=abc` / missing file / PDF → 404; traversal does not succeed; guest 303; fallbacks (`small.png`, fake PNG, GIF) serve original bytes with the original type and a non-immutable policy and write no cache file; worker purge removes the cached width and the original
+
+- [x] Task 5: Docs + smoke  (DONE)
+  - README image bullet; `specs/disjoint.md` §E **Thumbnails** paragraph (route, widths, lazy generation, EXIF, encoding, atomic write, immutable caching + versioning, fallbacks, semaphore/pixel cap, worker cleanup, CGO-free)
+  - live smoke on a fresh instance: a 1200×600 JPEG carrying EXIF orientation 6 served `?w=320` decodes to **320×640** (upright, axes swapped) and `?w=640` to 640×1280, while `/uploads/` still returns the untouched 1200×600 original; the cache directory holds only the generated variants
+
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt -s -l` / `go vet` clean
+  - [x] `CGO_ENABLED=0` build succeeds; no migration, no new table/column
+  - [ ] Review with human
+
+---
+
+# Task List: Lightbox Navigation (swipe / arrows / keys)
+
+Plan: [tasks/plan-lightbox-navigation.md](plan-lightbox-navigation.md) — DONE
+
+Client-side only: the dialog opens with the whole `[data-lightbox-group]`'s
+images (thread post order), with a counter, arrow buttons, ←/→ & Home/End, and
+pointer-based swipe. Thumbnail paints first, the original swaps in when
+loaded. No endpoints, no schema, no dependency.
+
+- [x] Task 1: Markup + group attribute + CSS  (DONE)
+  - `layout.html` dialog: prev/next overlay buttons (`aria-label`), `aria-live` counter + filename meta, `draggable="false"`, `aria-label="Image viewer"`
+  - `thread.html`: `data-lightbox-group` on `#posts-container`
+  - CSS: overlay arrows (2.75rem / 2.25rem mobile), `:disabled` opacity, meta line, explicit `[hidden]` overrides (the `display` trap), `touch-action: pan-y` + drag/selection suppression on the image; **no** `position: relative` on `.lightbox` (it would break the modal containing block); `make css`
+  - `TestLightboxNavigationMarkup`: group attribute, both labelled nav buttons, live counter, `draggable="false"`, 2 `.lightbox-link`s pointing at `/uploads/` with `/thumbs/` srcset, dialog also present on the front page but no group there
+  - Side fix: `TestInboxPagination` matched the bare words "Prev"/"Next", which the new aria-labels also contain — now matches the pagination labels (`&larr; Prev` / `Next &rarr;`)
+
+- [x] Task 2: Navigation core in `bindLightbox`  (DONE)
+  - `closest('[data-lightbox-group]')` scope with single-image fallback; DOM-order collection; `{full, thumb: currentSrc, alt}`; `render()` sets counter/filename, disabled+clamped ends, hides chrome when `items.length < 2`; `go(delta)` clamps; state reset on the async `close` event
+  - arrow buttons + dialog `keydown` (←/→/Home/End; modifier combos ignored; `preventDefault` only for handled keys; Escape untouched)
+
+- [x] Task 3: Swipe  (DONE)
+  - dialog pointerdown/up/cancel; drags starting on `.lightbox-nav`/`.lightbox-close` ignored; `|dx| >= 40 && |dx| > 1.5|dy|`; left → next, right → prev
+
+- [x] Task 4: Progressive full-size  (DONE)
+  - detached `Image` preloads the original; `src` is swapped only after `onload` and only while the token still matches (stale loads warm the cache instead of repainting)
+
+- [x] Task 5: Docs + verification  (DONE)
+  - README **Image Viewer** bullet; `specs/disjoint.md` §D **Image Viewer** bullet (group scope, key map, swipe threshold, thumb-first rendering, clamps, no server involvement)
+  - `node --check web/static/disjoint.js` passes
+  - **Real headless Chromium (CDP) run** on a 4-image thread (3 opening + 1 reply): clicking the 3rd opens `3 / 4` with the right filename; thumbnail first, then the original; ArrowRight/ArrowLeft/Home/End and end-clamping; swipe left ×2 and swipe right; vertical drag ignored; a drag starting on the arrow ignored; prev/next buttons; close clears state and `src`; a single-image thread hides both arrows and the counter. Also covered: dialog present but empty before opening, and no group on the front page
+
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt -s -l` / `go vet` clean
+  - [x] No server/schema/template-data changes; `node --check` passes
+  - [ ] Review with human

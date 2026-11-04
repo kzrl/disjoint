@@ -98,6 +98,25 @@ func (q *Queries) CountPostsByUserID(ctx context.Context, userID int64) (int64, 
 	return count, err
 }
 
+const countUnreadNotifications = `-- name: CountUnreadNotifications :one
+SELECT COUNT(*)
+FROM notifications n
+JOIN threads t ON t.id = n.thread_id
+WHERE n.user_id = ?1
+  AND n.read_at IS NULL
+  AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_TIMESTAMP)
+`
+
+// Navbar badge count. Expired-but-unpurged threads are excluded: the cleanup
+// worker only runs once a minute, and the badge must not advertise a thread
+// that already 404s. Both joins are on primary keys, so this stays cheap.
+func (q *Queries) CountUnreadNotifications(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnreadNotifications, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUsers = `-- name: CountUsers :one
 SELECT COUNT(*) FROM users
 `
@@ -939,6 +958,88 @@ func (q *Queries) ListFrontPageThreads(ctx context.Context, arg ListFrontPageThr
 	return items, nil
 }
 
+const listInbox = `-- name: ListInbox :many
+SELECT
+    n.thread_id,
+    n.post_id,
+    n.reason,
+    n.last_event_at,
+    n.read_at,
+    t.title,
+    p.body,
+    COALESCE(p.url, '') AS url,
+    COALESCE(u.username, '') AS actor_username,
+    COALESCE(u.avatar_path, '') AS actor_avatar,
+    CAST(COALESCE(u.avatar_nonce, 0) AS INTEGER) AS actor_avatar_nonce
+FROM notifications n
+JOIN threads t ON t.id = n.thread_id
+JOIN posts p   ON p.id = n.post_id
+LEFT JOIN users u ON u.id = p.user_id
+WHERE n.user_id = ?1
+  AND (t.expires_at IS NULL OR t.expires_at >= CURRENT_TIMESTAMP)
+ORDER BY n.last_event_at DESC, n.thread_id DESC
+LIMIT ?3 OFFSET ?2
+`
+
+type ListInboxParams struct {
+	UserID int64
+	Offset int64
+	Limit  int64
+}
+
+type ListInboxRow struct {
+	ThreadID         int64
+	PostID           int64
+	Reason           string
+	LastEventAt      time.Time
+	ReadAt           sql.NullTime
+	Title            string
+	Body             string
+	Url              string
+	ActorUsername    string
+	ActorAvatar      string
+	ActorAvatarNonce int64
+}
+
+// The viewer's inbox: one row per thread, newest activity first. The actor is
+// the author of the triggering post (there is no denormalized actor column),
+// and expired-but-not-yet-purged threads are filtered out so the inbox never
+// links to a thread that already 404s.
+func (q *Queries) ListInbox(ctx context.Context, arg ListInboxParams) ([]ListInboxRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInbox, arg.UserID, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInboxRow
+	for rows.Next() {
+		var i ListInboxRow
+		if err := rows.Scan(
+			&i.ThreadID,
+			&i.PostID,
+			&i.Reason,
+			&i.LastEventAt,
+			&i.ReadAt,
+			&i.Title,
+			&i.Body,
+			&i.Url,
+			&i.ActorUsername,
+			&i.ActorAvatar,
+			&i.ActorAvatarNonce,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInvites = `-- name: ListInvites :many
 SELECT
     i.id,
@@ -1327,6 +1428,122 @@ func (q *Queries) ListReactionsByThreadID(ctx context.Context, threadID int64) (
 	return items, nil
 }
 
+const listThreadRecipients = `-- name: ListThreadRecipients :many
+SELECT DISTINCT user_id FROM posts WHERE thread_id = ?1
+`
+
+// Everyone who has posted in the thread. The opening post means the thread's
+// author is always included; the caller removes the actor.
+func (q *Queries) ListThreadRecipients(ctx context.Context, threadID int64) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listThreadRecipients, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var user_id int64
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnreadThreadIDs = `-- name: ListUnreadThreadIDs :many
+SELECT DISTINCT p.thread_id
+FROM posts p
+LEFT JOIN thread_reads r
+    ON r.thread_id = p.thread_id AND r.user_id = ?1
+WHERE p.user_id <> ?1
+  AND p.created_at > COALESCE(r.last_read_at, ?2)
+`
+
+type ListUnreadThreadIDsParams struct {
+	ViewerID         int64
+	AccountCreatedAt sql.NullTime
+}
+
+// Thread IDs with at least one post the viewer has not seen. "Seen" is the
+// read marker, falling back to the account creation time before the first
+// open (so a new account does not inherit the whole archive as unread).
+// The viewer's own posts never count as unread.
+func (q *Queries) ListUnreadThreadIDs(ctx context.Context, arg ListUnreadThreadIDsParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listUnreadThreadIDs, arg.ViewerID, arg.AccountCreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var thread_id int64
+		if err := rows.Scan(&thread_id); err != nil {
+			return nil, err
+		}
+		items = append(items, thread_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserIDsByUsernames = `-- name: ListUserIDsByUsernames :many
+SELECT id, username FROM users
+WHERE username IN (/*SLICE:usernames*/?)
+`
+
+type ListUserIDsByUsernamesRow struct {
+	ID       int64
+	Username string
+}
+
+// Resolve mentioned names to real users in one round trip. Usernames are
+// case-sensitive everywhere else (login, user cards), so membership is exact;
+// an unknown mention notifies nobody and still renders as a 404 pill.
+func (q *Queries) ListUserIDsByUsernames(ctx context.Context, usernames []string) ([]ListUserIDsByUsernamesRow, error) {
+	query := listUserIDsByUsernames
+	var queryParams []interface{}
+	if len(usernames) > 0 {
+		for _, v := range usernames {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:usernames*/?", strings.Repeat(",?", len(usernames))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:usernames*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserIDsByUsernamesRow
+	for rows.Next() {
+		var i ListUserIDsByUsernamesRow
+		if err := rows.Scan(&i.ID, &i.Username); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
 SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC
 `
@@ -1364,6 +1581,86 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const markAllNotificationsRead = `-- name: MarkAllNotificationsRead :exec
+UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+WHERE user_id = ?1 AND read_at IS NULL
+`
+
+// Backs the inbox's "Mark all read" button (POST /inbox/read). Nothing marks
+// notifications read implicitly except opening the thread; the inbox itself
+// never clears on view.
+func (q *Queries) MarkAllNotificationsRead(ctx context.Context, userID int64) error {
+	_, err := q.db.ExecContext(ctx, markAllNotificationsRead, userID)
+	return err
+}
+
+const markThreadNotificationRead = `-- name: MarkThreadNotificationRead :exec
+UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+WHERE user_id = ?1
+  AND thread_id = ?2
+  AND read_at IS NULL
+`
+
+type MarkThreadNotificationReadParams struct {
+	UserID   int64
+	ThreadID int64
+}
+
+// Read-through: opening a thread counts as dealing with its inbox entry.
+func (q *Queries) MarkThreadNotificationRead(ctx context.Context, arg MarkThreadNotificationReadParams) error {
+	_, err := q.db.ExecContext(ctx, markThreadNotificationRead, arg.UserID, arg.ThreadID)
+	return err
+}
+
+const markThreadRead = `-- name: MarkThreadRead :exec
+INSERT INTO thread_reads (user_id, thread_id, last_read_at)
+VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, thread_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
+`
+
+type MarkThreadReadParams struct {
+	UserID   int64
+	ThreadID int64
+}
+
+// Upsert the viewer's read marker for a thread. Called on every logged-in
+// thread page view; the front page compares posts.created_at against it.
+func (q *Queries) MarkThreadRead(ctx context.Context, arg MarkThreadReadParams) error {
+	_, err := q.db.ExecContext(ctx, markThreadRead, arg.UserID, arg.ThreadID)
+	return err
+}
+
+const newPostsAfter = `-- name: NewPostsAfter :one
+SELECT COUNT(*) AS new_count,
+       CAST(COALESCE(MIN(p.id), 0) AS INTEGER) AS first_new_id
+FROM posts p
+WHERE p.thread_id = ?1
+  AND p.id > ?2
+  AND p.user_id <> ?3
+`
+
+type NewPostsAfterParams struct {
+	ThreadID int64
+	After    int64
+	ViewerID int64
+}
+
+type NewPostsAfterRow struct {
+	NewCount   int64
+	FirstNewID int64
+}
+
+// The "N new replies" pill on a thread page. Counts other users' posts newer
+// than the viewer's last rendered post (the viewer's own posts are already in
+// their DOM, so counting them would offer a reload that shows nothing new).
+// first_new_id is the anchor to land on after the reload; 0 when the count is 0.
+func (q *Queries) NewPostsAfter(ctx context.Context, arg NewPostsAfterParams) (NewPostsAfterRow, error) {
+	row := q.db.QueryRowContext(ctx, newPostsAfter, arg.ThreadID, arg.After, arg.ViewerID)
+	var i NewPostsAfterRow
+	err := row.Scan(&i.NewCount, &i.FirstNewID)
+	return i, err
 }
 
 const pruneExpiredSessions = `-- name: PruneExpiredSessions :exec
@@ -1409,6 +1706,111 @@ UPDATE users SET avatar_path = NULL WHERE id = ?
 func (q *Queries) RemoveUserAvatar(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, removeUserAvatar, id)
 	return err
+}
+
+const searchFrontPageThreads = `-- name: SearchFrontPageThreads :many
+SELECT
+    t.id,
+    t.title,
+    t.created_at,
+    t.expires_at,
+    t.ttl_seconds,
+    COALESCE(u.username, '') AS author_username,
+    COUNT(p.id) AS post_count,
+    CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
+    lc.id AS last_comment_id,
+    lc.body AS last_comment_body,
+    lc.created_at AS last_comment_at,
+    COALESCE(lcu.username, '') AS last_comment_author
+FROM threads t
+LEFT JOIN users u ON t.user_id = u.id
+LEFT JOIN posts p ON p.thread_id = t.id
+LEFT JOIN posts lc ON lc.id = (
+    SELECT MAX(p2.id)
+    FROM posts p2
+    WHERE p2.thread_id = t.id
+      AND p2.id > (SELECT MIN(p3.id) FROM posts p3 WHERE p3.thread_id = t.id)
+)
+LEFT JOIN users lcu ON lc.user_id = lcu.id
+WHERE (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
+  AND (
+    t.title LIKE ?
+    OR EXISTS (
+      SELECT 1 FROM posts sp
+      WHERE sp.thread_id = t.id
+        AND sp.body LIKE ?
+    )
+  )
+GROUP BY t.id
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT ? OFFSET ?
+`
+
+type SearchFrontPageThreadsParams struct {
+	Title  string
+	Body   string
+	Limit  int64
+	Offset int64
+}
+
+type SearchFrontPageThreadsRow struct {
+	ID                int64
+	Title             string
+	CreatedAt         sql.NullTime
+	ExpiresAt         sql.NullTime
+	TtlSeconds        sql.NullInt64
+	AuthorUsername    string
+	PostCount         int64
+	FirstPostID       int64
+	LastCommentID     sql.NullInt64
+	LastCommentBody   sql.NullString
+	LastCommentAt     sql.NullTime
+	LastCommentAuthor string
+}
+
+// Front-page search. Same row shape and ordering as ListFrontPageThreads,
+// filtered to non-expired threads whose title or any post body matches the
+// caller-supplied LIKE pattern (wrapped in %...%; % and _ keep their wildcard
+// meaning in a search term).
+func (q *Queries) SearchFrontPageThreads(ctx context.Context, arg SearchFrontPageThreadsParams) ([]SearchFrontPageThreadsRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchFrontPageThreads,
+		arg.Title,
+		arg.Body,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchFrontPageThreadsRow
+	for rows.Next() {
+		var i SearchFrontPageThreadsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.TtlSeconds,
+			&i.AuthorUsername,
+			&i.PostCount,
+			&i.FirstPostID,
+			&i.LastCommentID,
+			&i.LastCommentBody,
+			&i.LastCommentAt,
+			&i.LastCommentAuthor,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setThreadExpiration = `-- name: SetThreadExpiration :execrows
@@ -1544,6 +1946,37 @@ type UpdateUserBioParams struct {
 
 func (q *Queries) UpdateUserBio(ctx context.Context, arg UpdateUserBioParams) error {
 	_, err := q.db.ExecContext(ctx, updateUserBio, arg.Bio, arg.ID)
+	return err
+}
+
+const upsertNotification = `-- name: UpsertNotification :exec
+INSERT INTO notifications (user_id, thread_id, post_id, reason)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(user_id, thread_id) DO UPDATE SET
+    post_id       = excluded.post_id,
+    reason        = CASE WHEN excluded.reason = 'mention' THEN 'mention' ELSE notifications.reason END,
+    last_event_at = CURRENT_TIMESTAMP,
+    read_at       = NULL
+`
+
+type UpsertNotificationParams struct {
+	UserID   int64
+	ThreadID int64
+	PostID   int64
+	Reason   string
+}
+
+// Record or bump one inbox entry. A new trigger makes the row unread again,
+// points it at the newest triggering post, and upgrades 'reply' to 'mention'
+// (never the reverse). Called inside the post-creation transaction so a post
+// and its notifications commit together.
+func (q *Queries) UpsertNotification(ctx context.Context, arg UpsertNotificationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertNotification,
+		arg.UserID,
+		arg.ThreadID,
+		arg.PostID,
+		arg.Reason,
+	)
 	return err
 }
 

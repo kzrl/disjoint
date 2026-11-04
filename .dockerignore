@@ -1,0 +1,21 @@
+# Build context hygiene: never send local data or development artifacts to the
+# Docker daemon. A dev database contains password hashes and session tokens.
+.git
+.github
+.gitignore
+bin/
+uploads/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db.bak*
+.DS_Store
+*.log
+
+# Documentation and planning files are not embedded in the binary.
+README.md
+tasks/
+specs/
+tools/
+web/css/

@@ -34,13 +34,29 @@ extract() {
    Regenerate with: make css  (BULMA_DIR=/path/to/bulma to point elsewhere).
 
    Dark-first theme for Bulma v1: the dark-theme variables below are Bulma's
-   @media (prefers-color-scheme: dark) block applied as the default, and the
-   light-theme variables are re-applied only when the system prefers light.
+   @media (prefers-color-scheme: dark) block applied as the default. Light
+   comes from one of two places:
+     1. the OS prefers light and the user has not explicitly chosen a theme
+        (:root:not([data-theme="dark"])), or
+     2. the user picked light in the theme toggle (:root[data-theme="light"]),
+        which must also work when the OS prefers dark.
+   The app sets data-theme="light"|"dark" on <html> from a cookie.
    Must stay in sync with web/static/bulma.min.css (same version). */
 EOF
+  LIGHT_VARS=$(extract light)
+
   printf ':root {\n'
   extract dark
-  printf '}\n\n@media (prefers-color-scheme: light) {\n  :root {\n'
-  extract light | sed 's/^  /    /'
-  printf '  }\n}\n'
+  printf '}\n\n'
+
+  # System light, unless the user explicitly chose dark.
+  printf '@media (prefers-color-scheme: light) {\n  :root:not([data-theme="dark"]) {\n'
+  printf '%s\n' "$LIGHT_VARS" | sed 's/^/  /'
+  printf '  }\n}\n\n'
+
+  # Explicit light choice, for systems that prefer dark. Emitted after the
+  # media block: equal specificity, so the later rule wins.
+  printf ':root[data-theme="light"] {\n'
+  printf '%s\n' "$LIGHT_VARS"
+  printf '}\n'
 }

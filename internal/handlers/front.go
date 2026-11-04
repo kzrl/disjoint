@@ -18,11 +18,19 @@ const frontPagePageSize = 30
 // 8 lazy-loaded images at most).
 const frontPageImageCap = 8
 
+// maxSearchQueryLength bounds the front-page search term (the input also
+// carries maxlength). Longer input is truncated rather than rejected.
+const maxSearchQueryLength = 100
+
 // expiryBadgeWindow is how close to expiration a thread must be for its TTL
 // badge to appear on the front page. Threads with more time left show no
 // badge at all, keeping rows uncluttered; the thread page itself still shows
 // the deadline regardless.
 const expiryBadgeWindow = 48 * time.Hour
+
+// liveThreadWindow marks a thread as "live" on the front page (pulsing dot
+// next to the title) when it received a comment this recently.
+const liveThreadWindow = time.Hour
 
 // FrontPageImage is one thumbnail on a front-page row's image strip.
 type FrontPageImage struct {
@@ -33,9 +41,10 @@ type FrontPageImage struct {
 // FrontPageThreadItem is one row on the global front page.
 type FrontPageThreadItem struct {
 	Row          database.ListFrontPageThreadsRow
-	Rank         int64 // 1-based position in the current listing
 	ReplyCount   int64 // posts minus the opening post
 	ExpiryUrgent bool  // true when ExpiresAt is within expiryBadgeWindow
+	IsLive       bool  // replied to within liveThreadWindow
+	Unread       bool  // has posts the viewer has not seen yet
 	Snippet      string
 	Reactions    []ReactionGroup             // the thread's opening-post reactions
 	Emojis       []database.ListAllEmojisRow // full list, rendered into the picker
@@ -54,13 +63,56 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 
-	rows, err := app.queries.ListFrontPageThreads(ctx, database.ListFrontPageThreadsParams{
-		Limit:  frontPagePageSize,
-		Offset: int64((page - 1) * frontPagePageSize),
-	})
-	if err != nil {
-		http.Error(w, "failed to load threads", http.StatusInternalServerError)
-		return
+	// Front-page search: the term filters threads by title or any post body.
+	// LIKE's % and _ act as wildcards here, which is acceptable for a simple
+	// self-hosted search; the pattern is still length-capped.
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if runes := []rune(query); len(runes) > maxSearchQueryLength {
+		query = string(runes[:maxSearchQueryLength])
+	}
+
+	limit := int64(frontPagePageSize)
+	offset := int64((page - 1) * frontPagePageSize)
+	var rows []database.ListFrontPageThreadsRow
+	if query != "" {
+		pattern := "%" + query + "%"
+		searchRows, err := app.queries.SearchFrontPageThreads(ctx, database.SearchFrontPageThreadsParams{
+			Title:  pattern,
+			Body:   pattern,
+			Limit:  limit,
+			Offset: offset,
+		})
+		if err != nil {
+			http.Error(w, "failed to search threads", http.StatusInternalServerError)
+			return
+		}
+		rows = make([]database.ListFrontPageThreadsRow, 0, len(searchRows))
+		for _, sr := range searchRows {
+			rows = append(rows, database.ListFrontPageThreadsRow{
+				ID:                sr.ID,
+				Title:             sr.Title,
+				CreatedAt:         sr.CreatedAt,
+				ExpiresAt:         sr.ExpiresAt,
+				TtlSeconds:        sr.TtlSeconds,
+				AuthorUsername:    sr.AuthorUsername,
+				PostCount:         sr.PostCount,
+				FirstPostID:       sr.FirstPostID,
+				LastCommentID:     sr.LastCommentID,
+				LastCommentBody:   sr.LastCommentBody,
+				LastCommentAt:     sr.LastCommentAt,
+				LastCommentAuthor: sr.LastCommentAuthor,
+			})
+		}
+	} else {
+		var err error
+		rows, err = app.queries.ListFrontPageThreads(ctx, database.ListFrontPageThreadsParams{
+			Limit:  limit,
+			Offset: offset,
+		})
+		if err != nil {
+			http.Error(w, "failed to load threads", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// "On the air": users seen within the last 5 minutes (includes the viewer)
@@ -101,8 +153,31 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	currentUserID := int64(0)
+	var currentUser *database.User
 	if u := middleware.UserFromContext(ctx); u != nil {
+		currentUser = u
 		currentUserID = u.ID
+	}
+
+	// Unread threads for the viewer: one lightweight query returning thread
+	// IDs, then a set lookup while building the rows. Guests get no dots.
+	unread := make(map[int64]bool)
+	if currentUser != nil {
+		accountCreatedAt := sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		if currentUser.CreatedAt.Valid {
+			accountCreatedAt = currentUser.CreatedAt
+		}
+		unreadIDs, err := app.queries.ListUnreadThreadIDs(ctx, database.ListUnreadThreadIDsParams{
+			ViewerID:         currentUser.ID,
+			AccountCreatedAt: accountCreatedAt,
+		})
+		if err != nil {
+			http.Error(w, "failed to load unread threads", http.StatusInternalServerError)
+			return
+		}
+		for _, id := range unreadIDs {
+			unread[id] = true
+		}
 	}
 	reactionGroups := groupReactions(rRows, currentUserID)
 
@@ -133,7 +208,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := make([]FrontPageThreadItem, 0, len(rows))
-	for i, row := range rows {
+	for _, row := range rows {
 		replyCount := row.PostCount - 1 // the opening post is not a reply
 		if replyCount < 0 {
 			replyCount = 0
@@ -147,10 +222,12 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, FrontPageThreadItem{
 			Row:        row,
-			Rank:       int64((page-1)*frontPagePageSize + i + 1),
 			ReplyCount: replyCount,
 			ExpiryUrgent: row.ExpiresAt.Valid &&
 				time.Until(row.ExpiresAt.Time) <= expiryBadgeWindow,
+			IsLive: row.LastCommentAt.Valid &&
+				time.Since(row.LastCommentAt.Time) < liveThreadWindow,
+			Unread:     unread[row.ID],
 			Snippet:    commentSnippet(row.LastCommentBody),
 			Reactions:  reactionGroups[row.FirstPostID],
 			Emojis:     emojis,
@@ -164,23 +241,29 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		"Online":  online,
 		"Page":    page,
 		"HasNext": len(rows) == frontPagePageSize,
+		"Query":   query,
 	}, "Front Page")
 }
 
-// commentSnippet flattens a raw markdown body into a plain-text preview
-// (whitespace folded, capped at ~120 chars). It is rendered escaped by
-// the template and never re-parsed as markdown, so half-open markup from
-// the cap cannot inject HTML.
+// commentSnippet flattens a raw markdown body into a plain-text preview.
+// It is rendered escaped by the template and never re-parsed as markdown, so
+// half-open markup from the cap cannot inject HTML.
 func commentSnippet(body sql.NullString) string {
 	if !body.Valid {
 		return ""
 	}
-	s := strings.Map(func(r rune) rune {
+	return plainSnippet(body.String)
+}
+
+// plainSnippet is commentSnippet for a non-null body (the inbox's post body).
+// Whitespace is folded and the result is capped at ~120 chars.
+func plainSnippet(s string) string {
+	s = strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' {
 			return ' '
 		}
 		return r
-	}, body.String)
+	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	const maxLen = 120
 	if len(s) > maxLen {
