@@ -650,3 +650,19 @@ resolves permalinks to the page containing the post.
 - [x] Caddy access-log redaction for invite codes and search terms (playbook)
 - [x] Backup/security documentation updates
 - [x] `go test -race -count=1 ./...`, `go vet`, `gofmt`, `govulncheck`
+
+---
+
+# Task List: Admin-Issued One-Time Login Links — DONE
+
+- [x] Migration `00018_admin_login_links.sql` + `login_tokens` schema/queries
+- [x] `POST /admin/users/{id}/login-link`: one-time token, hashed at rest, one-hour TTL, invalidates prior links, audit log
+- [x] Admin users page action + one-time link display page
+- [x] Public `GET /auth/magic` confirmation page that does not consume the token
+- [x] `POST /auth/magic`: atomic consume, delete remaining links, create session, audit log
+- [x] Password change / sign-out-everywhere invalidate pending links
+- [x] Worker prunes expired links; admin generation rate-limited
+- [x] `PUBLIC_BASE_URL` config, README/spec docs, login-page recovery note
+- [ ] Caddy `token` query redaction deployment
+- [x] Tests for generation, non-admin denial, GET non-consumption, single-use POST, expiry, invalidation, session creation
+- [x] Checkpoint: `go test -race -count=1 ./...` green

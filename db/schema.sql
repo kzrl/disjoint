@@ -81,6 +81,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS login_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL,
+    created_by INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at INTEGER NOT NULL,
+    used_at    DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_login_tokens_expires ON login_tokens(expires_at);
+
 CREATE TABLE IF NOT EXISTS emojis (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,       -- 'joy' or 'mario_fire' (used as :name:)

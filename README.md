@@ -49,6 +49,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Account Security**: Change your password from `/account` (minimum 8 characters); doing so revokes every session, and a separate “Sign out everywhere” action clears all devices without changing the password.
 
+- **One-Time Login Links**: Admins can mint a single-use login link for any user from `/admin/users` and deliver it privately via Signal/chat. Links expire after one hour, are stored only as hashes, and are invalidated by password changes or a newer link.
+
 - **Deletion & Moderation**: Authors can delete their own replies and threads; administrators can remove any thread or reply. Deleting an opening post takes the whole thread with it, and attachment files and thumbnails are cleaned up from disk.
 
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
@@ -118,6 +120,7 @@ Disjoint is configured via environment variables:
 | `DATABASE_PATH` | `disjoint.db` | File path for SQLite database |
 | `UPLOAD_DIR` | `uploads` | Directory for stored media attachments |
 | `COOKIE_SECURE` | _(auto: TLS detected per request)_ | Force `Secure` on session cookies: `1` behind a TLS-terminating reverse proxy, `0` to disable |
+| `PUBLIC_BASE_URL` | _(request fallback)_ | Absolute base URL for admin-issued one-time login links, e.g. `https://disjoint.example.com`. Set this in production. |
 
 ### Uploads
 
@@ -181,7 +184,8 @@ The restore tool validates the snapshot with `PRAGMA quick_check`, requires `-fo
 - Post bodies are capped at **256 KB**; attachments are capped at 100 MB per post, and each user gets a **2 GiB** attachment + custom-emoji quota.
 - SQLite runs with `secure_delete` and the expiry worker truncates the WAL, but backups are **not encrypted** and retain content from before expiry. Copy backups only to encrypted storage and apply your own retention policy. Secure erasure on SSDs is never guaranteed.
 - Uploaded media is served only to authenticated members, with `Cache-Control: private`. External Markdown images are blocked by CSP (`img-src 'self' data: blob:`; blob is for local paste previews).
-- The app rate-limits posts, profile/emoji uploads, searches, autocomplete, reactions, and password changes per user.
+- The app rate-limits posts, profile/emoji uploads, searches, autocomplete, reactions, login-link generation, and password changes per user.
+- Admin-issued one-time login links are bearer credentials: an admin can use a link before/after sending it. This is accepted for the private-group model; generation and use are audit-logged, links are single-use with a one-hour TTL, and they should be delivered by DM, never a group channel.
 
 ### Behind a reverse proxy (Caddy)
 

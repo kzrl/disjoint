@@ -82,6 +82,26 @@ func (q *Queries) ConsumeInvite(ctx context.Context, arg ConsumeInviteParams) (i
 	return result.RowsAffected()
 }
 
+const consumeLoginToken = `-- name: ConsumeLoginToken :one
+UPDATE login_tokens
+SET used_at = CURRENT_TIMESTAMP
+WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?2
+RETURNING user_id
+`
+
+type ConsumeLoginTokenParams struct {
+	TokenHash string
+	Now       int64
+}
+
+// Atomic single-use claim. Only an unused, unexpired token returns a row.
+func (q *Queries) ConsumeLoginToken(ctx context.Context, arg ConsumeLoginTokenParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, consumeLoginToken, arg.TokenHash, arg.Now)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const countAttachmentsByPostID = `-- name: CountAttachmentsByPostID :one
 SELECT COUNT(*) FROM attachments WHERE post_id = ?
 `
@@ -283,6 +303,28 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 	return i, err
 }
 
+const createLoginToken = `-- name: CreateLoginToken :exec
+INSERT INTO login_tokens (token_hash, user_id, created_by, expires_at)
+VALUES (?, ?, ?, ?)
+`
+
+type CreateLoginTokenParams struct {
+	TokenHash string
+	UserID    int64
+	CreatedBy sql.NullInt64
+	ExpiresAt int64
+}
+
+func (q *Queries) CreateLoginToken(ctx context.Context, arg CreateLoginTokenParams) error {
+	_, err := q.db.ExecContext(ctx, createLoginToken,
+		arg.TokenHash,
+		arg.UserID,
+		arg.CreatedBy,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const createPost = `-- name: CreatePost :one
 INSERT INTO posts (
     thread_id,
@@ -416,6 +458,15 @@ func (q *Queries) DeleteEmoji(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteExpiredLoginTokens = `-- name: DeleteExpiredLoginTokens :exec
+DELETE FROM login_tokens WHERE expires_at <= ?
+`
+
+func (q *Queries) DeleteExpiredLoginTokens(ctx context.Context, expiresAt int64) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredLoginTokens, expiresAt)
+	return err
+}
+
 const deleteExpiredThreads = `-- name: DeleteExpiredThreads :exec
 DELETE FROM threads
 WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
@@ -423,6 +474,15 @@ WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
 
 func (q *Queries) DeleteExpiredThreads(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredThreads)
+	return err
+}
+
+const deleteLoginTokensForUser = `-- name: DeleteLoginTokensForUser :exec
+DELETE FROM login_tokens WHERE user_id = ?
+`
+
+func (q *Queries) DeleteLoginTokensForUser(ctx context.Context, userID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteLoginTokensForUser, userID)
 	return err
 }
 
@@ -607,6 +667,40 @@ func (q *Queries) GetInviteByCode(ctx context.Context, code string) (Invite, err
 		&i.CreatedAt,
 		&i.UsedAt,
 		&i.ExpiresAt,
+	)
+	return i, err
+}
+
+const getLoginToken = `-- name: GetLoginToken :one
+SELECT t.user_id, t.expires_at, t.used_at,
+       u.username, u.avatar_path, u.avatar_nonce
+FROM login_tokens t
+JOIN users u ON u.id = t.user_id
+WHERE t.token_hash = ?
+LIMIT 1
+`
+
+type GetLoginTokenRow struct {
+	UserID      int64
+	ExpiresAt   int64
+	UsedAt      sql.NullTime
+	Username    string
+	AvatarPath  sql.NullString
+	AvatarNonce int64
+}
+
+// Confirmation-page lookup: never consumes. The user join makes an orphaned
+// token unusable if its target account was deleted outside the cascade.
+func (q *Queries) GetLoginToken(ctx context.Context, tokenHash string) (GetLoginTokenRow, error) {
+	row := q.db.QueryRowContext(ctx, getLoginToken, tokenHash)
+	var i GetLoginTokenRow
+	err := row.Scan(
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.Username,
+		&i.AvatarPath,
+		&i.AvatarNonce,
 	)
 	return i, err
 }

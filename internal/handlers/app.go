@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,22 +46,36 @@ type App struct {
 	passwordLimiter *middleware.RateLimiter
 	// thumbLimiter bounds CPU/disk work from thumbnail requests.
 	thumbLimiter *middleware.RateLimiter
+	// loginLinkLimiter bounds admin-issued one-time login links.
+	loginLinkLimiter *middleware.RateLimiter
+	// baseURL is PUBLIC_BASE_URL, used to build absolute one-time login
+	// links. Empty means derive from the admin request.
+	baseURL string
 }
 
 // NewApp instantiates an App and compiles HTML templates.
 func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, error) {
 	app := &App{
-		db:              db,
-		queries:         queries,
-		uploadDir:       uploadDir,
-		templates:       make(map[string]*template.Template),
-		middleware:      middleware.New(queries),
-		authLimiter:     middleware.NewRateLimiter(10, 15*time.Minute),
-		contentLimiter:  middleware.NewRateLimiter(30, 5*time.Minute),
-		uploadLimiter:   middleware.NewRateLimiter(30, 5*time.Minute),
-		apiLimiter:      middleware.NewRateLimiter(300, 5*time.Minute),
-		passwordLimiter: middleware.NewRateLimiter(5, 15*time.Minute),
-		thumbLimiter:    middleware.NewRateLimiter(1200, 5*time.Minute),
+		db:               db,
+		queries:          queries,
+		uploadDir:        uploadDir,
+		templates:        make(map[string]*template.Template),
+		middleware:       middleware.New(queries),
+		authLimiter:      middleware.NewRateLimiter(10, 15*time.Minute),
+		contentLimiter:   middleware.NewRateLimiter(30, 5*time.Minute),
+		uploadLimiter:    middleware.NewRateLimiter(30, 5*time.Minute),
+		apiLimiter:       middleware.NewRateLimiter(300, 5*time.Minute),
+		passwordLimiter:  middleware.NewRateLimiter(5, 15*time.Minute),
+		thumbLimiter:     middleware.NewRateLimiter(1200, 5*time.Minute),
+		loginLinkLimiter: middleware.NewRateLimiter(20, 5*time.Minute),
+		baseURL:          strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
+	}
+
+	if app.baseURL != "" {
+		u, err := url.Parse(app.baseURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
+			return nil, fmt.Errorf("PUBLIC_BASE_URL must be an absolute http(s) URL without query or fragment")
+		}
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")
@@ -206,6 +221,8 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"inbox.html",
 		"account.html",
 		"gallery.html",
+		"admin_login_link.html",
+		"magic_confirm.html",
 	}
 
 	for _, page := range pages {
@@ -368,6 +385,8 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /register", app.RegisterPage)
 	mux.Handle("POST /register", authLimited(http.HandlerFunc(app.RegisterSubmit)))
 	mux.HandleFunc("POST /logout", app.LogoutSubmit)
+	mux.HandleFunc("GET /auth/magic", app.MagicLinkPage)
+	mux.Handle("POST /auth/magic", authLimited(http.HandlerFunc(app.MagicLinkSubmit)))
 
 	// Admin Invite Management
 	mux.HandleFunc("GET /invites", app.InvitesPage)
@@ -378,6 +397,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/users", app.UsersPage)
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
+	mux.HandleFunc("POST /admin/users/{id}/login-link", app.CreateLoginLinkSubmit)
 
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)

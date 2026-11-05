@@ -76,11 +76,13 @@ func (app *App) ChangePasswordSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audit(r, user.ID, "change_password", user.ID)
-	if err := app.queries.DeleteSessionsForUser(ctx, user.ID); err != nil {
-		http.Error(w, "password changed, but failed to revoke sessions", http.StatusInternalServerError)
+	sessionsErr := app.queries.DeleteSessionsForUser(ctx, user.ID)
+	linksErr := app.queries.DeleteLoginTokensForUser(ctx, user.ID)
+	auth.ClearSessionCookie(w, secureCookie(r))
+	if sessionsErr != nil || linksErr != nil {
+		http.Error(w, "password changed, but failed to revoke sessions or login links", http.StatusInternalServerError)
 		return
 	}
-	auth.ClearSessionCookie(w, secureCookie(r))
 
 	setFlash(w, r, "flash_success", "Password changed. Sign in again on every device.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -97,12 +99,14 @@ func (app *App) SignOutEverywhereSubmit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := app.queries.DeleteSessionsForUser(ctx, user.ID); err != nil {
-		http.Error(w, "failed to revoke sessions", http.StatusInternalServerError)
+	sessionsErr := app.queries.DeleteSessionsForUser(ctx, user.ID)
+	linksErr := app.queries.DeleteLoginTokensForUser(ctx, user.ID)
+	auth.ClearSessionCookie(w, secureCookie(r))
+	if sessionsErr != nil || linksErr != nil {
+		http.Error(w, "failed to revoke sessions or login links", http.StatusInternalServerError)
 		return
 	}
 	audit(r, user.ID, "sign_out_everywhere", user.ID)
-	auth.ClearSessionCookie(w, secureCookie(r))
 
 	setFlash(w, r, "flash_success", "Signed out everywhere.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
