@@ -1,0 +1,281 @@
+package handlers_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"disjoint/internal/database"
+	"disjoint/internal/worker"
+)
+
+func galleryUser(t *testing.T, queries *database.Queries, name string) *database.User {
+	t.Helper()
+	u, err := queries.CreateUser(context.Background(), database.CreateUserParams{
+		Username:     name,
+		PasswordHash: "hash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &u
+}
+
+func galleryThread(t *testing.T, queries *database.Queries, userID int64, title string, expiresAt sql.NullTime) (database.Thread, database.Post) {
+	t.Helper()
+	ctx := context.Background()
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID:    userID,
+		Title:     title,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   userID,
+		Body:     "image post",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return thread, post
+}
+
+func galleryAttachment(t *testing.T, queries *database.Queries, uploadDir string, postID int64, name, mime string) database.Attachment {
+	t.Helper()
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, name), []byte("image-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	att, err := queries.CreateAttachment(context.Background(), database.CreateAttachmentParams{
+		PostID:      postID,
+		Filename:    name,
+		StoragePath: name,
+		MimeType:    mime,
+		FileSize:    11,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return att
+}
+
+func TestGalleryRequiresLoginAndEmptyState(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	user := galleryUser(t, queries, "gallery_guest_user")
+	cookie := authCookieFor(t, queries, user.ID)
+
+	// Guests are redirected to login (the first-run check is already satisfied).
+	req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("guest /gallery = %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+
+	// An empty wall has a dedicated empty state and no grid.
+	req = httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /gallery = %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "No photos yet") {
+		t.Error("empty gallery missing empty state")
+	}
+	if strings.Contains(body, `class="gallery-grid"`) {
+		t.Error("empty gallery must not render the grid")
+	}
+	if !strings.Contains(body, `href="/gallery" class="navbar-item">Gallery`) {
+		t.Error("navbar missing Gallery link")
+	}
+}
+
+func TestGalleryListsOpeningAndReplyImages(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	user := galleryUser(t, queries, "gallery_lister")
+	cookie := authCookieFor(t, queries, user.ID)
+
+	thread, opening := galleryThread(t, queries, user.ID, "gallery thread", sql.NullTime{})
+	reply, err := queries.CreatePost(context.Background(), database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   user.ID,
+		Body:     "reply with an image",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	openingImg := galleryAttachment(t, queries, uploadDir, opening.ID, "opening.png", "image/png")
+	replyImg := galleryAttachment(t, queries, uploadDir, reply.ID, "reply.jpg", "image/jpeg")
+	galleryAttachment(t, queries, uploadDir, opening.ID, "document.pdf", "application/pdf")
+	galleryAttachment(t, queries, uploadDir, opening.ID, "clip.mp4", "video/mp4")
+
+	req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /gallery = %d", rr.Code)
+	}
+	body := rr.Body.String()
+
+	if got := strings.Count(body, `class="gallery-tile"`); got != 2 {
+		t.Fatalf("expected 2 image tiles, got %d", got)
+	}
+	if !strings.Contains(body, `data-lightbox-group`) {
+		t.Error("gallery grid missing data-lightbox-group")
+	}
+	for _, path := range []string{openingImg.StoragePath, replyImg.StoragePath} {
+		if !strings.Contains(body, `class="lightbox-link" href="/uploads/`+path+`"`) {
+			t.Errorf("missing lightbox link for %q", path)
+		}
+		if !strings.Contains(body, `/thumbs/`+path+`?w=320 320w`) {
+			t.Errorf("missing 320w thumbnail candidate for %q", path)
+		}
+		if !strings.Contains(body, `alt="`+path+`"`) {
+			t.Errorf("missing alt text for %q", path)
+		}
+	}
+	if strings.Contains(body, "document.pdf") || strings.Contains(body, "clip.mp4") {
+		t.Error("non-image attachments leaked into the wall")
+	}
+	if !strings.Contains(body, `href="/threads/`+fmt.Sprint(thread.ID)+`#post-`+fmt.Sprint(reply.ID)+`"`) {
+		t.Error("reply image caption does not link to the reply")
+	}
+	if !strings.Contains(body, "gallery thread") {
+		t.Error("caption missing thread title")
+	}
+
+	// Newest upload first: the reply image was inserted after the opening one.
+	if strings.Index(body, replyImg.StoragePath) > strings.Index(body, openingImg.StoragePath) {
+		t.Error("gallery is not newest-first by attachment id")
+	}
+}
+
+func TestGalleryExcludesExpiredThreadsAndWorkerPurge(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	user := galleryUser(t, queries, "gallery_expiry")
+	cookie := authCookieFor(t, queries, user.ID)
+
+	expired, expiredPost := galleryThread(t, queries, user.ID, "expired gallery thread", sql.NullTime{
+		Time:  time.Now().UTC().Add(-time.Hour),
+		Valid: true,
+	})
+	expiredImg := galleryAttachment(t, queries, uploadDir, expiredPost.ID, "expired.png", "image/png")
+
+	live, livePost := galleryThread(t, queries, user.ID, "live gallery thread", sql.NullTime{})
+	liveImg := galleryAttachment(t, queries, uploadDir, livePost.ID, "live.png", "image/png")
+
+	get := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /gallery = %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	body := get()
+	if strings.Contains(body, expiredImg.StoragePath) {
+		t.Error("expired thread image appeared before the worker purge")
+	}
+	if !strings.Contains(body, liveImg.StoragePath) {
+		t.Error("live thread image missing")
+	}
+
+	if err := worker.New(queries, uploadDir, time.Minute).CleanupOnce(context.Background()); err != nil {
+		t.Fatalf("worker cleanup: %v", err)
+	}
+	if _, err := queries.GetThreadByID(context.Background(), expired.ID); err == nil {
+		t.Fatal("expired thread survived the worker")
+	}
+	if _, err := queries.GetThreadByID(context.Background(), live.ID); err != nil {
+		t.Fatal("worker removed the live thread")
+	}
+	if _, err := os.Stat(filepath.Join(uploadDir, expiredImg.StoragePath)); !os.IsNotExist(err) {
+		t.Fatal("expired image file survived the worker")
+	}
+	if body := get(); strings.Contains(body, expiredImg.StoragePath) {
+		t.Error("expired image still on the wall after purge")
+	}
+}
+
+func TestGalleryPagination(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	user := galleryUser(t, queries, "gallery_pager")
+	cookie := authCookieFor(t, queries, user.ID)
+	_, post := galleryThread(t, queries, user.ID, "paged gallery", sql.NullTime{})
+
+	for i := 0; i < 49; i++ {
+		name := fmt.Sprintf("gallery-%02d.png", i)
+		if _, err := queries.CreateAttachment(context.Background(), database.CreateAttachmentParams{
+			PostID:      post.ID,
+			Filename:    name,
+			StoragePath: name,
+			MimeType:    "image/png",
+			FileSize:    1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	get := func(page int) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/gallery?page=%d", page), nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /gallery?page=%d = %d", page, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	first := get(1)
+	if got := strings.Count(first, `class="gallery-tile"`); got != 48 {
+		t.Errorf("page 1 tiles = %d, want 48", got)
+	}
+	if !strings.Contains(first, `href="/gallery?page=2"`) {
+		t.Error("page 1 missing Next link")
+	}
+
+	second := get(2)
+	if got := strings.Count(second, `class="gallery-tile"`); got != 1 {
+		t.Errorf("page 2 tiles = %d, want 1", got)
+	}
+	if !strings.Contains(second, `href="/gallery?page=1"`) {
+		t.Error("page 2 missing Prev link")
+	}
+	if strings.Contains(second, `href="/gallery?page=3"`) {
+		t.Error("page 2 must not offer Next for the last page")
+	}
+
+	if empty := get(99); !strings.Contains(empty, "No photos yet") {
+		t.Error("page 99 should render the empty state")
+	}
+}

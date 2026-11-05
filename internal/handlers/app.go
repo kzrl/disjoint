@@ -190,6 +190,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"user_card.html",
 		"inbox.html",
 		"account.html",
+		"gallery.html",
 	}
 
 	for _, page := range pages {
@@ -351,6 +352,9 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/users", app.UsersPage)
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
+
+	// Image wall (read-only view over image attachments on live threads)
+	mux.HandleFunc("GET /gallery", app.GalleryPage)
 
 	// Community emoji (browse, upload, delete)
 	mux.HandleFunc("GET /emojis", app.EmojiPage)

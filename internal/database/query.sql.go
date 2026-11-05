@@ -1020,6 +1020,72 @@ func (q *Queries) ListFrontPageThreads(ctx context.Context, arg ListFrontPageThr
 	return items, nil
 }
 
+const listGalleryImages = `-- name: ListGalleryImages :many
+SELECT
+    a.storage_path,
+    a.filename,
+    a.created_at,
+    p.id        AS post_id,
+    p.thread_id,
+    t.title     AS thread_title
+FROM attachments a
+JOIN posts p   ON p.id = a.post_id
+JOIN threads t ON t.id = p.thread_id
+WHERE (a.mime_type = 'image/jpeg' OR a.mime_type = 'image/png'
+       OR a.mime_type = 'image/webp' OR a.mime_type = 'image/gif')
+  AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP)
+ORDER BY a.id DESC
+LIMIT ? OFFSET ?
+`
+
+type ListGalleryImagesParams struct {
+	Limit  int64
+	Offset int64
+}
+
+type ListGalleryImagesRow struct {
+	StoragePath string
+	Filename    string
+	CreatedAt   sql.NullTime
+	PostID      int64
+	ThreadID    int64
+	ThreadTitle string
+}
+
+// The image wall: every image attachment on a non-expired thread, newest
+// upload first. Same MIME allowlist as the front-page strips, but reply images
+// are included on purpose (the wall is a browsing surface, not a row preview).
+// id DESC rather than created_at: uploads can share a one-second timestamp.
+func (q *Queries) ListGalleryImages(ctx context.Context, arg ListGalleryImagesParams) ([]ListGalleryImagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGalleryImages, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGalleryImagesRow
+	for rows.Next() {
+		var i ListGalleryImagesRow
+		if err := rows.Scan(
+			&i.StoragePath,
+			&i.Filename,
+			&i.CreatedAt,
+			&i.PostID,
+			&i.ThreadID,
+			&i.ThreadTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInbox = `-- name: ListInbox :many
 SELECT
     n.thread_id,

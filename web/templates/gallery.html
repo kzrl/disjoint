@@ -1,0 +1,52 @@
+{{define "content"}}
+<div>
+  <section class="card forum-section my-5">
+    <div class="card-header">
+      <p class="card-header-title">Gallery</p>
+      {{if .CurrentUser}}
+        <a class="card-header-icon" href="/threads/new" title="Share something" aria-label="Start a new thread">+</a>
+      {{end}}
+    </div>
+    {{if .Items}}
+      <!-- Multi-column masonry: the browser balances columns, so unfilled
+           images keep their aspect ratio and no dimensions are stored. This
+           fills column-major: the newest image is the top of the first
+           column. Do not "fix" the order with JS masonry. -->
+      <div class="gallery-grid" data-lightbox-group>
+        {{range .Items}}
+          <figure class="gallery-tile">
+            <a class="lightbox-link" href="/uploads/{{.StoragePath}}" aria-label="View {{.Filename}} full size">
+              <img src="/thumbs/{{.StoragePath}}?w=640"
+                   srcset="/thumbs/{{.StoragePath}}?w=320 320w, /thumbs/{{.StoragePath}}?w=640 640w, /thumbs/{{.StoragePath}}?w=1280 1280w"
+                   sizes="(max-width: 768px) 100vw, 25vw"
+                   loading="lazy" decoding="async" alt="{{.Filename}}">
+            </a>
+            <figcaption class="gallery-caption">
+              <a href="/threads/{{.ThreadID}}#post-{{.PostID}}">{{.ThreadTitle}}</a>
+              <time class="is-size-7 muted" datetime="{{isoTime .Time}}" title="{{formatTime .Time}}">{{formatRelative .Time}}</time>
+            </figcaption>
+          </figure>
+        {{end}}
+      </div>
+      {{if or (gt .Page 1) .HasNext}}
+      <div class="pagination-wrap py-3 px-4 has-text-centered">
+        {{if gt .Page 1}}
+          <a class="button is-secondary is-small" href="/gallery?page={{sub .Page 1}}">&larr; Prev</a>
+        {{end}}
+        {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
+        {{if .HasNext}}
+          <a class="button is-secondary is-small" href="/gallery?page={{add .Page 1}}">Next &rarr;</a>
+        {{end}}
+      </div>
+      {{end}}
+    {{else}}
+      <div class="forum-section py-6 has-text-centered">
+        <p class="muted mb-4">No photos yet. Attach an image to a post and it shows up here.</p>
+        {{if .CurrentUser}}
+          <a href="/threads/new" class="button is-primary">Share the first one</a>
+        {{end}}
+      </div>
+    {{end}}
+  </section>
+</div>
+{{end}}

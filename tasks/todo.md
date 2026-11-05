@@ -467,7 +467,7 @@ never delete the poller.
 
 ---
 
-# Task List: Image Wall (`/gallery`)
+# Task List: Image Wall (`/gallery`) — DONE
 
 Plan: [tasks/plan-gallery.md](plan-gallery.md)
 
@@ -476,27 +476,27 @@ Read-only view over existing data: every image attachment on a live thread
 aspect ratios, existing lightbox on click, caption links to the post. No
 migration, no schema change, no JS, no new dependency.
 
-- [ ] Task 1: Query + handler + route + template + navbar + CSS
+- [x] Task 1: Query + handler + route + template + navbar + CSS  (DONE)
   - `ListGalleryImages` (image MIME allowlist, `expires_at` filter, `ORDER BY a.id DESC`, LIMIT/OFFSET), `make generate`
   - `internal/handlers/gallery.go`: `GalleryImage` + `GalleryPage` (48/page, `?page=`, `HasNext` from a full page, no auth code — middleware gates it)
   - `GET /gallery`, `gallery.html` registered in `pages`, navbar "Gallery" beside "Emoji"
   - CSS: `.gallery-grid` (`columns: 4 15rem` + `break-inside: avoid`), `.gallery-tile`, `.gallery-caption`; `make css`
   - Manual: wall renders on a seeded DB; lightbox + caption links work; pagination
 
-- [ ] Task 2: Handler tests
+- [x] Task 2: Handler tests  (DONE)
   - guest 303 `/login`; empty DB → empty state
   - opening-post **and reply** images render; PDF/video excluded
   - expired thread's images absent; worker purge removes them (cascade)
   - newest-first ordering; pagination 48/1/empty-at-99
   - tile contract: `href="/uploads/{path}"` + `lightbox-link`, `alt` = filename, caption `href="/threads/{tid}#post-{pid}"` + thread title
 
-- [ ] Task 3: Docs + smoke
-  - README feature bullet; `specs/disjoint.md` §E **Gallery** note (all live images incl. replies, 48/page, masonry, lightbox, expiry cascade, no thumbnails yet)
+- [x] Task 3: Docs + smoke  (DONE)
+  - README feature bullet; `specs/disjoint.md` §E **Gallery** note (all live images incl. replies, 48/page, masonry, lightbox, thumbnail `srcset`, expiry cascade)
   - Live smoke: thread with two images and one PDF → wall shows 2, not the PDF → caption jumps to the reply → expire the thread → wall empty
 
-- [ ] Checkpoint: Complete
-  - [ ] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
-  - [ ] No migration, no new JS
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
+  - [x] No migration, no new JS
   - [ ] Review with human
 
 ---

@@ -3089,3 +3089,46 @@ form.htmx-request button[type="submit"]::after {
 .new-posts-pill {
   box-shadow: 0 4px 14px color-mix(in srgb, var(--bulma-primary) 35%, transparent);
 }
+
+/* --- Image wall ------------------------------------------------------------ */
+
+/* Multi-column masonry over natural aspect ratios. `columns` takes a preferred
+   width (15rem) and a maximum count (4), so it reflows without media queries. */
+.gallery-grid {
+  columns: 4 15rem;
+  column-gap: 0.75rem;
+  padding: 1rem 1.25rem;
+}
+
+.gallery-tile {
+  break-inside: avoid;
+  margin: 0 0 0.75rem;
+}
+
+.gallery-tile img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--bulma-border-weak);
+  border-radius: var(--bulma-radius);
+  background: var(--bulma-scheme-main-ter); /* avoids a flash of blank space */
+}
+
+.gallery-tile .lightbox-link {
+  display: block;
+}
+
+.gallery-caption {
+  padding: 0.375rem 0.125rem 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.gallery-caption a {
+  color: var(--bulma-text-weak);
+}
+
+.gallery-caption a:hover,
+.gallery-caption a:focus {
+  color: var(--bulma-primary);
+}

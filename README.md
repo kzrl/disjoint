@@ -27,6 +27,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch, with a position counter. The thumbnail paints instantly and sharpens to full resolution in place.
 
+- **Image Gallery**: `/gallery` collects every image on live threads — opening posts and replies — newest first, 48 per page, in a responsive masonry wall. Tiles open the lightbox, and each caption jumps back to the exact post.
+
 - **Markdown Support**: Rich formatting, tables, task lists, blockquotes, and code blocks powered by Goldmark with safe HTML rendering.
 
 - **@User Mentions**: `@username` tokens in posts (and bios) render as tinted pill links to that user's card. Code spans, e-mail addresses, and malformed tokens are never linked.

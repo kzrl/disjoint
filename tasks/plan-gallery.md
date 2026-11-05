@@ -314,6 +314,10 @@ Navbar (`web/templates/layout.html`, `navbar-start`, signed-in block): add
 
 ## Risks / notes
 
+> **Implemented:** the thumbnail follow-up landed before this walkthrough, so
+> tiles use `/thumbs/{storage_path}?w=640` with a 320/640/1280 `srcset`; the
+> original remains the lightbox target.
+
 - **Originals, not thumbnails.** A 12 MP phone photo is served at full size for
   a 15rem tile. `loading="lazy"` + `decoding="async"` + 48/page + the 1-day
   cache keep this tolerable for a friend group, but it is the honest ceiling of
@@ -338,12 +342,12 @@ Navbar (`web/templates/layout.html`, `navbar-start`, signed-in block): add
 
 ## Acceptance criteria
 
-- [ ] `/gallery` lists every image attachment (opening post **and** replies) on
+- [x] `/gallery` lists every image attachment (opening post **and** replies) on
       live threads, newest first, 48 per page.
-- [ ] Non-image attachments never appear; expired threads' images disappear
+- [x] Non-image attachments never appear; expired threads' images disappear
       (immediately by SQL filter, permanently after the worker's purge).
-- [ ] Each tile opens the existing lightbox at full size, and its caption jumps
+- [x] Each tile opens the existing lightbox at full size, and its caption jumps
       to the exact post in the thread.
-- [ ] Guests are redirected to `/login`; the page has an empty state.
-- [ ] No migration, no schema change, no new JavaScript, no new dependency.
-- [ ] `go test ./... -race` green.
+- [x] Guests are redirected to `/login`; the page has an empty state.
+- [x] No migration, no schema change, no new JavaScript, no new dependency.
+- [x] `go test ./... -race` green.
