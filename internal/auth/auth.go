@@ -36,20 +36,14 @@ func CheckPassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-// GenerateToken returns a fresh cryptographically random opaque token
-// (64 hex characters). It is used for session cookies and one-time login
-// links; the caller decides how to hash/store it.
-func GenerateToken() (string, error) {
+// GenerateSessionToken returns a fresh cryptographically random session
+// token (64 hex characters). It is placed in the session cookie.
+func GenerateSessionToken() (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-// GenerateSessionToken returns a fresh session token.
-func GenerateSessionToken() (string, error) {
-	return GenerateToken()
 }
 
 // TokenHash is the value stored in the sessions table for a token. Storing

@@ -41,15 +41,6 @@ type Invite struct {
 	ExpiresAt sql.NullTime
 }
 
-type LoginToken struct {
-	TokenHash string
-	UserID    int64
-	CreatedBy sql.NullInt64
-	CreatedAt time.Time
-	ExpiresAt int64
-	UsedAt    sql.NullTime
-}
-
 type Notification struct {
 	UserID      int64
 	ThreadID    int64

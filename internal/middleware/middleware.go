@@ -351,13 +351,11 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 			_ = m.queries.UpsertUserPresence(ctx, currentUser.ID)
 		}
 
-		// 3. Access Control. /auth/magic must work both signed out and signed
-		// in (an existing session can be switched to the link's account).
+		// 3. Access Control
 		isPublicRoute := path == "/login" || path == "/register"
-		isMagicRoute := path == "/auth/magic"
 
 		if currentUser == nil {
-			if isPublicRoute || isMagicRoute {
+			if isPublicRoute {
 				next.ServeHTTP(w, r)
 				return
 			}
