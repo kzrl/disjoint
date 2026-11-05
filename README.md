@@ -83,7 +83,7 @@ Open `http://localhost:8080` in your browser. All data persists in the `disjoint
 
 The image runs as UID 10001. If you bind-mount host directories instead of using the named volume, make them writable by that UID.
 
-Images are published to GHCR by CI on pushes to `master` (tag `latest`) and on `v*` tags. You can also build the repository's own compose file locally with `docker compose up -d --build`.
+Images are published to GHCR by CI on pushes to `main` (tag `latest`) and on `v*` tags. You can also build the repository's own compose file locally with `docker compose up -d --build`.
 
 ### 2. Build and Run from Source
 
