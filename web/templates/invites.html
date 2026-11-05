@@ -26,7 +26,7 @@
       <tbody>
         {{range .Invites}}
         <tr>
-          <td><code class="is-size-7">{{.Code}}</code></td>
+          <td><a href="/register?code={{.Code}}" title="Copy this link from the address bar to share"><code class="is-size-7">{{.Code}}</code></a></td>
           <td>
             {{if .UsedBy.Valid}}
               <span class="muted">Used by <strong>{{.UsedByUsername.String}}</strong></span>
