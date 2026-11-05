@@ -16,7 +16,7 @@ RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/disjoint-restore ./cmd/disjoint-restore
 
 # Stage 2: Minimal runtime image
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S -g 10001 disjoint \
