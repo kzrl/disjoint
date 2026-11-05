@@ -37,6 +37,10 @@ test:
 test-race:
 	go test -race ./...
 
+## vuln: Scan for known vulnerabilities in dependencies and called symbols
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 ## generate: Regenerate sqlc Go code from db/schema.sql and query.sql
 generate:
 	sqlc generate

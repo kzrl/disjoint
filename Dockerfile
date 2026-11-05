@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Disjoint
 # Stage 1: Build static binary
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 
 WORKDIR /src
 
@@ -32,7 +32,7 @@ COPY LICENSE /app/LICENSE
 # Create the data directory before declaring the volume. Named volumes created
 # from this image inherit these permissions, so the non-root process can write
 # the database and uploads. Bind mounts must be writable by UID 10001.
-RUN mkdir -p /data/uploads && chown -R disjoint:disjoint /data
+RUN mkdir -p /data/uploads && chmod 0750 /data/uploads && chown -R disjoint:disjoint /data
 
 ENV PORT=8080 \
     DATABASE_PATH=/data/disjoint.db \

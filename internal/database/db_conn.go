@@ -21,7 +21,9 @@ func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 		}
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", dbPath)
+	// secure_delete zeroes freed pages so expired/deleted posts are not left
+	// recoverable in the database file. WAL is checkpointed by the worker.
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=secure_delete(1)", dbPath)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open sqlite database: %w", err)

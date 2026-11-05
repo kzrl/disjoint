@@ -19,6 +19,7 @@
           <th scope="col">Invite Code</th>
           <th scope="col">Status</th>
           <th scope="col">Created</th>
+          <th scope="col">Expires</th>
           <th scope="col"><span class="is-sr-only">Actions</span></th>
         </tr>
       </thead>
@@ -29,11 +30,20 @@
           <td>
             {{if .UsedBy.Valid}}
               <span class="muted">Used by <strong>{{.UsedByUsername.String}}</strong></span>
+            {{else if and .ExpiresAt.Valid (isPast .ExpiresAt.Time)}}
+              <span class="muted">Expired</span>
             {{else}}
               <span class="has-text-success">&#x25CF; Available</span>
             {{end}}
           </td>
           <td class="is-size-7 muted"><time datetime="{{isoTime .CreatedAt.Time}}">{{formatTime .CreatedAt.Time}}</time></td>
+          <td class="is-size-7 muted">
+            {{if .ExpiresAt.Valid}}
+              <time datetime="{{isoTime .ExpiresAt.Time}}" title="{{formatTime .ExpiresAt.Time}}">{{formatRelative .ExpiresAt.Time}}</time>
+            {{else}}
+              Never
+            {{end}}
+          </td>
           <td class="has-text-right">
             {{if not .UsedBy.Valid}}
             <form method="POST" action="/invites/{{.ID}}/delete">

@@ -628,3 +628,25 @@ resolves permalinks to the page containing the post.
   - [x] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
   - [x] No migration, no new dependency
   - [ ] Review with human
+
+---
+
+# Task List: Security Hardening — DONE
+
+- [x] `/favicon.ico` auth bypass: explicit public 204 route + IndexPage defense-in-depth guard
+- [x] Upgrade `golang.org/x/image` to v0.47.0 and Go toolchain to 1.27.3; CI govulncheck + Dependabot
+- [x] 256 KB post-body cap on create/edit
+- [x] Emoji `DecodeConfig` before decode; avatar dimension/pixel validation
+- [x] Per-user 2 GiB storage quota (attachments + custom emoji) and upload/profile/search/autocomplete/reaction/password rate limits
+- [x] SQLite `secure_delete` + worker WAL checkpoint
+- [x] CSP `img-src 'self' data: blob:` blocks external tracking images; `object-src`, `base-uri`, `form-action` added
+- [x] `Cache-Control: no-store` for HTML; `private` for uploads/thumbs/avatars
+- [x] Secure flash cookies; path `Base` hardening for deletion/serving
+- [x] Reject expiration changes on expired threads; TTL bump inside the post transaction with expiry predicate
+- [x] 7-day invite expiry (migration 16)
+- [x] 7-day session idle timeout with throttled `last_used_at` touch (migration 17)
+- [x] Case-insensitive registration uniqueness
+- [x] Request logging (path only) + audit logs for admin/content/account actions
+- [x] Caddy access-log redaction for invite codes and search terms (playbook)
+- [x] Backup/security documentation updates
+- [x] `go test -race -count=1 ./...`, `go vet`, `gofmt`, `govulncheck`

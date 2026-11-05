@@ -37,18 +37,30 @@ type App struct {
 	// shared household cannot be throttled by one member and a spammer cannot
 	// rotate IPs to bypass it.
 	contentLimiter *middleware.RateLimiter
+	// uploadLimiter bounds profile/emoji uploads per user.
+	uploadLimiter *middleware.RateLimiter
+	// apiLimiter bounds search, autocomplete, and reaction requests per user.
+	apiLimiter *middleware.RateLimiter
+	// passwordLimiter bounds current-password brute force from a stolen session.
+	passwordLimiter *middleware.RateLimiter
+	// thumbLimiter bounds CPU/disk work from thumbnail requests.
+	thumbLimiter *middleware.RateLimiter
 }
 
 // NewApp instantiates an App and compiles HTML templates.
 func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, error) {
 	app := &App{
-		db:             db,
-		queries:        queries,
-		uploadDir:      uploadDir,
-		templates:      make(map[string]*template.Template),
-		middleware:     middleware.New(queries),
-		authLimiter:    middleware.NewRateLimiter(10, 15*time.Minute),
-		contentLimiter: middleware.NewRateLimiter(30, 5*time.Minute),
+		db:              db,
+		queries:         queries,
+		uploadDir:       uploadDir,
+		templates:       make(map[string]*template.Template),
+		middleware:      middleware.New(queries),
+		authLimiter:     middleware.NewRateLimiter(10, 15*time.Minute),
+		contentLimiter:  middleware.NewRateLimiter(30, 5*time.Minute),
+		uploadLimiter:   middleware.NewRateLimiter(30, 5*time.Minute),
+		apiLimiter:      middleware.NewRateLimiter(300, 5*time.Minute),
+		passwordLimiter: middleware.NewRateLimiter(5, 15*time.Minute),
+		thumbLimiter:    middleware.NewRateLimiter(1200, 5*time.Minute),
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")
@@ -119,6 +131,9 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		},
 		"isVideo": func(mimeType string) bool {
 			return strings.HasPrefix(mimeType, "video/")
+		},
+		"isPast": func(t time.Time) bool {
+			return !t.IsZero() && t.Before(time.Now())
 		},
 		"formatExpiry": func(nt sql.NullTime) string {
 			if !nt.Valid {
@@ -257,11 +272,17 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 	var flashErr, flashSucc string
 	if c, err := r.Cookie("flash_error"); err == nil && c.Value != "" {
 		flashErr = c.Value
-		http.SetCookie(w, &http.Cookie{Name: "flash_error", Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{
+			Name: "flash_error", Value: "", Path: "/", MaxAge: -1,
+			Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
+		})
 	}
 	if c, err := r.Cookie("flash_success"); err == nil && c.Value != "" {
 		flashSucc = c.Value
-		http.SetCookie(w, &http.Cookie{Name: "flash_success", Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{
+			Name: "flash_success", Value: "", Path: "/", MaxAge: -1,
+			Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
+		})
 	}
 
 	// Theme choice from the navbar toggle cookie: only the two explicit
@@ -297,6 +318,7 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 		}
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
 		http.Error(w, fmt.Sprintf("template execution error: %v", err), http.StatusInternalServerError)
@@ -306,11 +328,12 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 // setFlash sets a session-lifetime flash cookie; render() clears it on the
 // next page load, and browsers drop it on close. SameSite=Lax keeps
 // cross-origin pages from planting flash messages on a victim's next load.
-func setFlash(w http.ResponseWriter, name, value string) {
+func setFlash(w http.ResponseWriter, r *http.Request, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
+		Secure:   secureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 		HttpOnly: true,
 	})
@@ -323,8 +346,11 @@ func (app *App) Routes() http.Handler {
 	// Embedded static assets (/static/*)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(app.staticFS))))
 
-	// Liveness/readiness probe (public; see middleware.FirstRunAndAuth).
+	// Liveness/readiness probe and favicon are public (see
+	// middleware.FirstRunAndAuth). Favicon needs its own route so it cannot
+	// fall through to the authenticated GET / index handler.
 	mux.HandleFunc("GET /healthz", app.Healthz)
+	mux.HandleFunc("GET /favicon.ico", app.Favicon)
 
 	// Uploaded media files (/uploads/{filename})
 	mux.HandleFunc("GET /uploads/{filename}", app.ServeUpload)
@@ -395,5 +421,5 @@ func (app *App) Routes() http.Handler {
 
 	// Security headers go outermost so they are present on every response,
 	// including 302s, 404s, and static files.
-	return middleware.SecurityHeaders(middleware.CSRFProtect(middleware.MaxBody(app.middleware.FirstRunAndAuth(mux))))
+	return middleware.SecurityHeaders(middleware.RequestLogger(middleware.CSRFProtect(middleware.MaxBody(app.middleware.FirstRunAndAuth(mux)))))
 }

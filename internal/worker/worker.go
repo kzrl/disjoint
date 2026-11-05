@@ -73,7 +73,11 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 	// their original out the door here.
 	for _, att := range attachments {
 		if att.StoragePath != "" {
-			fullPath := filepath.Join(w.uploadDir, filepath.Clean(att.StoragePath))
+			name := filepath.Base(filepath.Clean(att.StoragePath))
+			if name == "." || name == ".." || name == "" {
+				continue
+			}
+			fullPath := filepath.Join(w.uploadDir, name)
 			if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 				log.Printf("[worker] Warning: could not delete expired attachment file %s: %v", fullPath, err)
 			}
@@ -81,8 +85,14 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 		}
 	}
 
-	// 4. Prune expired sessions. Best-effort: leftover expired rows are
-	// harmless (GetSessionUserID checks expires_at) and the next tick retries.
+	// 4. Truncate the WAL so pages zeroed by secure_delete do not linger in
+	// the write-ahead log. Busy databases simply retry on the next tick.
+	if err := w.queries.CheckpointWAL(ctx); err != nil {
+		log.Printf("[worker] Warning: could not checkpoint WAL: %v", err)
+	}
+
+	// 5. Prune expired sessions. Best-effort: leftover expired rows are
+	// harmless (GetSessionUserID checks absolute and idle expiry) and the next tick retries.
 	if err := w.queries.PruneExpiredSessions(ctx, time.Now().Unix()); err != nil {
 		log.Printf("[worker] Warning: could not prune expired sessions: %v", err)
 	}

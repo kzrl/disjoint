@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"disjoint/internal/middleware"
 )
 
 const maxMentionQueryLength = 32
@@ -26,6 +28,17 @@ type mentionSuggestionsResponse struct {
 // autocomplete. It is authenticated by the global middleware; unknown users
 // are legal mentions in the renderer, so an empty result is not an error.
 func (app *App) MentionSuggestions(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !allowUser(app.apiLimiter, user.ID) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len(q) > maxMentionQueryLength {
 		http.Error(w, "query is too long", http.StatusBadRequest)

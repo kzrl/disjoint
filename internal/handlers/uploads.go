@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -24,6 +25,10 @@ const (
 	// It is much lower than files × per-file cap so a single post cannot fill
 	// a small self-hosted disk with sixteen 50MB videos.
 	maxUploadTotalSize = 100 << 20
+	// maxUserStorageBytes bounds each user's stored attachments plus custom
+	// emoji. It is a policy limit, not a technical one; raise it if the group
+	// wants more room.
+	maxUserStorageBytes = 2 << 30 // 2 GiB
 )
 
 // allowedMIMEExtensions maps a SNIFFED content type to the extension used
@@ -64,8 +69,44 @@ type UploadedFileInfo struct {
 // Best-effort: an orphaned file is preferable to failing the request twice.
 func removeUploadedFiles(uploadDir string, files []UploadedFileInfo) {
 	for _, f := range files {
-		_ = os.Remove(filepath.Join(uploadDir, f.StoragePath))
+		name := filepath.Base(f.StoragePath)
+		if name == "." || name == ".." || name == "" {
+			continue
+		}
+		_ = os.Remove(filepath.Join(uploadDir, name))
 	}
+}
+
+// uploadFieldBytes totals the declared sizes of one multipart file field.
+func uploadFieldBytes(r *http.Request, field string) int64 {
+	if r.MultipartForm == nil {
+		return 0
+	}
+	var total int64
+	for _, header := range r.MultipartForm.File[field] {
+		if header.Size > 0 {
+			total += header.Size
+		}
+	}
+	return total
+}
+
+// checkStorageQuota rejects an upload that would put the user over their
+// stored-bytes budget. It runs before files are written; concurrent uploads
+// can race past it by one request, which is acceptable for a friend-group
+// quota.
+func (app *App) checkStorageQuota(ctx context.Context, userID, incoming int64) error {
+	if incoming <= 0 {
+		return nil
+	}
+	current, err := app.queries.SumUserStorageBytes(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check storage quota")
+	}
+	if current+incoming > maxUserStorageBytes {
+		return fmt.Errorf("storage quota exceeded (max %d GB per user)", maxUserStorageBytes>>30)
+	}
+	return nil
 }
 
 // saveUploadedFiles validates and saves uploaded files into uploadDir.
@@ -79,7 +120,7 @@ func saveUploadedFiles(r *http.Request, uploadDir string) ([]UploadedFileInfo, e
 		return nil, nil
 	}
 
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
@@ -157,7 +198,7 @@ func saveSingleFile(header *multipart.FileHeader, uploadDir string) (UploadedFil
 	uniqueName := fmt.Sprintf("%s%s", uuid.New().String(), storedExt)
 	targetPath := filepath.Join(uploadDir, uniqueName)
 
-	dst, err := os.Create(targetPath)
+	dst, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return UploadedFileInfo{}, err
 	}
@@ -185,8 +226,13 @@ func (app *App) ServeUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent directory traversal
+	// Prevent directory traversal and require the route value to be exactly
+	// one file name (the same identity check ServeThumb uses).
 	cleanName := filepath.Base(filepath.Clean(filename))
+	if cleanName == "" || cleanName == "." || cleanName == ".." || cleanName != filename {
+		http.NotFound(w, r)
+		return
+	}
 	filePath := filepath.Join(app.uploadDir, cleanName)
 
 	stat, err := os.Stat(filePath)
@@ -220,6 +266,6 @@ func (app *App) ServeUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cache control for static media
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeContent(w, r, cleanName, stat.ModTime(), file)
 }

@@ -16,6 +16,12 @@ INSERT INTO users (
 SELECT * FROM users
 WHERE username = ? LIMIT 1;
 
+-- name: GetUserByUsernameFold :one
+-- Case-insensitive lookup used only for registration uniqueness. Login stays
+-- case-sensitive (usernames are exact), but new case-only near-duplicates are
+-- rejected to avoid impersonation.
+SELECT * FROM users WHERE username = ? COLLATE NOCASE LIMIT 1;
+
 -- name: GetUserByID :one
 SELECT * FROM users
 WHERE id = ? LIMIT 1;
@@ -160,14 +166,18 @@ INSERT INTO threads (
     ?, ?, ?, ?
 ) RETURNING *;
 
--- name: BumpThreadExpiration :exec
--- Called after every new post: advances updated_at and, for TTL threads,
--- pushes the expiry deadline out to last-comment + ttl (computed in Go).
--- Never-threads pass a NULL expires_at and stay NULL.
+-- name: BumpThreadExpiration :execrows
+-- Called inside the post transaction: advances updated_at and, for TTL
+-- threads, pushes the expiry deadline out to last-comment + ttl (computed in
+-- Go). The expiry predicate closes the race with the worker: a thread that
+-- expired between the handler check and this UPDATE is not revived, and the
+-- caller rolls the post back. Never-threads pass a NULL expires_at and stay
+-- NULL.
 UPDATE threads
 SET updated_at = CURRENT_TIMESTAMP,
     expires_at = ?
-WHERE id = ?;
+WHERE id = ?
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP);
 
 -- name: SetThreadExpiration :execrows
 -- Author-only lifespan change. expires_at is reset to the caller-computed
@@ -323,6 +333,23 @@ SELECT * FROM attachments WHERE post_id = ? ORDER BY id ASC;
 -- Attachments for one rendered thread page in a single round trip.
 SELECT * FROM attachments WHERE post_id IN (sqlc.slice('postIds')) ORDER BY id ASC;
 
+-- name: SumUserStorageBytes :one
+-- Per-user storage accounting for attachments plus custom emoji. Avatars are
+-- replaced in place and are not tracked by bytes here; their size/rate limits
+-- are enforced at upload time.
+SELECT
+    COALESCE((
+        SELECT SUM(a.file_size)
+        FROM attachments a
+        JOIN posts p ON p.id = a.post_id
+        WHERE p.user_id = sqlc.arg('user_id')
+    ), 0)
+    + COALESCE((
+        SELECT SUM(e.file_size)
+        FROM emojis e
+        WHERE e.created_by = sqlc.arg('user_id')
+    ), 0) AS total_bytes;
+
 -- name: CountAttachmentsByPostID :one
 -- Used by the edit handler: a post that carries attachments may be saved
 -- with an empty body and link (the attachments still satisfy the content
@@ -358,15 +385,23 @@ ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
 LIMIT 10;
 
 -- name: CreateInvite :one
-INSERT INTO invites (code, created_by) VALUES (?, ?) RETURNING *;
+-- New invites expire after seven days. Existing invites with a NULL
+-- expires_at remain valid indefinitely.
+INSERT INTO invites (code, created_by, expires_at)
+VALUES (?, ?, datetime('now', '+7 days')) RETURNING *;
 
 -- name: GetInviteByCode :one
-SELECT * FROM invites WHERE code = ? AND used_by IS NULL LIMIT 1;
+SELECT * FROM invites
+WHERE code = ? AND used_by IS NULL
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+LIMIT 1;
 
 -- name: ConsumeInvite :execrows
 -- Returns the number of rows updated: 0 means the invite was already
 -- used (or deleted) by a concurrent request.
-UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL;
+UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
+WHERE code = ? AND used_by IS NULL
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP);
 
 -- name: ListInvites :many
 SELECT
@@ -376,6 +411,7 @@ SELECT
     i.used_by,
     i.created_at,
     i.used_at,
+    i.expires_at,
     cu.username AS creator_username,
     uu.username AS used_by_username
 FROM invites i
@@ -446,10 +482,21 @@ UPDATE users SET avatar_path = NULL WHERE id = ?;
 UPDATE users SET avatar_nonce = ? WHERE id = ?;
 
 -- name: CreateSession :exec
-INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?);
+INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at)
+VALUES (?, ?, ?, strftime('%s', 'now'));
 
 -- name: GetSessionUserID :one
-SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?;
+-- Absolute expiry plus idle timeout. last_used_at is touched at most every
+-- five minutes by TouchSession.
+SELECT user_id FROM sessions
+WHERE token_hash = ? AND expires_at > ?
+  AND (last_used_at IS NULL OR last_used_at > sqlc.arg('idle_cutoff'));
+
+-- name: TouchSession :exec
+UPDATE sessions
+SET last_used_at = strftime('%s', 'now')
+WHERE token_hash = ?
+  AND (last_used_at IS NULL OR last_used_at < strftime('%s', 'now') - 300);
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = ?;

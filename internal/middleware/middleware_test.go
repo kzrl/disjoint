@@ -138,7 +138,7 @@ func TestSecurityHeadersSetOnAllResponses(t *testing.T) {
 
 	want := map[string]string{
 		"X-Frame-Options":         "DENY",
-		"Content-Security-Policy": "frame-ancestors 'none'",
+		"Content-Security-Policy": "frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "same-origin",
 	}

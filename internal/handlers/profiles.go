@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"image"
 	"io"
 	"math/big"
 	"net/http"
@@ -17,11 +18,14 @@ import (
 	"disjoint/internal/database"
 	"disjoint/internal/middleware"
 	"github.com/google/uuid"
+	_ "golang.org/x/image/webp"
 )
 
 const (
-	maxBioLength  = 500
-	maxAvatarSize = 5 * 1024 * 1024 // 5MB
+	maxBioLength       = 500
+	maxAvatarSize      = 5 * 1024 * 1024 // 5MB
+	maxAvatarDimension = 4096
+	maxAvatarPixels    = 16_000_000
 )
 
 // allowedAvatarMIMETypes maps a sniffed content type to its file extension.
@@ -71,23 +75,32 @@ func (app *App) UserCardPage(w http.ResponseWriter, r *http.Request) {
 func (app *App) UpdateProfileSubmit(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	viewer := middleware.UserFromContext(ctx)
+	if viewer == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if !allowUser(app.uploadLimiter, viewer.ID) {
+		setFlash(w, r, "flash_error", "You are updating your profile too fast. Try again in a few minutes.")
+		http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
+		return
+	}
 
 	// Support both urlencoded (bio-only) and multipart (avatar upload) forms.
 	if err := r.ParseMultipartForm(10 << 20); err != nil && err != http.ErrNotMultipart {
-		setFlash(w, "flash_error", "Failed to parse form: "+err.Error())
+		setFlash(w, r, "flash_error", "Failed to parse form: "+err.Error())
 		http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
 		return
 	}
 
 	bio := strings.TrimSpace(r.FormValue("bio"))
 	if len(bio) > maxBioLength {
-		setFlash(w, "flash_error", "Bio must be at most 500 characters.")
+		setFlash(w, r, "flash_error", "Bio must be at most 500 characters.")
 		http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
 		return
 	}
 
 	if err := app.processAvatarUpload(ctx, r, viewer); err != nil {
-		setFlash(w, "flash_error", err.Error())
+		setFlash(w, r, "flash_error", err.Error())
 		http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
 		return
 	}
@@ -118,7 +131,7 @@ func (app *App) UpdateProfileSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setFlash(w, "flash_success", "Profile saved.")
+	setFlash(w, r, "flash_success", "Profile saved.")
 	http.Redirect(w, r, "/users/"+url.PathEscape(viewer.Username), http.StatusSeeOther)
 }
 
@@ -150,6 +163,9 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 	if header.Size > maxAvatarSize {
 		return fmt.Errorf("avatar exceeds maximum allowed size of 5MB")
 	}
+	if err := app.checkStorageQuota(ctx, user.ID, header.Size); err != nil {
+		return err
+	}
 
 	// Sniff the actual content instead of trusting the browser header,
 	// so a renamed .txt/.gif cannot masquerade as an avatar.
@@ -175,13 +191,29 @@ func (app *App) processAvatarUpload(ctx context.Context, r *http.Request, user *
 		return fmt.Errorf("avatar upload failed")
 	}
 
-	if err := os.MkdirAll(app.uploadDir, 0o755); err != nil {
+	// Validate dimensions from the header before accepting the file. Without
+	// this, a small compressed image with enormous dimensions is decoded by
+	// every viewer's browser on every post page.
+	cfg, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return fmt.Errorf("avatar is not a valid image")
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 ||
+		cfg.Width > maxAvatarDimension || cfg.Height > maxAvatarDimension ||
+		int64(cfg.Width)*int64(cfg.Height) > maxAvatarPixels {
+		return fmt.Errorf("avatar dimensions are too large (max %dx%d, %d megapixels)", maxAvatarDimension, maxAvatarDimension, maxAvatarPixels/1_000_000)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("avatar upload failed")
+	}
+
+	if err := os.MkdirAll(app.uploadDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create upload directory")
 	}
 
 	storageName := fmt.Sprintf("avatar-%s%s", uuid.New().String(), ext)
 	targetPath := filepath.Join(app.uploadDir, storageName)
-	dst, err := os.Create(targetPath)
+	dst, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to save avatar")
 	}

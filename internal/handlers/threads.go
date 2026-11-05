@@ -85,7 +85,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 
 	// Parse multipart form (maxUploadSize of in-memory form data)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		setFlash(w, "flash_error", "Failed to parse upload form: "+err.Error())
+		setFlash(w, r, "flash_error", "Failed to parse upload form: "+err.Error())
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
@@ -94,11 +94,17 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	body := strings.TrimSpace(r.FormValue("body"))
 	expiration := r.FormValue("expiration")
 	postURL, urlErr := cleanPostURL(r.FormValue("url"))
+	bodyTooLong := len(body) > maxPostBodyBytes
+	if err := app.checkStorageQuota(ctx, user.ID, uploadFieldBytes(r, "files")); err != nil {
+		setFlash(w, r, "flash_error", err.Error())
+		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
+		return
+	}
 
 	// Save any uploaded files to disk
 	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
 	if err != nil {
-		setFlash(w, "flash_error", "Error uploading files: "+err.Error())
+		setFlash(w, r, "flash_error", "Error uploading files: "+err.Error())
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
@@ -106,12 +112,14 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	// A thread needs a title, and a first post with a body OR at least
 	// one attachment OR a first-class link (image-only and link-only
 	// posts are both allowed).
-	if urlErr != nil || title == "" || (body == "" && postURL == "" && len(uploadedFiles) == 0) {
+	if bodyTooLong || urlErr != nil || title == "" || (body == "" && postURL == "" && len(uploadedFiles) == 0) {
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
-		if urlErr != nil {
-			setFlash(w, "flash_error", "Invalid link: "+urlErr.Error())
+		if bodyTooLong {
+			setFlash(w, r, "flash_error", "Post body is too long (max 256 KB).")
+		} else if urlErr != nil {
+			setFlash(w, r, "flash_error", "Invalid link: "+urlErr.Error())
 		} else {
-			setFlash(w, "flash_error", "Title and post content (text, a link, or an attachment) are required.")
+			setFlash(w, r, "flash_error", "Title and post content (text, a link, or an attachment) are required.")
 		}
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
@@ -132,7 +140,7 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	tx, err := app.db.BeginTx(ctx, nil)
 	if err != nil {
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
-		setFlash(w, "flash_error", "Failed to create thread.")
+		setFlash(w, r, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
@@ -184,13 +192,13 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		tx.Rollback()
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
-		setFlash(w, "flash_error", "Failed to create thread.")
+		setFlash(w, r, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
-		setFlash(w, "flash_error", "Failed to create thread.")
+		setFlash(w, r, "flash_error", "Failed to create thread.")
 		http.Redirect(w, r, "/threads/new", http.StatusSeeOther)
 		return
 	}
@@ -235,21 +243,25 @@ func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
+	if thread.ExpiresAt.Valid && thread.ExpiresAt.Time.Before(time.Now().UTC()) {
+		http.Error(w, "this thread has expired", http.StatusGone)
+		return
+	}
 
 	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		setFlash(w, "flash_error", "Thread title is required.")
+		setFlash(w, r, "flash_error", "Thread title is required.")
 		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 	if len(title) > maxThreadTitleLength {
-		setFlash(w, "flash_error", fmt.Sprintf("Title is too long (max %d characters).", maxThreadTitleLength))
+		setFlash(w, r, "flash_error", fmt.Sprintf("Title is too long (max %d characters).", maxThreadTitleLength))
 		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 
 	if title == thread.Title {
-		setFlash(w, "flash_success", "No changes to save.")
+		setFlash(w, r, "flash_success", "No changes to save.")
 		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
@@ -268,7 +280,7 @@ func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	setFlash(w, "flash_success", "Title updated.")
+	setFlash(w, r, "flash_success", "Title updated.")
 	http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 }
 
@@ -311,11 +323,17 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 		http.NotFound(w, r)
 		return
 	}
+	// Expired threads must not be revived: apart from violating the TTL
+	// contract, a concurrent worker purge may already be deleting its files.
+	if thread.ExpiresAt.Valid && thread.ExpiresAt.Time.Before(time.Now().UTC()) {
+		http.Error(w, "this thread has expired", http.StatusGone)
+		return
+	}
 
 	choice := r.FormValue("expiration")
 	duration, hasTTL := expirationToTTL(choice) // "never" and unknown both report false
 	if choice != "never" && !hasTTL {
-		setFlash(w, "flash_error", "Unknown lifespan.")
+		setFlash(w, r, "flash_error", "Unknown lifespan.")
 		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
@@ -325,7 +343,7 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 	currentIsNever := !thread.TtlSeconds.Valid
 	if (currentIsNever && choice == "never") ||
 		(!currentIsNever && hasTTL && int64(duration.Seconds()) == thread.TtlSeconds.Int64) {
-		setFlash(w, "flash_success", "No changes to save.")
+		setFlash(w, r, "flash_success", "No changes to save.")
 		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
@@ -352,7 +370,7 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	setFlash(w, "flash_success", "Expiration updated.")
+	setFlash(w, r, "flash_success", "Expiration updated.")
 	http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 }
 

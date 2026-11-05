@@ -34,11 +34,12 @@ func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (int64
 	return result.RowsAffected()
 }
 
-const bumpThreadExpiration = `-- name: BumpThreadExpiration :exec
+const bumpThreadExpiration = `-- name: BumpThreadExpiration :execrows
 UPDATE threads
 SET updated_at = CURRENT_TIMESTAMP,
     expires_at = ?
 WHERE id = ?
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
 `
 
 type BumpThreadExpirationParams struct {
@@ -46,16 +47,24 @@ type BumpThreadExpirationParams struct {
 	ID        int64
 }
 
-// Called after every new post: advances updated_at and, for TTL threads,
-// pushes the expiry deadline out to last-comment + ttl (computed in Go).
-// Never-threads pass a NULL expires_at and stay NULL.
-func (q *Queries) BumpThreadExpiration(ctx context.Context, arg BumpThreadExpirationParams) error {
-	_, err := q.db.ExecContext(ctx, bumpThreadExpiration, arg.ExpiresAt, arg.ID)
-	return err
+// Called inside the post transaction: advances updated_at and, for TTL
+// threads, pushes the expiry deadline out to last-comment + ttl (computed in
+// Go). The expiry predicate closes the race with the worker: a thread that
+// expired between the handler check and this UPDATE is not revived, and the
+// caller rolls the post back. Never-threads pass a NULL expires_at and stay
+// NULL.
+func (q *Queries) BumpThreadExpiration(ctx context.Context, arg BumpThreadExpirationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bumpThreadExpiration, arg.ExpiresAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const consumeInvite = `-- name: ConsumeInvite :execrows
-UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL
+UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
+WHERE code = ? AND used_by IS NULL
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
 `
 
 type ConsumeInviteParams struct {
@@ -248,7 +257,8 @@ func (q *Queries) CreateEmoji(ctx context.Context, arg CreateEmojiParams) (Emoji
 }
 
 const createInvite = `-- name: CreateInvite :one
-INSERT INTO invites (code, created_by) VALUES (?, ?) RETURNING id, code, created_by, used_by, created_at, used_at
+INSERT INTO invites (code, created_by, expires_at)
+VALUES (?, ?, datetime('now', '+7 days')) RETURNING id, code, created_by, used_by, created_at, used_at, expires_at
 `
 
 type CreateInviteParams struct {
@@ -256,6 +266,8 @@ type CreateInviteParams struct {
 	CreatedBy int64
 }
 
+// New invites expire after seven days. Existing invites with a NULL
+// expires_at remain valid indefinitely.
 func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Invite, error) {
 	row := q.db.QueryRowContext(ctx, createInvite, arg.Code, arg.CreatedBy)
 	var i Invite
@@ -266,6 +278,7 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 		&i.UsedBy,
 		&i.CreatedAt,
 		&i.UsedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -311,7 +324,8 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)
+INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at)
+VALUES (?, ?, ?, strftime('%s', 'now'))
 `
 
 type CreateSessionParams struct {
@@ -576,7 +590,10 @@ func (q *Queries) GetFirstPostIDByThreadID(ctx context.Context, threadID int64) 
 }
 
 const getInviteByCode = `-- name: GetInviteByCode :one
-SELECT id, code, created_by, used_by, created_at, used_at FROM invites WHERE code = ? AND used_by IS NULL LIMIT 1
+SELECT id, code, created_by, used_by, created_at, used_at, expires_at FROM invites
+WHERE code = ? AND used_by IS NULL
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+LIMIT 1
 `
 
 func (q *Queries) GetInviteByCode(ctx context.Context, code string) (Invite, error) {
@@ -589,6 +606,7 @@ func (q *Queries) GetInviteByCode(ctx context.Context, code string) (Invite, err
 		&i.UsedBy,
 		&i.CreatedAt,
 		&i.UsedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -642,16 +660,21 @@ func (q *Queries) GetPostByID(ctx context.Context, id int64) (GetPostByIDRow, er
 }
 
 const getSessionUserID = `-- name: GetSessionUserID :one
-SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?
+SELECT user_id FROM sessions
+WHERE token_hash = ? AND expires_at > ?
+  AND (last_used_at IS NULL OR last_used_at > ?3)
 `
 
 type GetSessionUserIDParams struct {
-	TokenHash string
-	ExpiresAt int64
+	TokenHash  string
+	ExpiresAt  int64
+	IdleCutoff sql.NullInt64
 }
 
+// Absolute expiry plus idle timeout. last_used_at is touched at most every
+// five minutes by TouchSession.
 func (q *Queries) GetSessionUserID(ctx context.Context, arg GetSessionUserIDParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getSessionUserID, arg.TokenHash, arg.ExpiresAt)
+	row := q.db.QueryRowContext(ctx, getSessionUserID, arg.TokenHash, arg.ExpiresAt, arg.IdleCutoff)
 	var user_id int64
 	err := row.Scan(&user_id)
 	return user_id, err
@@ -734,6 +757,29 @@ WHERE username = ? LIMIT 1
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
 	row := q.db.QueryRowContext(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.CreatedAt,
+		&i.Bio,
+		&i.AvatarPath,
+		&i.AvatarNonce,
+	)
+	return i, err
+}
+
+const getUserByUsernameFold = `-- name: GetUserByUsernameFold :one
+SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users WHERE username = ? COLLATE NOCASE LIMIT 1
+`
+
+// Case-insensitive lookup used only for registration uniqueness. Login stays
+// case-sensitive (usernames are exact), but new case-only near-duplicates are
+// rejected to avoid impersonation.
+func (q *Queries) GetUserByUsernameFold(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByUsernameFold, username)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -1251,6 +1297,7 @@ SELECT
     i.used_by,
     i.created_at,
     i.used_at,
+    i.expires_at,
     cu.username AS creator_username,
     uu.username AS used_by_username
 FROM invites i
@@ -1266,6 +1313,7 @@ type ListInvitesRow struct {
 	UsedBy          sql.NullInt64
 	CreatedAt       sql.NullTime
 	UsedAt          sql.NullTime
+	ExpiresAt       sql.NullTime
 	CreatorUsername string
 	UsedByUsername  sql.NullString
 }
@@ -1286,6 +1334,7 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 			&i.UsedBy,
 			&i.CreatedAt,
 			&i.UsedAt,
+			&i.ExpiresAt,
 			&i.CreatorUsername,
 			&i.UsedByUsername,
 		); err != nil {
@@ -2200,6 +2249,43 @@ type SetUserAvatarNonceParams struct {
 
 func (q *Queries) SetUserAvatarNonce(ctx context.Context, arg SetUserAvatarNonceParams) error {
 	_, err := q.db.ExecContext(ctx, setUserAvatarNonce, arg.AvatarNonce, arg.ID)
+	return err
+}
+
+const sumUserStorageBytes = `-- name: SumUserStorageBytes :one
+SELECT
+    COALESCE((
+        SELECT SUM(a.file_size)
+        FROM attachments a
+        JOIN posts p ON p.id = a.post_id
+        WHERE p.user_id = ?1
+    ), 0)
+    + COALESCE((
+        SELECT SUM(e.file_size)
+        FROM emojis e
+        WHERE e.created_by = ?1
+    ), 0) AS total_bytes
+`
+
+// Per-user storage accounting for attachments plus custom emoji. Avatars are
+// replaced in place and are not tracked by bytes here; their size/rate limits
+// are enforced at upload time.
+func (q *Queries) SumUserStorageBytes(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, sumUserStorageBytes, userID)
+	var total_bytes int64
+	err := row.Scan(&total_bytes)
+	return total_bytes, err
+}
+
+const touchSession = `-- name: TouchSession :exec
+UPDATE sessions
+SET last_used_at = strftime('%s', 'now')
+WHERE token_hash = ?
+  AND (last_used_at IS NULL OR last_used_at < strftime('%s', 'now') - 300)
+`
+
+func (q *Queries) TouchSession(ctx context.Context, tokenHash string) error {
+	_, err := q.db.ExecContext(ctx, touchSession, tokenHash)
 	return err
 }
 

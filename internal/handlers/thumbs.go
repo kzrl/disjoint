@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"disjoint/internal/middleware"
 	"disjoint/internal/thumbs"
 )
 
@@ -17,6 +18,13 @@ import (
 // sources already narrower than the request, undecodable or oversized files —
 // is served as the original by thumbs.Ensure: a heavy image beats a broken one.
 func (app *App) ServeThumb(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user != nil && !allowUser(app.thumbLimiter, user.ID) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "too many thumbnail requests", http.StatusTooManyRequests)
+		return
+	}
+
 	raw := r.PathValue("filename")
 	name := filepath.Base(filepath.Clean(raw))
 	if name == "" || name == "." || name == ".." || name != raw {
@@ -42,9 +50,9 @@ func (app *App) ServeThumb(w http.ResponseWriter, r *http.Request) {
 	if derivative {
 		// The cache key includes the source UUID, the width, and the renderer
 		// version, so a derivative's bytes can never change.
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
 	}
 	http.ServeFile(w, r, path)
 }

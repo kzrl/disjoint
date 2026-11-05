@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
 	"image/gif"
+	"image/jpeg"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -492,8 +494,8 @@ func TestThreadCreationAndHTMXReply(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected media serving to return 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Header().Get("Cache-Control"), "public") {
-		t.Fatalf("expected Cache-Control header on served upload")
+	if !strings.Contains(rr.Header().Get("Cache-Control"), "private") {
+		t.Fatalf("expected private Cache-Control header on served upload")
 	}
 }
 
@@ -1589,7 +1591,8 @@ func TestUserAvatarUploads(t *testing.T) {
 	}
 
 	// 1. PNG upload succeeds; file lands in uploadDir; card shows the avatar.
-	body, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", pngBytes)
+	avatarPNG := realPNG(t, 2, 2)
+	body, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", avatarPNG)
 	rr := submitProfile(body, ctype)
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 after avatar upload, got %d", rr.Code)
@@ -1616,18 +1619,23 @@ func TestUserAvatarUploads(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 serving avatar, got %d", rr.Code)
 	}
-	if !bytes.Equal(rr.Body.Bytes(), pngBytes) {
+	if !bytes.Equal(rr.Body.Bytes(), avatarPNG) {
 		t.Errorf("served avatar bytes differ from uploaded bytes")
 	}
 
 	// 3. JPEG and WEBP uploads replace the previous avatar; old file is removed.
+	avatarJPEG := realJPEG(t, 2, 2)
+	avatarWebP, err := base64.StdEncoding.DecodeString("UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAgA0JaACdLoB+AADsAD+8MQL/yC5YXXI1/8gP+QH/ID/+PIAAAA=")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name string
 		b    []byte
 		ext  string
 	}{
-		{"me.jpg", jpgBytes, ".jpg"},
-		{"me.webp", webpBytes, ".webp"},
+		{"me.jpg", avatarJPEG, ".jpg"},
+		{"me.webp", avatarWebP, ".webp"},
 	} {
 		body, ctype = profileMultipart(t, map[string]string{"bio": "hi"}, tc.name, tc.b)
 		rr = submitProfile(body, ctype)
@@ -1782,8 +1790,8 @@ func TestDefaultPixelAvatars(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "image/svg+xml" {
 		t.Errorf("Content-Type = %q, want image/svg+xml", ct)
 	}
-	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "public") || !strings.Contains(cc, "max-age=86400") {
-		t.Errorf("Cache-Control = %q, want public max-age=86400", cc)
+	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "private") || !strings.Contains(cc, "max-age=86400") {
+		t.Errorf("Cache-Control = %q, want private max-age=86400", cc)
 	}
 	body := rr.Body.String()
 	if !strings.HasPrefix(body, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"`) {
@@ -1883,7 +1891,7 @@ func TestDefaultPixelAvatars(t *testing.T) {
 	}
 
 	// 6. After an upload the route 302s to the uploaded file.
-	bodyBuf, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", pngBytes)
+	bodyBuf, ctype := profileMultipart(t, map[string]string{"bio": "hi"}, "me.png", realPNG(t, 2, 2))
 	req = httptest.NewRequest(http.MethodPost, "/users/me/profile", bodyBuf)
 	req.Header.Set("Content-Type", ctype)
 	req.AddCookie(cookie)
@@ -2213,7 +2221,7 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	want := map[string]string{
 		"X-Frame-Options":         "DENY",
-		"Content-Security-Policy": "frame-ancestors 'none'",
+		"Content-Security-Policy": "frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "same-origin",
 	}
@@ -2240,6 +2248,15 @@ func realGIF(t *testing.T, w, h int) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := gif.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func realJPEG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()

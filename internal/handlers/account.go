@@ -26,12 +26,18 @@ func (app *App) ChangePasswordSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !allowUser(app.passwordLimiter, user.ID) {
+		setFlash(w, r, "flash_error", "Too many password attempts. Try again in a few minutes.")
+		http.Redirect(w, r, "/account", http.StatusSeeOther)
+		return
+	}
+
 	current := r.FormValue("current_password")
 	newPassword := r.FormValue("new_password")
 	confirm := r.FormValue("confirm_password")
 
 	fail := func(message string) {
-		setFlash(w, "flash_error", message)
+		setFlash(w, r, "flash_error", message)
 		http.Redirect(w, r, "/account", http.StatusSeeOther)
 	}
 
@@ -69,13 +75,14 @@ func (app *App) ChangePasswordSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit(r, user.ID, "change_password", user.ID)
 	if err := app.queries.DeleteSessionsForUser(ctx, user.ID); err != nil {
 		http.Error(w, "password changed, but failed to revoke sessions", http.StatusInternalServerError)
 		return
 	}
 	auth.ClearSessionCookie(w, secureCookie(r))
 
-	setFlash(w, "flash_success", "Password changed. Sign in again on every device.")
+	setFlash(w, r, "flash_success", "Password changed. Sign in again on every device.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -94,8 +101,9 @@ func (app *App) SignOutEverywhereSubmit(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "failed to revoke sessions", http.StatusInternalServerError)
 		return
 	}
+	audit(r, user.ID, "sign_out_everywhere", user.ID)
 	auth.ClearSessionCookie(w, secureCookie(r))
 
-	setFlash(w, "flash_success", "Signed out everywhere.")
+	setFlash(w, r, "flash_success", "Signed out everywhere.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

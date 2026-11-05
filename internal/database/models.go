@@ -38,6 +38,7 @@ type Invite struct {
 	UsedBy    sql.NullInt64
 	CreatedAt sql.NullTime
 	UsedAt    sql.NullTime
+	ExpiresAt sql.NullTime
 }
 
 type Notification struct {
@@ -68,10 +69,11 @@ type Reaction struct {
 }
 
 type Session struct {
-	TokenHash string
-	UserID    int64
-	CreatedAt time.Time
-	ExpiresAt int64
+	TokenHash  string
+	UserID     int64
+	CreatedAt  time.Time
+	ExpiresAt  int64
+	LastUsedAt sql.NullInt64
 }
 
 type Thread struct {

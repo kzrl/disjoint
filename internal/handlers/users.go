@@ -13,7 +13,7 @@ func (app *App) UsersPage(w http.ResponseWriter, r *http.Request) {
 
 	users, err := app.queries.ListUsers(r.Context())
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to load users")
+		setFlash(w, r, "flash_error", "Failed to load users")
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
@@ -32,16 +32,17 @@ func (app *App) PromoteUserSubmit(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		setFlash(w, "flash_error", "Invalid user ID")
+		setFlash(w, r, "flash_error", "Invalid user ID")
 		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 		return
 	}
 
 	err = app.queries.SetUserAdmin(r.Context(), id)
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to promote user")
+		setFlash(w, r, "flash_error", "Failed to promote user")
 	} else {
-		setFlash(w, "flash_success", "User promoted to admin")
+		audit(r, user.ID, "promote_user", id)
+		setFlash(w, r, "flash_success", "User promoted to admin")
 	}
 
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
@@ -56,22 +57,23 @@ func (app *App) DemoteUserSubmit(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		setFlash(w, "flash_error", "Invalid user ID")
+		setFlash(w, r, "flash_error", "Invalid user ID")
 		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 		return
 	}
 
 	if id == user.ID {
-		setFlash(w, "flash_error", "You cannot revoke your own admin privileges")
+		setFlash(w, r, "flash_error", "You cannot revoke your own admin privileges")
 		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 		return
 	}
 
 	err = app.queries.RemoveUserAdmin(r.Context(), id)
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to revoke admin")
+		setFlash(w, r, "flash_error", "Failed to revoke admin")
 	} else {
-		setFlash(w, "flash_success", "Admin privileges revoked")
+		audit(r, user.ID, "demote_user", id)
+		setFlash(w, r, "flash_success", "Admin privileges revoked")
 	}
 
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)

@@ -23,7 +23,11 @@ func (app *App) removeAttachmentFiles(attachments []database.Attachment) {
 		if att.StoragePath == "" {
 			continue
 		}
-		fullPath := filepath.Join(app.uploadDir, filepath.Clean(att.StoragePath))
+		name := filepath.Base(filepath.Clean(att.StoragePath))
+		if name == "." || name == ".." || name == "" {
+			continue
+		}
+		fullPath := filepath.Join(app.uploadDir, name)
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[handlers] Warning: could not delete attachment file %s: %v", fullPath, err)
 		}
@@ -75,8 +79,9 @@ func (app *App) DeleteThreadSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete thread", http.StatusInternalServerError)
 		return
 	}
+	audit(r, user.ID, "delete_thread", thread.ID)
 
-	setFlash(w, "flash_success", "Thread deleted.")
+	setFlash(w, r, "flash_success", "Thread deleted.")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -127,7 +132,8 @@ func (app *App) DeletePostSubmit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to delete thread", http.StatusInternalServerError)
 			return
 		}
-		setFlash(w, "flash_success", "Thread deleted.")
+		audit(r, user.ID, "delete_thread", thread.ID)
+		setFlash(w, r, "flash_success", "Thread deleted.")
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
@@ -153,7 +159,8 @@ func (app *App) DeletePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.removeAttachmentFiles(attachments)
+	audit(r, user.ID, "delete_post", post.ID)
 
-	setFlash(w, "flash_success", "Post deleted.")
+	setFlash(w, r, "flash_success", "Post deleted.")
 	http.Redirect(w, r, fmt.Sprintf("/threads/%d?page=%d", post.ThreadID, targetPage), http.StatusSeeOther)
 }

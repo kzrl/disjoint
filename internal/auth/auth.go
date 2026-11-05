@@ -12,8 +12,12 @@ import (
 
 const (
 	SessionCookieName = "disjoint_session"
-	// SessionDuration is how long a login stays valid.
+	// SessionDuration is the absolute maximum lifetime of a login.
 	SessionDuration = 30 * 24 * time.Hour
+	// SessionIdleTimeout is how long a session may go unused before it stops
+	// authenticating. The row remains until the absolute expiry, but the
+	// middleware rejects it after this cutoff.
+	SessionIdleTimeout = 7 * 24 * time.Hour
 	// sessionTokenBytes is the entropy of a session token (256 bits).
 	sessionTokenBytes = 32
 )

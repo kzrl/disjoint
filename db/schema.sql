@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS invites (
     used_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     used_at DATETIME,
+    expires_at DATETIME,
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
 );
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id INTEGER NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at INTEGER NOT NULL,
+    last_used_at INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 

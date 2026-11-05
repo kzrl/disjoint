@@ -239,7 +239,7 @@ func Restore(fromDir, dbPath, uploadDir string, force bool) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(uploadDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(uploadDir), 0o750); err != nil {
 		return err
 	}
 
@@ -255,7 +255,7 @@ func Restore(fromDir, dbPath, uploadDir string, force bool) error {
 	if err := extractUploads(srcUploads, tmpUploads); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpUploads, 0o755); err != nil {
+	if err := os.Chmod(tmpUploads, 0o750); err != nil {
 		return err
 	}
 
@@ -367,11 +367,11 @@ func extractUploads(archive, dest string) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return err
 			}
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode)&0o777)

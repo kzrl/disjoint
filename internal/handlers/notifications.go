@@ -92,12 +92,12 @@ func (app *App) MarkInboxReadSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := app.queries.MarkAllNotificationsRead(r.Context(), user.ID); err != nil {
-		setFlash(w, "flash_error", "Could not mark the inbox read.")
+		setFlash(w, r, "flash_error", "Could not mark the inbox read.")
 		http.Redirect(w, r, "/inbox", http.StatusSeeOther)
 		return
 	}
 
-	setFlash(w, "flash_success", "Inbox cleared.")
+	setFlash(w, r, "flash_success", "Inbox cleared.")
 	http.Redirect(w, r, "/inbox", http.StatusSeeOther)
 }
 

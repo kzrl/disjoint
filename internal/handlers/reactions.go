@@ -105,8 +105,13 @@ func (app *App) ToggleReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := app.queries.GetPostByID(ctx, postID); err != nil {
+	post, err := app.queries.GetPostByID(ctx, postID)
+	if err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !allowUser(app.apiLimiter, user.ID) {
+		rejectRateLimit(w, r, "/threads/"+strconv.FormatInt(post.ThreadID, 10), "You are reacting too fast. Try again in a few minutes.")
 		return
 	}
 	if _, err := app.queries.GetEmojiByID(ctx, emojiID); err != nil {

@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"database/sql"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -73,11 +75,63 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		// img-src 'self' deliberately blocks remote Markdown images, which
+		// would otherwise let a member track other members' IPs. The rest of
+		// the policy is intentionally narrow without a script-src: the app
+		// still uses inline scripts and HTMX hx-on attributes.
+		h.Set("Content-Security-Policy",
+			"frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RequestLogger emits one line per non-static request. It deliberately logs
+// only the path, never the query string: invite codes and search terms must not
+// end up in logs. The actor is not available here (the auth middleware runs
+// inside), so security-sensitive mutations also write explicit audit records.
+func RequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/static/") || path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := time.Now()
+		sw := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		status := sw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		log.Printf("[http] %s %s %q %d %s", clientIP(r), r.Method, path, status, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusRecorder) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w *statusRecorder) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // CSRFProtect is a defense-in-depth same-origin check for state-changing
@@ -270,13 +324,22 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 		// means the request proceeds anonymously.
 		var currentUser *database.User
 		if token := auth.GetSessionTokenFromRequest(r); token != "" {
+			now := time.Now()
+			tokenHash := auth.TokenHash(token)
 			if userID, err := m.queries.GetSessionUserID(ctx, database.GetSessionUserIDParams{
-				TokenHash: auth.TokenHash(token),
-				ExpiresAt: time.Now().Unix(),
+				TokenHash: tokenHash,
+				ExpiresAt: now.Unix(),
+				IdleCutoff: sql.NullInt64{
+					Int64: now.Add(-auth.SessionIdleTimeout).Unix(),
+					Valid: true,
+				},
 			}); err == nil {
 				if user, err := m.queries.GetUserByID(ctx, userID); err == nil {
 					currentUser = &user
 					r = r.WithContext(ContextWithUser(r.Context(), currentUser))
+					// Touch at most every 5 minutes; best-effort so a write
+					// error never breaks the request.
+					_ = m.queries.TouchSession(ctx, tokenHash)
 				}
 			}
 		}

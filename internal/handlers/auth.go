@@ -3,8 +3,8 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -79,19 +79,19 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 
 	if !usernamePattern.MatchString(username) {
-		setFlash(w, "flash_error", "Username must be 3-32 letters/digits only.")
+		setFlash(w, r, "flash_error", "Username must be 3-32 letters/digits only.")
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
 	if len(password) < minPasswordLength {
-		setFlash(w, "flash_error", "Password must be at least 8 characters.")
+		setFlash(w, r, "flash_error", "Password must be at least 8 characters.")
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
 
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to hash password.")
+		setFlash(w, r, "flash_error", "Failed to hash password.")
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
@@ -101,7 +101,7 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash,
 	})
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to create administrator account.")
+		setFlash(w, r, "flash_error", "Failed to create administrator account.")
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
@@ -115,7 +115,7 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 		if firstID, err := app.queries.FirstUserID(ctx); err == nil && firstID != user.ID {
 			_ = app.queries.DeleteUser(ctx, user.ID)
 			app.middleware.RefreshUserCount(ctx)
-			setFlash(w, "flash_error", "Setup already completed.")
+			setFlash(w, r, "flash_error", "Setup already completed.")
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -125,11 +125,11 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 
 	app.middleware.RefreshUserCount(ctx)
 	if err := app.startSession(ctx, w, r, user.ID); err != nil {
-		setFlash(w, "flash_error", "Failed to start session.")
+		setFlash(w, r, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	setFlash(w, "flash_success", "Welcome to Disjoint! Setup complete.")
+	setFlash(w, r, "flash_success", "Welcome to Disjoint! Setup complete.")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -145,26 +145,26 @@ func (app *App) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 
 	if username == "" || password == "" {
-		setFlash(w, "flash_error", "Username and password are required.")
+		setFlash(w, r, "flash_error", "Username and password are required.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 
 	user, err := app.queries.GetUserByUsername(ctx, username)
 	if err != nil {
-		setFlash(w, "flash_error", "Invalid username or password.")
+		setFlash(w, r, "flash_error", "Invalid username or password.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 
 	if !auth.CheckPassword(user.PasswordHash, password) {
-		setFlash(w, "flash_error", "Invalid username or password.")
+		setFlash(w, r, "flash_error", "Invalid username or password.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 
 	if err := app.startSession(ctx, w, r, user.ID); err != nil {
-		setFlash(w, "flash_error", "Failed to start session.")
+		setFlash(w, r, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -194,44 +194,45 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 
 	if code == "" {
-		setFlash(w, "flash_error", "Invalid invite link.")
+		setFlash(w, r, "flash_error", "Invalid invite link.")
 		http.Redirect(w, r, "/register", http.StatusSeeOther)
 		return
 	}
 
 	_, err := app.queries.GetInviteByCode(ctx, code)
 	if err != nil {
-		setFlash(w, "flash_error", "Invalid or already used invite code.")
+		setFlash(w, r, "flash_error", "Invalid or already used invite code.")
 		http.Redirect(w, r, "/register", http.StatusSeeOther)
 		return
 	}
 
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
-	redirectUrl := fmt.Sprintf("/register?code=%s", code)
+	redirectUrl := "/register?code=" + url.QueryEscape(code)
 
 	if !usernamePattern.MatchString(username) {
-		setFlash(w, "flash_error", "Username must be 3-32 letters/digits only.")
+		setFlash(w, r, "flash_error", "Username must be 3-32 letters/digits only.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
 
 	if len(password) < minPasswordLength {
-		setFlash(w, "flash_error", "Password must be at least 8 characters.")
+		setFlash(w, r, "flash_error", "Password must be at least 8 characters.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
 
-	// Check if username already taken
-	if _, err := app.queries.GetUserByUsername(ctx, username); err == nil {
-		setFlash(w, "flash_error", "Username is already taken.")
+	// Check if username already taken (case-insensitively, so Alice/alice
+	// cannot coexist and impersonate each other).
+	if _, err := app.queries.GetUserByUsernameFold(ctx, username); err == nil {
+		setFlash(w, r, "flash_error", "Username is already taken.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
 
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to hash password.")
+		setFlash(w, r, "flash_error", "Failed to hash password.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
@@ -241,7 +242,7 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash,
 	})
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to create account.")
+		setFlash(w, r, "flash_error", "Failed to create account.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
@@ -253,18 +254,18 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 	rows, err := app.queries.ConsumeInvite(ctx, database.ConsumeInviteParams{UsedBy: sql.NullInt64{Int64: user.ID, Valid: true}, Code: code})
 	if err != nil || rows == 0 {
 		_ = app.queries.DeleteUser(ctx, user.ID)
-		setFlash(w, "flash_error", "Invalid or already used invite code.")
+		setFlash(w, r, "flash_error", "Invalid or already used invite code.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
 
 	if err := app.startSession(ctx, w, r, user.ID); err != nil {
 		_ = app.queries.DeleteUser(ctx, user.ID)
-		setFlash(w, "flash_error", "Failed to start session.")
+		setFlash(w, r, "flash_error", "Failed to start session.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}
-	setFlash(w, "flash_success", "Account created successfully!")
+	setFlash(w, r, "flash_success", "Account created successfully!")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

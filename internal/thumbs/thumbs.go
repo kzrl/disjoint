@@ -137,7 +137,7 @@ func Ensure(uploadDir, storagePath string, width int) (path string, derivative b
 	}
 
 	dir := filepath.Join(uploadDir, "thumbs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return original, false
 	}
 	tmp, err := os.CreateTemp(dir, "tmp-*")
@@ -154,7 +154,7 @@ func Ensure(uploadDir, storagePath string, width int) (path string, derivative b
 		_ = os.Remove(tmpName)
 		return original, false
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
 		return original, false
 	}

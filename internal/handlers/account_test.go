@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,10 @@ func sessionIsValid(t *testing.T, queries *database.Queries, cookie *http.Cookie
 	_, err := queries.GetSessionUserID(context.Background(), database.GetSessionUserIDParams{
 		TokenHash: auth.TokenHash(cookie.Value),
 		ExpiresAt: time.Now().Unix(),
+		IdleCutoff: sql.NullInt64{
+			Int64: time.Now().Add(-auth.SessionIdleTimeout).Unix(),
+			Valid: true,
+		},
 	})
 	return err == nil
 }
@@ -172,5 +177,64 @@ func TestAccountRequiresLogin(t *testing.T) {
 	app.Routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
 		t.Fatalf("guest /account = %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+}
+
+func TestPasswordChangeRateLimit(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+
+	hash, err := auth.HashPassword("oldpassword")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := queries.CreateUser(context.Background(), database.CreateUserParams{
+		Username:     "password_limit_user",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authCookieFor(t, queries, user.ID)
+
+	attempt := func() *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{}
+		form.Set("current_password", "wrong-password")
+		form.Set("new_password", "newpassword123")
+		form.Set("confirm_password", "newpassword123")
+		req := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	for i := 0; i < 5; i++ {
+		if rr := attempt(); rr.Code != http.StatusSeeOther {
+			t.Fatalf("attempt %d = %d", i+1, rr.Code)
+		}
+	}
+	rr := attempt()
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("limited attempt = %d", rr.Code)
+	}
+	var limited bool
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "flash_error" && strings.Contains(c.Value, "Too many password attempts") {
+			limited = true
+		}
+	}
+	if !limited {
+		t.Fatal("sixth attempt was not rate-limited")
+	}
+	stored, err := queries.GetUserByID(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auth.CheckPassword(stored.PasswordHash, "oldpassword") {
+		t.Fatal("rate-limited attempt changed the password")
 	}
 }

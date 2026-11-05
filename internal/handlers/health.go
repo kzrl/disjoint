@@ -25,3 +25,11 @@ func (app *App) Healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
 }
+
+// Favicon is the public /favicon.ico endpoint. It returns an empty 204 rather
+// than letting the request fall through to the authenticated front page (the
+// previous behavior leaked the whole index to unauthenticated visitors).
+func (app *App) Favicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusNoContent)
+}

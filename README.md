@@ -93,7 +93,7 @@ Images are published to GHCR by CI on pushes to `main` (tag `latest`) and on `v*
 
 ### 2. Build and Run from Source
 
-**Prerequisites**: Go 1.27+
+**Prerequisites**: Go 1.27.3+
 
 ```bash
 # Build the binary (CGO disabled, commit-stamped)
@@ -174,6 +174,15 @@ docker compose start disjoint
 
 The restore tool validates the snapshot with `PRAGMA quick_check`, requires `-force`, and moves the previous database and uploads aside as `*.pre-restore-<stamp>` instead of deleting them. Delete those safety copies once the restore is verified.
 
+### Security notes
+
+- Session cookies are HttpOnly, SameSite=Lax, and Secure when TLS is detected or `COOKIE_SECURE=1` is set. Sessions have a 7-day idle timeout and a 30-day absolute lifetime; changing a password revokes every session.
+- New invite links expire after seven days. Existing pre-migration invites with no expiry remain valid until used.
+- Post bodies are capped at **256 KB**; attachments are capped at 100 MB per post, and each user gets a **2 GiB** attachment + custom-emoji quota.
+- SQLite runs with `secure_delete` and the expiry worker truncates the WAL, but backups are **not encrypted** and retain content from before expiry. Copy backups only to encrypted storage and apply your own retention policy. Secure erasure on SSDs is never guaranteed.
+- Uploaded media is served only to authenticated members, with `Cache-Control: private`. External Markdown images are blocked by CSP (`img-src 'self' data: blob:`; blob is for local paste previews).
+- The app rate-limits posts, profile/emoji uploads, searches, autocomplete, reactions, and password changes per user.
+
 ### Behind a reverse proxy (Caddy)
 
 ```caddyfile
@@ -191,6 +200,7 @@ Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets `X-Real-IP` 
 ```bash
 make test        # go test -v ./...
 make test-race   # data-race detector
+make vuln        # govulncheck (dependencies + called symbols)
 ```
 
 ---

@@ -16,6 +16,14 @@ import (
 
 const maxPostURLLength = 2048
 
+// maxPostBodyBytes bounds a post body. The global request cap (128 MB) also
+// allows attachments, but text bodies have no reason to be that large; a
+// smaller limit keeps Markdown rendering, database rows, and HTML pages
+// bounded.
+const maxPostBodyBytes = 256 << 10
+
+var errThreadExpired = errors.New("thread expired")
+
 // cleanPostURL trims and validates the optional first-class post link.
 // Empty is fine (text/attachment post). Otherwise it must be an absolute
 // http(s) URL with a host. The scheme check is the security boundary:
@@ -79,6 +87,11 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := app.checkStorageQuota(ctx, user.ID, uploadFieldBytes(r, "files")); err != nil {
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+
 	// Save attachments
 	uploadedFiles, err := saveUploadedFiles(r, app.uploadDir)
 	if err != nil {
@@ -90,6 +103,11 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	// link, so image-only replies (e.g. a screenshot pasted from the
 	// clipboard) and link-only replies are both allowed.
 	body := strings.TrimSpace(r.FormValue("body"))
+	if len(body) > maxPostBodyBytes {
+		removeUploadedFiles(app.uploadDir, uploadedFiles)
+		http.Error(w, "post body is too long (max 256 KB)", http.StatusBadRequest)
+		return
+	}
 	postURL, err := cleanPostURL(r.FormValue("url"))
 	if err != nil {
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
@@ -100,6 +118,17 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
 		http.Error(w, "reply needs a body, a link, or at least one attachment", http.StatusBadRequest)
 		return
+	}
+
+	// Compute the TTL bump before opening the transaction; it is applied in
+	// the same transaction as the post so a reply can never commit without
+	// extending the thread's deadline.
+	var newExpiry sql.NullTime
+	if thread.TtlSeconds.Valid {
+		newExpiry = sql.NullTime{
+			Time:  time.Now().UTC().Add(time.Duration(thread.TtlSeconds.Int64) * time.Second),
+			Valid: true,
+		}
 	}
 
 	// Post and attachments commit together so a failed attachment insert
@@ -144,9 +173,26 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		err = app.notifyPostRecipients(ctx, qtx, thread.ID, post.ID, user.ID, body)
 	}
 
+	// 4. Bump updated_at and the TTL deadline in the same transaction. 0 rows
+	// means the thread expired after the handler's check.
+	if err == nil {
+		var rows int64
+		rows, err = qtx.BumpThreadExpiration(ctx, database.BumpThreadExpirationParams{
+			ExpiresAt: newExpiry,
+			ID:        thread.ID,
+		})
+		if err == nil && rows == 0 {
+			err = errThreadExpired
+		}
+	}
+
 	if err != nil {
 		tx.Rollback()
 		removeUploadedFiles(app.uploadDir, uploadedFiles)
+		if errors.Is(err, errThreadExpired) {
+			http.Error(w, "this thread has expired", http.StatusGone)
+			return
+		}
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}
@@ -155,20 +201,6 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create post", http.StatusInternalServerError)
 		return
 	}
-
-	// 3. Bump the thread: advance updated_at and, for TTL threads, push the
-	// expiry deadline out to last-comment + ttl (never-threads stay NULL).
-	var newExpiry sql.NullTime
-	if thread.TtlSeconds.Valid {
-		newExpiry = sql.NullTime{
-			Time:  time.Now().UTC().Add(time.Duration(thread.TtlSeconds.Int64) * time.Second),
-			Valid: true,
-		}
-	}
-	_ = app.queries.BumpThreadExpiration(ctx, database.BumpThreadExpirationParams{
-		ExpiresAt: newExpiry,
-		ID:        thread.ID,
-	})
 
 	// If HTMX request, render and return the single post partial
 	if r.Header.Get("HX-Request") == "true" {
@@ -290,6 +322,10 @@ func (app *App) UpdatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.TrimSpace(r.FormValue("body"))
+	if len(body) > maxPostBodyBytes {
+		http.Error(w, "post body is too long (max 256 KB)", http.StatusBadRequest)
+		return
+	}
 	postURL, err := cleanPostURL(r.FormValue("url"))
 	if err != nil {
 		http.Error(w, "invalid link: "+err.Error(), http.StatusBadRequest)
@@ -313,7 +349,7 @@ func (app *App) UpdatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	// No-op save: leave updated_at alone so the "(edited)" marker doesn't
 	// appear on a resubmitted, unchanged form.
 	if body == post.Body && postURL == post.Url {
-		setFlash(w, "flash_success", "No changes to save.")
+		setFlash(w, r, "flash_success", "No changes to save.")
 		http.Redirect(w, r, fmt.Sprintf("/threads/%d?from=%d#post-%d", post.ThreadID, post.ID, post.ID), http.StatusSeeOther)
 		return
 	}
@@ -333,6 +369,6 @@ func (app *App) UpdatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setFlash(w, "flash_success", "Post updated.")
+	setFlash(w, r, "flash_success", "Post updated.")
 	http.Redirect(w, r, fmt.Sprintf("/threads/%d?from=%d#post-%d", post.ThreadID, post.ID, post.ID), http.StatusSeeOther)
 }

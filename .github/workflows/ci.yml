@@ -34,6 +34,9 @@ jobs:
       - name: Test (race detector)
         run: go test -race -count=1 ./...
 
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
       - name: Build static binary
         run: CGO_ENABLED=0 go build -trimpath ./...
 

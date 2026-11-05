@@ -58,6 +58,14 @@ type FrontPageThreadItem struct {
 func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Defense-in-depth: the middleware normally guarantees this, but the
+	// index must never render without a viewer even if a public path is
+	// accidentally routed here.
+	if middleware.UserFromContext(ctx) == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -69,6 +77,13 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if runes := []rune(query); len(runes) > maxSearchQueryLength {
 		query = string(runes[:maxSearchQueryLength])
+	}
+	if query != "" {
+		if user := middleware.UserFromContext(ctx); user != nil && !allowUser(app.apiLimiter, user.ID) {
+			w.Header().Set("Retry-After", "300")
+			http.Error(w, "too many searches; slow down", http.StatusTooManyRequests)
+			return
+		}
 	}
 
 	limit := int64(frontPagePageSize)

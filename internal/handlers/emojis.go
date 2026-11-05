@@ -58,7 +58,7 @@ func (app *App) EmojiPage(w http.ResponseWriter, r *http.Request) {
 
 	emojis, err := app.queries.ListAllEmojis(r.Context())
 	if err != nil {
-		setFlash(w, "flash_error", "Failed to load emojis")
+		setFlash(w, r, "flash_error", "Failed to load emojis")
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
@@ -99,8 +99,12 @@ func (app *App) CreateEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail := func(msg string) {
-		setFlash(w, "flash_error", msg)
+		setFlash(w, r, "flash_error", msg)
 		http.Redirect(w, r, "/emojis", http.StatusSeeOther)
+	}
+	if !allowUser(app.uploadLimiter, user.ID) {
+		fail("You are uploading too fast. Try again in a few minutes.")
+		return
 	}
 
 	if err := r.ParseMultipartForm(maxEmojiSize); err != nil {
@@ -128,6 +132,10 @@ func (app *App) CreateEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		fail("No image uploaded.")
 		return
 	}
+	if err := app.checkStorageQuota(ctx, user.ID, files[0].Size); err != nil {
+		fail(err.Error())
+		return
+	}
 	info, err := saveEmojiFile(files[0], app.uploadDir)
 	if err != nil {
 		fail("Invalid emoji image: " + err.Error())
@@ -150,8 +158,9 @@ func (app *App) CreateEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	app.refreshEmojiCache(ctx)
+	audit(r, user.ID, "create_emoji", created.ID)
 
-	setFlash(w, "flash_success", fmt.Sprintf("Emoji :%s: added.", created.Name))
+	setFlash(w, r, "flash_success", fmt.Sprintf("Emoji :%s: added.", created.Name))
 	http.Redirect(w, r, "/emojis", http.StatusSeeOther)
 }
 
@@ -165,7 +174,7 @@ func (app *App) DeleteEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail := func(msg string) {
-		setFlash(w, "flash_error", msg)
+		setFlash(w, r, "flash_error", msg)
 		http.Redirect(w, r, "/emojis", http.StatusSeeOther)
 	}
 
@@ -202,8 +211,9 @@ func (app *App) DeleteEmojiSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.refreshEmojiCache(ctx)
+	audit(r, user.ID, "delete_emoji", id)
 
-	setFlash(w, "flash_success", fmt.Sprintf("Emoji :%s: deleted.", emoji.Name))
+	setFlash(w, r, "flash_success", fmt.Sprintf("Emoji :%s: deleted.", emoji.Name))
 	http.Redirect(w, r, "/emojis", http.StatusSeeOther)
 }
 
@@ -239,6 +249,19 @@ func saveEmojiFile(header *multipart.FileHeader, uploadDir string) (UploadedFile
 		return UploadedFileInfo{}, fmt.Errorf("unsupported type %s (PNG or GIF only)", mimeType)
 	}
 
+	// Check the header before decoding pixels: a tiny compressed PNG/GIF can
+	// declare enormous dimensions and otherwise allocate them in image.Decode.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return UploadedFileInfo{}, fmt.Errorf("not a decodable image: %v", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return UploadedFileInfo{}, errors.New("image has invalid dimensions")
+	}
+	if cfg.Width > maxEmojiDimension || cfg.Height > maxEmojiDimension {
+		return UploadedFileInfo{}, fmt.Errorf("dimensions %dx%d exceed %dx%d", cfg.Width, cfg.Height, maxEmojiDimension, maxEmojiDimension)
+	}
+
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return UploadedFileInfo{}, fmt.Errorf("not a decodable image: %v", err)
@@ -248,12 +271,12 @@ func saveEmojiFile(header *multipart.FileHeader, uploadDir string) (UploadedFile
 		return UploadedFileInfo{}, fmt.Errorf("dimensions %dx%d exceed %dx%d", bounds.Dx(), bounds.Dy(), maxEmojiDimension, maxEmojiDimension)
 	}
 
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0o750); err != nil {
 		return UploadedFileInfo{}, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
 	uniqueName := uuid.New().String() + storedExt
-	if err := os.WriteFile(filepath.Join(uploadDir, uniqueName), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(uploadDir, uniqueName), data, 0o600); err != nil {
 		return UploadedFileInfo{}, err
 	}
 
