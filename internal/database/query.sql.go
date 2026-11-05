@@ -1227,6 +1227,51 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 	return items, nil
 }
 
+const listMentionCandidates = `-- name: ListMentionCandidates :many
+SELECT
+    u.username,
+    u.avatar_path,
+    u.avatar_nonce
+FROM users u
+LEFT JOIN user_presence p ON p.user_id = u.id
+WHERE u.username LIKE ? ESCAPE '\'
+ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
+LIMIT 10
+`
+
+type ListMentionCandidatesRow struct {
+	Username    string
+	AvatarPath  sql.NullString
+	AvatarNonce int64
+}
+
+// Mention autocomplete: case-insensitive ASCII prefix match. Recently active
+// users sort first; the boolean expression puts NULL presence last without
+// relying on SQLite's NULLS LAST syntax. The caller supplies the escaped
+// pattern (including the trailing %).
+func (q *Queries) ListMentionCandidates(ctx context.Context, username string) ([]ListMentionCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMentionCandidates, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMentionCandidatesRow
+	for rows.Next() {
+		var i ListMentionCandidatesRow
+		if err := rows.Scan(&i.Username, &i.AvatarPath, &i.AvatarNonce); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOnlineUsers = `-- name: ListOnlineUsers :many
 SELECT
     u.id,

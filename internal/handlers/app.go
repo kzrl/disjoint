@@ -356,6 +356,9 @@ func (app *App) Routes() http.Handler {
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)
 
+	// @mention autocomplete (JSON; authenticated by the global middleware)
+	mux.HandleFunc("GET /api/mentions", app.MentionSuggestions)
+
 	// Community emoji (browse, upload, delete)
 	mux.HandleFunc("GET /emojis", app.EmojiPage)
 	mux.HandleFunc("POST /emojis", app.CreateEmojiSubmit)

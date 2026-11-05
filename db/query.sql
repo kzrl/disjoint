@@ -310,6 +310,21 @@ WHERE id = ?;
 -- name: ListUsers :many
 SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC;
 
+-- name: ListMentionCandidates :many
+-- Mention autocomplete: case-insensitive ASCII prefix match. Recently active
+-- users sort first; the boolean expression puts NULL presence last without
+-- relying on SQLite's NULLS LAST syntax. The caller supplies the escaped
+-- pattern (including the trailing %).
+SELECT
+    u.username,
+    u.avatar_path,
+    u.avatar_nonce
+FROM users u
+LEFT JOIN user_presence p ON p.user_id = u.id
+WHERE u.username LIKE ? ESCAPE '\'
+ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
+LIMIT 10;
+
 -- name: CreateInvite :one
 INSERT INTO invites (code, created_by) VALUES (?, ?) RETURNING *;
 

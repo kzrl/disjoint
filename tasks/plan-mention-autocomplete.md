@@ -1,3 +1,5 @@
+> **Status:** implemented — see tasks/todo.md.
+
 # Implementation Plan: @user Mention Autocomplete in Compose Boxes
 
 ## Overview

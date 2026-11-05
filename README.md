@@ -33,6 +33,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **@User Mentions**: `@username` tokens in posts (and bios) render as tinted pill links to that user's card. Code spans, e-mail addresses, and malformed tokens are never linked.
 
+- **Mention Autocomplete**: Typing `@` in any compose box suggests matching usernames (recently active first); arrow keys navigate and Enter/Tab/click inserts `@name ` with a trailing space.
+
 - **First-Class Link Posts**: Every post — opening post or reply — can carry a separate link field, rendered as a clean link card under the post. Links are validated to http(s) server-side, making URL sharing instant.
 
 - **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community emoji

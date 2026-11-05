@@ -575,3 +575,28 @@ loaded. No endpoints, no schema, no dependency.
   - [x] `go test -race -count=1 ./...` green; `gofmt -s -l` / `go vet` clean
   - [x] No server/schema/template-data changes; `node --check` passes
   - [ ] Review with human
+
+---
+
+# Task List: @mention Autocomplete — DONE
+
+Plan: [tasks/plan-mention-autocomplete.md](plan-mention-autocomplete.md)
+
+- [x] Task 1: Query + handler + route  (DONE)
+  - `ListMentionCandidates` (case-insensitive prefix, presence-first then username, LIMIT 10) + sqlc
+  - `GET /api/mentions` returns `{"users":[{"name","avatar"}]}`, escapes LIKE metacharacters, rejects q > 32 with 400
+  - Handler tests: guest redirect, prefix/case, empty q (10 max), presence ordering, `%`/`_` escaping, long q
+- [x] Task 2: JS detection + fetch + dropdown  (DONE)
+  - `web/static/mentions.js`: caret token rule, 120 ms debounce, AbortController, DOM-built options (no innerHTML)
+- [x] Task 3: Keyboard + mouse selection  (DONE)
+  - ArrowUp/Down wrap, Enter/Tab/click insert `@name ` with trailing space via `setRangeText`, Escape/blur close, Ctrl/Cmd+Enter still submits
+- [x] Task 4: Accessibility + polish  (DONE)
+  - listbox/option roles, `aria-expanded`/`aria-controls`/`aria-activedescendant`, themed dropdown CSS, avatar rows
+- [x] Task 5: All compose boxes  (DONE)
+  - Reply, new thread, edit post, and bio textareas bind automatically; form reset closes the list
+- [x] Task 6: Spec + docs  (DONE)
+  - README feature bullet + `specs/disjoint.md` endpoint/trigger/insertion paragraph
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
+  - [x] No schema change, no new dependency
+  - [ ] Review with human
