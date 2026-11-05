@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/google/uuid v1.6.0
 	github.com/pressly/goose/v3 v3.28.0
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/image v0.47.0
 	modernc.org/sqlite v1.61.1
