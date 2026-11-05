@@ -179,3 +179,50 @@ func TestMaxBodyAllowsNormalRequest(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
+
+func TestCSRFProtectRejectsCrossOriginMutations(t *testing.T) {
+	handler := CSRFProtect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	post := func(origin, site string) int {
+		req := httptest.NewRequest(http.MethodPost, "http://example.com/threads/1/posts", strings.NewReader("x"))
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Same-origin browser form posts (scheme may differ behind a TLS proxy).
+	if code := post("https://example.com", "same-origin"); code != http.StatusOK {
+		t.Errorf("same-origin POST = %d, want 200", code)
+	}
+	// Non-browser clients (curl, tests) do not send Origin.
+	if code := post("", ""); code != http.StatusOK {
+		t.Errorf("missing Origin POST = %d, want 200", code)
+	}
+	if code := post("https://evil.example", ""); code != http.StatusForbidden {
+		t.Errorf("cross-origin Origin = %d, want 403", code)
+	}
+	if code := post("", "cross-site"); code != http.StatusForbidden {
+		t.Errorf("Sec-Fetch-Site cross-site = %d, want 403", code)
+	}
+	if code := post("", "same-site"); code != http.StatusForbidden {
+		t.Errorf("Sec-Fetch-Site same-site = %d, want 403", code)
+	}
+
+	// Safe methods are never blocked.
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/threads/1", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("cross-origin GET = %d, want 200", rec.Code)
+	}
+}

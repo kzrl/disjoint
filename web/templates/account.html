@@ -1,0 +1,56 @@
+{{define "content"}}
+<div class="container is-max-w">
+  <nav class="breadcrumb my-4" aria-label="breadcrumbs">
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/users/{{.CurrentUser.Username}}">{{.CurrentUser.Username}}</a></li>
+      <li class="is-active" aria-current="page"><a>Account</a></li>
+    </ul>
+  </nav>
+
+  <div class="box mb-5">
+    <h1 class="title is-4 mb-2">Change password</h1>
+    <p class="is-size-7 muted mb-4">
+      Changing your password signs you out of every device, including this one.
+      Sign in again with the new password afterwards.
+    </p>
+
+    <form method="POST" action="/account/password">
+      <div class="field">
+        <label for="current_password" class="label is-size-7">Current password</label>
+        <div class="control">
+          <input type="password" id="current_password" name="current_password" class="input"
+                 autocomplete="current-password" required>
+        </div>
+      </div>
+      <div class="field">
+        <label for="new_password" class="label is-size-7">New password</label>
+        <div class="control">
+          <input type="password" id="new_password" name="new_password" class="input"
+                 minlength="8" autocomplete="new-password" required>
+        </div>
+        <p class="help">At least 8 characters.</p>
+      </div>
+      <div class="field">
+        <label for="confirm_password" class="label is-size-7">Confirm new password</label>
+        <div class="control">
+          <input type="password" id="confirm_password" name="confirm_password" class="input"
+                 minlength="8" autocomplete="new-password" required>
+        </div>
+      </div>
+      <button type="submit" class="button is-primary">Change password</button>
+    </form>
+  </div>
+
+  <div class="box">
+    <h2 class="title is-5 mb-2">Sessions</h2>
+    <p class="is-size-7 muted mb-4">
+      Sign out every browser and device that is currently signed in as you.
+    </p>
+    <form method="POST" action="/account/sign-out-everywhere"
+          onsubmit="return confirm('Sign out of every device? You will need to sign in again.');">
+      <button type="submit" class="button is-danger is-light">Sign out everywhere</button>
+    </form>
+  </div>
+</div>
+{{end}}

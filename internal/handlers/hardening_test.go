@@ -156,3 +156,89 @@ func assertNoThreadsOrUploads(t *testing.T, db *sql.DB, uploadDir string) {
 		t.Fatalf("expected no stored files, got %v", files)
 	}
 }
+
+func TestContentRateLimitPerUser(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	ctx := context.Background()
+	router := app.Routes()
+
+	user, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "spam_user",
+		PasswordHash: "hash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := queries.CreateUser(ctx, database.CreateUserParams{
+		Username:     "calm_user",
+		PasswordHash: "hash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := queries.CreateThread(ctx, database.CreateThreadParams{
+		UserID: user.ID,
+		Title:  "rate limit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.CreatePost(ctx, database.CreatePostParams{
+		ThreadID: thread.ID,
+		UserID:   user.ID,
+		Body:     "opening",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := func(cookie *http.Cookie, htmx bool) *httptest.ResponseRecorder {
+		t.Helper()
+		var b bytes.Buffer
+		w := multipart.NewWriter(&b)
+		if err := w.WriteField("body", "reply"); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/threads/%d/posts", thread.ID), &b)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		if htmx {
+			req.Header.Set("HX-Request", "true")
+		}
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr
+	}
+
+	userCookie := authCookieFor(t, queries, user.ID)
+	for i := 0; i < 30; i++ {
+		if rr := reply(userCookie, false); rr.Code != http.StatusSeeOther {
+			t.Fatalf("reply %d: expected 303, got %d: %s", i+1, rr.Code, rr.Body.String())
+		}
+	}
+
+	// Non-HTMX: flash + redirect back to the thread.
+	rr := reply(userCookie, false)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d", thread.ID) {
+		t.Fatalf("31st reply = %d to %s", rr.Code, rr.Header().Get("Location"))
+	}
+	if rr.Header().Get("Retry-After") != "300" {
+		t.Fatalf("Retry-After = %q, want 300", rr.Header().Get("Retry-After"))
+	}
+	// HTMX: the same redirect via HX-Redirect so the click visibly does something.
+	rr = reply(userCookie, true)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("HTMX 32nd reply = %d, want 429", rr.Code)
+	}
+	if rr.Header().Get("HX-Redirect") != fmt.Sprintf("/threads/%d", thread.ID) {
+		t.Fatalf("HX-Redirect = %q", rr.Header().Get("HX-Redirect"))
+	}
+
+	// The limiter is per user, not per IP: another member can still reply.
+	if rr := reply(authCookieFor(t, queries, other.ID), false); rr.Code != http.StatusSeeOther {
+		t.Fatalf("other user reply = %d, want 303", rr.Code)
+	}
+}

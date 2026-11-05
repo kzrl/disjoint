@@ -44,6 +44,9 @@
     {{end}}
 
     {{if .IsSelf}}
+      <div class="buttons mb-4">
+        <a href="/account" class="button is-secondary is-small">Account security</a>
+      </div>
       <form method="POST" action="/users/me/profile" enctype="multipart/form-data">
         <div class="is-4 mb-2">Edit profile</div>
         <div class="field">

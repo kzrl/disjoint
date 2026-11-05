@@ -8,6 +8,8 @@ BINARY := $(BIN_DIR)/$(BIN_NAME)
 MAIN_PKG := ./cmd/disjoint
 
 PORT ?= 8080
+BACKUP_DIR ?= backups
+FROM ?=
 
 # Short git hash stamped into the binary (shown in the footer); "dev" when
 # the tree is not a git checkout (e.g. a source tarball).
@@ -19,7 +21,9 @@ all: build
 build:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags="-s -w -X disjoint/internal/buildinfo.Commit=$(GIT_COMMIT)" -o $(BINARY) $(MAIN_PKG)
-	@echo "Built binary at $(BINARY) (commit $(GIT_COMMIT))"
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN_DIR)/disjoint-backup ./cmd/disjoint-backup
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN_DIR)/disjoint-restore ./cmd/disjoint-restore
+	@echo "Built binary at $(BINARY) (commit $(GIT_COMMIT)) plus backup/restore tools in $(BIN_DIR)/"
 
 ## run: Run the application locally (override port with PORT=xxxx)
 run:
@@ -63,6 +67,15 @@ vet:
 ## lint: Check formatting and run go vet
 lint: vet
 	@test -z "$$(gofmt -s -l .)" || (echo "Unformatted files:" && gofmt -s -l . && exit 1)
+
+## backup: Snapshot the database and uploads into BACKUP_DIR (default backups/)
+backup:
+	BACKUP_DIR=$(BACKUP_DIR) go run ./cmd/disjoint-backup
+
+## restore: Restore FROM=backups/<dir> (destructive; stop the app first)
+restore:
+	@test -n "$(FROM)" || (echo "usage: make restore FROM=backups/<dir>" && exit 1)
+	go run ./cmd/disjoint-restore -from "$(FROM)" -force
 
 ## docker-build: Build Docker container image
 docker-build:

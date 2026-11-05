@@ -383,6 +383,18 @@ func (q *Queries) DeleteExpiredThreads(ctx context.Context) error {
 	return err
 }
 
+const deletePost = `-- name: DeletePost :exec
+DELETE FROM posts
+WHERE id = ?
+`
+
+// Caller has already checked ownership/moderation rights. FKs cascade to
+// attachments, reactions, and inbox rows that point at this post.
+func (q *Queries) DeletePost(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deletePost, id)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = ?
 `
@@ -517,6 +529,21 @@ func (q *Queries) GetEmojiByName(ctx context.Context, name string) (Emoji, error
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getFirstPostIDByThreadID = `-- name: GetFirstPostIDByThreadID :one
+SELECT CAST(COALESCE(MIN(id), 0) AS INTEGER) AS first_post_id
+FROM posts
+WHERE thread_id = ?
+`
+
+// The opening post is never deleted as a reply: deleting it deletes the
+// whole thread instead. 0 means the thread has no posts (should not happen).
+func (q *Queries) GetFirstPostIDByThreadID(ctx context.Context, threadID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getFirstPostIDByThreadID, threadID)
+	var first_post_id int64
+	err := row.Scan(&first_post_id)
+	return first_post_id, err
 }
 
 const getInviteByCode = `-- name: GetInviteByCode :one
@@ -751,6 +778,41 @@ func (q *Queries) ListAllEmojis(ctx context.Context) ([]ListAllEmojisRow, error)
 			&i.MimeType,
 			&i.FileSize,
 			&i.CreatedByUsername,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttachmentsByPostID = `-- name: ListAttachmentsByPostID :many
+SELECT id, post_id, filename, storage_path, mime_type, file_size, created_at FROM attachments WHERE post_id = ? ORDER BY id ASC
+`
+
+func (q *Queries) ListAttachmentsByPostID(ctx context.Context, postID int64) ([]Attachment, error) {
+	rows, err := q.db.QueryContext(ctx, listAttachmentsByPostID, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.PostID,
+			&i.Filename,
+			&i.StoragePath,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1946,6 +2008,20 @@ type UpdateUserBioParams struct {
 
 func (q *Queries) UpdateUserBio(ctx context.Context, arg UpdateUserBioParams) error {
 	_, err := q.db.ExecContext(ctx, updateUserBio, arg.Bio, arg.ID)
+	return err
+}
+
+const updateUserPassword = `-- name: UpdateUserPassword :exec
+UPDATE users SET password_hash = ? WHERE id = ?
+`
+
+type UpdateUserPasswordParams struct {
+	PasswordHash string
+	ID           int64
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, updateUserPassword, arg.PasswordHash, arg.ID)
 	return err
 }
 

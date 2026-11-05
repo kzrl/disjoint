@@ -18,6 +18,10 @@ import (
 // /users/{name} URLs are unambiguous (legacy users keep whatever they have).
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9]{3,32}$`)
 
+// minPasswordLength is the minimum accepted for setup, registration, and
+// password changes.
+const minPasswordLength = 8
+
 // secureCookie reports whether session cookies should carry the Secure
 // flag. COOKIE_SECURE forces the decision ("1"/"true" on, "0"/"false" off)
 // for deployments behind a TLS-terminating proxy where r.TLS is nil;
@@ -79,8 +83,8 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
-	if len(password) < 6 {
-		setFlash(w, "flash_error", "Password must be at least 6 characters.")
+	if len(password) < minPasswordLength {
+		setFlash(w, "flash_error", "Password must be at least 8 characters.")
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
@@ -212,8 +216,8 @@ func (app *App) RegisterSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(password) < 6 {
-		setFlash(w, "flash_error", "Password must be at least 6 characters.")
+	if len(password) < minPasswordLength {
+		setFlash(w, "flash_error", "Password must be at least 8 characters.")
 		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 		return
 	}

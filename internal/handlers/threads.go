@@ -47,6 +47,8 @@ type PostViewItem struct {
 	// single-post partial (a freshly created post is rendered for its
 	// author, who sees the button on the next full page load).
 	CanEdit bool
+	// CanDelete is true for the post's author and for administrators.
+	CanDelete bool
 }
 
 // SinglePostViewItem holds post details and its associated attachments and reactions
@@ -59,6 +61,8 @@ type SinglePostViewItem struct {
 	// CanEdit: the only viewer of this partial is the post's own author
 	// (they just created it), so it is always true when rendered.
 	CanEdit bool
+	// CanDelete: the viewer just created the post, so it is always true.
+	CanDelete bool
 }
 
 // NewThreadPage renders the global thread creation form.
@@ -72,6 +76,10 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(ctx)
 	if user == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if !app.allowContent(user.ID) {
+		app.rejectContentRateLimit(w, r, "/threads/new")
 		return
 	}
 
@@ -390,8 +398,10 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	viewerID := int64(0)
+	isAdmin := false
 	if u := middleware.UserFromContext(ctx); u != nil {
 		viewerID = u.ID
+		isAdmin = u.IsAdmin == 1
 	}
 
 	// Reading a thread marks it read for the front page's unread dots.
@@ -460,13 +470,16 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	// CanEdit is author-only (no admin override, per tasks/plan-editing.md);
 	// guests have no user so it is always false for them.
 	var postViews []PostViewItem
-	for _, p := range posts {
+	for i, p := range posts {
 		postViews = append(postViews, PostViewItem{
 			Post:        p,
 			Attachments: attMap[p.ID],
 			Reactions:   reactionGroups[p.ID],
 			Emojis:      emojis,
 			CanEdit:     p.UserID == viewerID,
+			// The opening post is deleted through the thread header, never
+			// through the post card (deleting it would leave a headless thread).
+			CanDelete: (p.UserID == viewerID || isAdmin) && i > 0,
 		})
 	}
 
@@ -484,11 +497,12 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	app.render(w, r, "thread.html", map[string]any{
-		"Thread":        thread,
-		"Posts":         postViews,
-		"ReplyCount":    replyCount,
-		"ExpiryPercent": expiryPercent(thread.TtlSeconds, thread.ExpiresAt),
-		"NewPosts":      newPostsView(thread.ID, lastPostID, 0, 0),
+		"Thread":          thread,
+		"Posts":           postViews,
+		"ReplyCount":      replyCount,
+		"ExpiryPercent":   expiryPercent(thread.TtlSeconds, thread.ExpiresAt),
+		"NewPosts":        newPostsView(thread.ID, lastPostID, 0, 0),
+		"CanDeleteThread": thread.UserID == viewerID || isAdmin,
 	}, thread.Title)
 }
 

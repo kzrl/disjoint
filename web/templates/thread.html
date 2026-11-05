@@ -64,6 +64,12 @@
         {{else}}
           <span class="tag is-subtle">Never expires</span>
         {{end}}
+        {{if .CanDeleteThread}}
+          <form method="POST" action="/threads/{{.Thread.ID}}/delete" class="ml-2"
+                onsubmit="return confirm('Delete this thread and all its replies? This cannot be undone.');">
+            <button type="submit" class="button is-small is-danger is-light">Delete thread</button>
+          </form>
+        {{end}}
       </div>
     </div>
     {{if gt .ExpiryPercent 0}}

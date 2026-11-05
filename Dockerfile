@@ -11,7 +11,9 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /disjoint ./cmd/disjoint
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/disjoint ./cmd/disjoint \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/disjoint-backup ./cmd/disjoint-backup \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/disjoint-restore ./cmd/disjoint-restore
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.21
@@ -22,7 +24,9 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 
-COPY --from=builder /disjoint /app/disjoint
+COPY --from=builder /out/disjoint /app/disjoint
+COPY --from=builder /out/disjoint-backup /app/disjoint-backup
+COPY --from=builder /out/disjoint-restore /app/disjoint-restore
 COPY LICENSE /app/LICENSE
 
 # Create the data directory before declaring the volume. Named volumes created
@@ -32,7 +36,8 @@ RUN mkdir -p /data/uploads && chown -R disjoint:disjoint /data
 
 ENV PORT=8080 \
     DATABASE_PATH=/data/disjoint.db \
-    UPLOAD_DIR=/data/uploads
+    UPLOAD_DIR=/data/uploads \
+    BACKUP_DIR=/data/backups
 
 VOLUME ["/data"]
 

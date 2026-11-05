@@ -5,6 +5,8 @@
 .gitignore
 bin/
 uploads/
+backups/
+*.pre-restore-*
 *.db
 *.db-shm
 *.db-wal

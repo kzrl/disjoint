@@ -56,6 +56,10 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !app.allowContent(user.ID) {
+		app.rejectContentRateLimit(w, r, fmt.Sprintf("/threads/%d", threadID))
+		return
+	}
 
 	thread, err := app.queries.GetThreadByID(ctx, threadID)
 	if err != nil {
@@ -187,6 +191,7 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 			Attachments: attachments,
 			Emojis:      newPostEmojis,
 			CanEdit:     true, // the viewer just created this post
+			CanDelete:   true,
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

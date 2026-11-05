@@ -33,17 +33,22 @@ type App struct {
 	middleware      *middleware.Middleware
 	// authLimiter bounds brute-force attempts at login/register per IP.
 	authLimiter *middleware.RateLimiter
+	// contentLimiter bounds post/thread creation per user (not per IP), so a
+	// shared household cannot be throttled by one member and a spammer cannot
+	// rotate IPs to bypass it.
+	contentLimiter *middleware.RateLimiter
 }
 
 // NewApp instantiates an App and compiles HTML templates.
 func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, error) {
 	app := &App{
-		db:          db,
-		queries:     queries,
-		uploadDir:   uploadDir,
-		templates:   make(map[string]*template.Template),
-		middleware:  middleware.New(queries),
-		authLimiter: middleware.NewRateLimiter(10, 15*time.Minute),
+		db:             db,
+		queries:        queries,
+		uploadDir:      uploadDir,
+		templates:      make(map[string]*template.Template),
+		middleware:     middleware.New(queries),
+		authLimiter:    middleware.NewRateLimiter(10, 15*time.Minute),
+		contentLimiter: middleware.NewRateLimiter(30, 5*time.Minute),
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")
@@ -184,6 +189,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"setup.html",
 		"user_card.html",
 		"inbox.html",
+		"account.html",
 	}
 
 	for _, page := range pages {
@@ -360,13 +366,20 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /threads/{id}/expiration", app.UpdateThreadExpirationSubmit)
 	mux.HandleFunc("POST /threads/{id}/posts", app.CreatePostSubmit)
 	mux.HandleFunc("GET /threads/{id}/updates", app.ThreadUpdates)
+	mux.HandleFunc("POST /threads/{id}/delete", app.DeleteThreadSubmit)
 	mux.HandleFunc("GET /posts/{id}/edit", app.EditPostPage)
 	mux.HandleFunc("POST /posts/{id}/edit", app.UpdatePostSubmit)
+	mux.HandleFunc("POST /posts/{id}/delete", app.DeletePostSubmit)
 	mux.HandleFunc("POST /posts/{id}/reactions", app.ToggleReaction)
 
 	// User cards & profiles
 	mux.HandleFunc("GET /users/{name}", app.UserCardPage)
 	mux.HandleFunc("POST /users/me/profile", app.UpdateProfileSubmit)
+
+	// Account security: password change and session revocation
+	mux.HandleFunc("GET /account", app.AccountPage)
+	mux.HandleFunc("POST /account/password", app.ChangePasswordSubmit)
+	mux.HandleFunc("POST /account/sign-out-everywhere", app.SignOutEverywhereSubmit)
 
 	// Mentions & replies inbox
 	mux.HandleFunc("GET /inbox", app.InboxPage)
@@ -375,5 +388,5 @@ func (app *App) Routes() http.Handler {
 
 	// Security headers go outermost so they are present on every response,
 	// including 302s, 404s, and static files.
-	return middleware.SecurityHeaders(middleware.MaxBody(app.middleware.FirstRunAndAuth(mux)))
+	return middleware.SecurityHeaders(middleware.CSRFProtect(middleware.MaxBody(app.middleware.FirstRunAndAuth(mux))))
 }

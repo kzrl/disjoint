@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,6 +78,49 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// CSRFProtect is a defense-in-depth same-origin check for state-changing
+// requests. Session cookies are already SameSite=Lax and every mutation is a
+// POST, but an Origin/Sec-Fetch-Site check stops forged form posts from
+// same-site sibling origins and from browsers that ignore SameSite.
+//
+// Scheme is deliberately ignored when comparing Origin with Host: TLS is
+// commonly terminated by a reverse proxy, so the browser sees https while the
+// Go process sees http. The hostname is the security-relevant part.
+func CSRFProtect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Hostname() == "" || !strings.EqualFold(u.Hostname(), requestHostname(r.Host)) {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" &&
+			site != "same-origin" && site != "none" {
+			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requestHostname strips a port and IPv6 brackets so it can be compared with
+// url.URL.Hostname from an Origin header.
+func requestHostname(hostport string) string {
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		return strings.ToLower(host)
+	}
+	return strings.ToLower(strings.Trim(hostport, "[]"))
 }
 
 // MaxRequestBodyBytes bounds any single HTTP request body. It is a coarse

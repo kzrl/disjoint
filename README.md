@@ -41,6 +41,10 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Mentions & Replies Inbox**: A navbar bell counts the conversations waiting for you. An `@mention` notifies exactly the users whose names render as pills, and replies notify everyone in the thread. One row per thread (not per reply), read only when you open the thread or press “Mark all read”.
 
+- **Account Security**: Change your password from `/account` (minimum 8 characters); doing so revokes every session, and a separate “Sign out everywhere” action clears all devices without changing the password.
+
+- **Deletion & Moderation**: Authors can delete their own replies and threads; administrators can remove any thread or reply. Deleting an opening post takes the whole thread with it, and attachment files and thumbnails are cleaned up from disk.
+
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
 
 - **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.
@@ -117,6 +121,53 @@ A single post (opening post or reply) accepts at most **16 attachments**, **50 M
 
 `GET /healthz` is public (it bypasses login and first-run setup) and returns `200 ok` when the database answers, or `503` when it does not. The Docker image ships a `HEALTHCHECK` that probes this endpoint.
 
+### Backups
+
+`disjoint-backup` writes a timestamped folder containing:
+
+- `disjoint.db` — a transactionally consistent snapshot made with SQLite `VACUUM INTO`
+- `uploads.tar.gz` — attachments, avatars, custom emoji, and cached thumbnails
+- `manifest.json` — creation time and source paths
+
+From a source checkout:
+
+```bash
+make backup                    # writes to ./backups/
+BACKUP_DIR=/mnt/backups make backup
+```
+
+In Docker (the image sets `BACKUP_DIR=/data/backups`):
+
+```bash
+docker compose exec disjoint /app/disjoint-backup
+# uses the exact path printed by the tool
+docker cp disjoint:/data/backups/disjoint-<full-name> ./disjoint-backup
+```
+
+Keep a copy outside the host/volume. Backup folders are never pruned automatically.
+
+#### Restore
+
+**Stop the application first.** Restoring replaces the live database and uploads.
+
+From a source checkout:
+
+```bash
+make restore FROM=backups/disjoint-<full-name>
+```
+
+In Docker:
+
+```bash
+docker compose stop disjoint
+docker cp ./disjoint-backup disjoint:/data/backups/
+docker compose run --rm --entrypoint /app/disjoint-restore disjoint \
+  -from /data/backups/disjoint-backup -force
+docker compose start disjoint
+```
+
+The restore tool validates the snapshot with `PRAGMA quick_check`, requires `-force`, and moves the previous database and uploads aside as `*.pre-restore-<stamp>` instead of deleting them. Delete those safety copies once the restore is verified.
+
 ### Behind a reverse proxy (Caddy)
 
 ```caddyfile
@@ -125,7 +176,7 @@ example.com {
 }
 ```
 
-Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets `X-Real-IP` to the real client address on proxied requests, which Disjoint's login/register rate limiter uses (when connections arrive from loopback).
+Run the app with `HOST=127.0.0.1` and `COOKIE_SECURE=1`. Caddy sets `X-Real-IP` to the real client address on proxied requests, which Disjoint's login/register rate limiter uses (when connections arrive from loopback). The proxy must preserve the original `Host` header (Caddy does by default): state-changing requests are checked against the request host as CSRF defense-in-depth.
 
 ---
 
@@ -150,7 +201,8 @@ make css         # re-vendor Bulma and regenerate web/static/disjoint.css
 | Path | Purpose |
 |---|---|
 | `cmd/disjoint` | Entry point |
-| `internal/` | Handlers, auth, avatars, markdown, background worker |
+| `cmd/disjoint-backup` / `cmd/disjoint-restore` | Backup and restore CLIs |
+| `internal/` | Handlers, auth, avatars, backup, markdown, background worker |
 | `db/` | `schema.sql` and sqlc query definitions |
 | `web/` | Templates, vendored static assets (HTMX, Bulma) |
 | `specs/` | Design specs (core app, user/admin flows) |

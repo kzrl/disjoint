@@ -46,6 +46,7 @@
 
       <div class="navbar-end">
         {{if .CurrentUser}}
+          <a href="/account" class="navbar-item">Account</a>
           {{template "inbox_bell" .}}
           <div class="navbar-item">
             <span class="tag is-medium">

@@ -162,6 +162,19 @@ WHERE id = ? AND user_id = ?;
 DELETE FROM threads
 WHERE id = ?;
 
+-- name: DeletePost :exec
+-- Caller has already checked ownership/moderation rights. FKs cascade to
+-- attachments, reactions, and inbox rows that point at this post.
+DELETE FROM posts
+WHERE id = ?;
+
+-- name: GetFirstPostIDByThreadID :one
+-- The opening post is never deleted as a reply: deleting it deletes the
+-- whole thread instead. 0 means the thread has no posts (should not happen).
+SELECT CAST(COALESCE(MIN(id), 0) AS INTEGER) AS first_post_id
+FROM posts
+WHERE thread_id = ?;
+
 -- name: GetAttachmentsForExpiredThreads :many
 SELECT a.id, a.storage_path
 FROM attachments a
@@ -253,6 +266,9 @@ FROM attachments a
 JOIN posts p ON a.post_id = p.id
 WHERE p.thread_id = ?
 ORDER BY a.id ASC;
+
+-- name: ListAttachmentsByPostID :many
+SELECT * FROM attachments WHERE post_id = ? ORDER BY id ASC;
 
 -- name: CountAttachmentsByPostID :one
 -- Used by the edit handler: a post that carries attachments may be saved
@@ -348,6 +364,9 @@ SELECT COUNT(*) FROM posts WHERE user_id = ?;
 
 -- name: UpdateUserBio :exec
 UPDATE users SET bio = ? WHERE id = ?;
+
+-- name: UpdateUserPassword :exec
+UPDATE users SET password_hash = ? WHERE id = ?;
 
 -- name: SetUserAvatar :exec
 UPDATE users SET avatar_path = ? WHERE id = ?;
