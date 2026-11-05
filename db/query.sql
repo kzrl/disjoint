@@ -224,6 +224,34 @@ LEFT JOIN users u ON p.user_id = u.id
 WHERE p.thread_id = ?
 ORDER BY p.created_at ASC, p.id ASC;
 
+-- name: ListPostsByThreadPage :many
+-- One page of a thread in chronological order. Page 1 includes the opening
+-- post; the last page carries the composer.
+SELECT
+    p.id,
+    p.thread_id,
+    p.user_id,
+    p.body,
+    COALESCE(p.url, '') AS url,
+    p.created_at,
+    p.updated_at,
+    COALESCE(u.username, '') AS author_username,
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
+FROM posts p
+LEFT JOIN users u ON p.user_id = u.id
+WHERE p.thread_id = ?
+ORDER BY p.created_at ASC, p.id ASC
+LIMIT ? OFFSET ?;
+
+-- name: CountPostsByThreadID :one
+SELECT COUNT(*) FROM posts WHERE thread_id = ?;
+
+-- name: CountPostsUpToInThread :one
+-- Position of a post within its thread, used to resolve ?from=<post-id>
+-- links (front page, inbox, quotes) to the page that contains the post.
+SELECT COUNT(*) FROM posts WHERE thread_id = ? AND id <= ?;
+
 -- name: GetPostByID :one
 SELECT 
     p.id,
@@ -290,6 +318,10 @@ ORDER BY a.id ASC;
 
 -- name: ListAttachmentsByPostID :many
 SELECT * FROM attachments WHERE post_id = ? ORDER BY id ASC;
+
+-- name: ListAttachmentsByPostIDs :many
+-- Attachments for one rendered thread page in a single round trip.
+SELECT * FROM attachments WHERE post_id IN (sqlc.slice('postIds')) ORDER BY id ASC;
 
 -- name: CountAttachmentsByPostID :one
 -- Used by the edit handler: a post that carries attachments may be saved

@@ -137,6 +137,17 @@ func (app *App) DeletePostSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load attachments", http.StatusInternalServerError)
 		return
 	}
+
+	// Return to the page the deleted reply lived on; if that empties the last
+	// page, ThreadPage clamps the page number to the new last page.
+	targetPage := 1
+	if position, err := app.queries.CountPostsUpToInThread(ctx, database.CountPostsUpToInThreadParams{
+		ThreadID: post.ThreadID,
+		ID:       post.ID,
+	}); err == nil && position > 0 {
+		targetPage = int((position-1)/threadPageSize) + 1
+	}
+
 	if err := app.queries.DeletePost(ctx, post.ID); err != nil {
 		http.Error(w, "failed to delete post", http.StatusInternalServerError)
 		return
@@ -144,5 +155,5 @@ func (app *App) DeletePostSubmit(w http.ResponseWriter, r *http.Request) {
 	app.removeAttachmentFiles(attachments)
 
 	setFlash(w, "flash_success", "Post deleted.")
-	http.Redirect(w, r, fmt.Sprintf("/threads/%d", post.ThreadID), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/threads/%d?page=%d", post.ThreadID, targetPage), http.StatusSeeOther)
 }

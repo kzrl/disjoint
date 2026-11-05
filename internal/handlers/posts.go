@@ -202,7 +202,7 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Standard fallback: redirect to thread anchoring to newly created post
-	http.Redirect(w, r, fmt.Sprintf("/threads/%d#post-%d", thread.ID, post.ID), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/threads/%d?from=%d#post-%d", thread.ID, post.ID, post.ID), http.StatusSeeOther)
 }
 
 // EditPostPage renders the edit form (body + first-class link) for a post.
@@ -314,7 +314,7 @@ func (app *App) UpdatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	// appear on a resubmitted, unchanged form.
 	if body == post.Body && postURL == post.Url {
 		setFlash(w, "flash_success", "No changes to save.")
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d#post-%d", post.ThreadID, post.ID), http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d?from=%d#post-%d", post.ThreadID, post.ID, post.ID), http.StatusSeeOther)
 		return
 	}
 
@@ -334,5 +334,5 @@ func (app *App) UpdatePostSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	setFlash(w, "flash_success", "Post updated.")
-	http.Redirect(w, r, fmt.Sprintf("/threads/%d#post-%d", post.ThreadID, post.ID), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/threads/%d?from=%d#post-%d", post.ThreadID, post.ID, post.ID), http.StatusSeeOther)
 }

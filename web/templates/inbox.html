@@ -22,7 +22,7 @@
                 {{if .Unread}}<span class="unread-dot" role="img" title="Unread" aria-label="Unread"></span>{{end}}
                 <span class="inbox-actor">{{authorAvatar .ActorAvatar .ActorUsername .ActorAvatarNonce}}{{userLink .ActorUsername}}</span>
                 <span class="inbox-verb">{{if eq .Reason "mention"}}mentioned you{{else}}replied{{end}} in</span>
-                <a href="/threads/{{.ThreadID}}#post-{{.PostID}}">{{.Title}}</a>
+                <a href="/threads/{{.ThreadID}}?from={{.PostID}}#post-{{.PostID}}">{{.Title}}</a>
               </div>
               {{if .Snippet}}
                 <div class="inbox-snippet">{{.Snippet}}</div>

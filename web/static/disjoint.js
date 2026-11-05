@@ -454,9 +454,26 @@
     label();
   }
 
+  // Old permalinks (stored quotes, bookmarks) use /threads/{id}#post-N
+  // without ?from=. If that post is on a later page, ask the server once to
+  // resolve the page. A canonical page URL always carries ?page=, so a
+  // missing/deleted post cannot cause a redirect loop.
+  function bindPostAnchorFallback() {
+    var match = /^#post-(\d+)$/.exec(window.location.hash);
+    if (!match) return;
+    if (new URLSearchParams(window.location.search).has('page')) return;
+    if (document.getElementById('post-' + match[1])) return;
+    var container = document.getElementById('posts-container');
+    if (!container) return;
+    var threadID = container.getAttribute('data-thread-id');
+    if (!threadID) return;
+    window.location.replace('/threads/' + threadID + '?from=' + match[1] + '#post-' + match[1]);
+  }
+
   function init() {
     var forms = document.querySelectorAll('form');
     for (var i = 0; i < forms.length; i++) bindForm(forms[i]);
+    bindPostAnchorFallback();
     bindPickers();
     bindToasts();
     bindLightbox();

@@ -1102,7 +1102,7 @@ func TestStandardFormReplyFallback(t *testing.T) {
 		t.Fatalf("expected 303 redirect for standard form reply, got %d", rr.Code)
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.HasPrefix(loc, fmt.Sprintf("/threads/%d#post-", thread.ID)) {
+	if !strings.HasPrefix(loc, fmt.Sprintf("/threads/%d?from=", thread.ID)) || !strings.Contains(loc, "#post-") {
 		t.Fatalf("expected redirect to thread anchoring to post, got %s", loc)
 	}
 }
@@ -3297,7 +3297,7 @@ func TestPostEditing(t *testing.T) {
 		"body": "revised body",
 		"url":  "https://example.com/new",
 	})
-	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d#post-%d", thread.ID, post.ID) {
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != fmt.Sprintf("/threads/%d?from=%d#post-%d", thread.ID, post.ID, post.ID) {
 		t.Fatalf("edit redirect: %d %q", rr.Code, rr.Header().Get("Location"))
 	}
 	if !flashCookieSet(rr, "flash_success", "Post updated.") {
@@ -4451,7 +4451,7 @@ func TestInboxPageBadgeAndMarkAllRead(t *testing.T) {
 		`class="inbox-badge" aria-hidden="true">1<`,
 		`class="board-row inbox-row is-unread"`,
 		"mentioned you in",
-		"/threads/" + strconv.FormatInt(threadID, 10) + "#post-" + strconv.FormatInt(postID, 10),
+		"/threads/" + strconv.FormatInt(threadID, 10) + "?from=" + strconv.FormatInt(postID, 10) + "#post-" + strconv.FormatInt(postID, 10),
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("inbox page missing %q", want)

@@ -18,6 +18,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
 
+- **Thread Pagination**: Long threads are split into chronological pages of 20 posts. Page 1 starts with the opening post, the last page carries the reply box, and permalinks resolve to the page containing the linked post.
+
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
 
 - **Embedded File Attachments & Media**:

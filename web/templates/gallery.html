@@ -22,7 +22,7 @@
                    loading="lazy" decoding="async" alt="{{.Filename}}">
             </a>
             <figcaption class="gallery-caption">
-              <a href="/threads/{{.ThreadID}}#post-{{.PostID}}">{{.ThreadTitle}}</a>
+              <a href="/threads/{{.ThreadID}}?from={{.PostID}}#post-{{.PostID}}">{{.ThreadTitle}}</a>
               <time class="is-size-7 muted" datetime="{{isoTime .Time}}" title="{{formatTime .Time}}">{{formatRelative .Time}}</time>
             </figcaption>
           </figure>

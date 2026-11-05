@@ -38,7 +38,7 @@ func expirationToTTL(choice string) (time.Duration, bool) {
 
 // PostViewItem holds post details and its associated attachments and reactions.
 type PostViewItem struct {
-	Post        database.ListPostsByThreadRow
+	Post        database.ListPostsByThreadPageRow
 	Attachments []database.Attachment
 	Reactions   []ReactionGroup
 	Emojis      []database.ListAllEmojisRow // full list, rendered into the picker
@@ -239,18 +239,18 @@ func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) 
 	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
 		setFlash(w, "flash_error", "Thread title is required.")
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 	if len(title) > maxThreadTitleLength {
 		setFlash(w, "flash_error", fmt.Sprintf("Title is too long (max %d characters).", maxThreadTitleLength))
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 
 	if title == thread.Title {
 		setFlash(w, "flash_success", "No changes to save.")
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 
@@ -269,7 +269,7 @@ func (app *App) UpdateThreadTitleSubmit(w http.ResponseWriter, r *http.Request) 
 	}
 
 	setFlash(w, "flash_success", "Title updated.")
-	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+	http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 }
 
 // UpdateThreadExpirationSubmit handles the author changing their thread's
@@ -316,7 +316,7 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 	duration, hasTTL := expirationToTTL(choice) // "never" and unknown both report false
 	if choice != "never" && !hasTTL {
 		setFlash(w, "flash_error", "Unknown lifespan.")
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 
@@ -326,7 +326,7 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 	if (currentIsNever && choice == "never") ||
 		(!currentIsNever && hasTTL && int64(duration.Seconds()) == thread.TtlSeconds.Int64) {
 		setFlash(w, "flash_success", "No changes to save.")
-		http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+		http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 		return
 	}
 
@@ -353,7 +353,7 @@ func (app *App) UpdateThreadExpirationSubmit(w http.ResponseWriter, r *http.Requ
 	}
 
 	setFlash(w, "flash_success", "Expiration updated.")
-	http.Redirect(w, r, fmt.Sprintf("/threads/%d", thread.ID), http.StatusSeeOther)
+	http.Redirect(w, r, threadPageURL(r, thread.ID), http.StatusSeeOther)
 }
 
 // expiryPercent reports how much of a thread's current lifespan is left, as
@@ -374,7 +374,24 @@ func expiryPercent(ttl sql.NullInt64, expiresAt sql.NullTime) int {
 	return pct
 }
 
-// ThreadPage renders the thread detail view with all posts and attachments.
+// threadPageSize is the number of posts per thread page. Page 1 includes the
+// opening post; the last page carries the composer and the live-update pill.
+const threadPageSize = 20
+
+// threadPageURL returns the canonical thread URL for the page submitted with a
+// title/expiration form, so an edit made on page 3 does not bounce the user
+// back to page 1.
+func threadPageURL(r *http.Request, threadID int64) string {
+	if page, err := strconv.Atoi(r.FormValue("page")); err == nil && page > 1 {
+		return fmt.Sprintf("/threads/%d?page=%d", threadID, page)
+	}
+	return fmt.Sprintf("/threads/%d", threadID)
+}
+
+// ThreadPage renders one page of a thread. Pagination is chronological:
+// page 1 starts with the opening post, and the last page holds the newest
+// replies plus the composer. ?from=<post-id> redirects to the page containing
+// that post, so front-page/inbox/quote permalinks work across pages.
 func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -396,6 +413,50 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
+	totalPosts, err := app.queries.CountPostsByThreadID(ctx, thread.ID)
+	if err != nil {
+		http.Error(w, "failed to count posts", http.StatusInternalServerError)
+		return
+	}
+	totalPages := int((totalPosts + threadPageSize - 1) / threadPageSize)
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	// ?from=<post-id> is used by permalinks (front-page last comment, inbox,
+	// quotes, the new-replies pill). Resolve it to the page that contains the
+	// post, then redirect to a canonical page URL with the anchor intact.
+	if fromRaw := r.URL.Query().Get("from"); fromRaw != "" {
+		fromID, parseErr := strconv.ParseInt(fromRaw, 10, 64)
+		if parseErr == nil {
+			post, postErr := app.queries.GetPostByID(ctx, fromID)
+			if postErr == nil && post.ThreadID == thread.ID {
+				position, countErr := app.queries.CountPostsUpToInThread(ctx, database.CountPostsUpToInThreadParams{
+					ThreadID: thread.ID,
+					ID:       fromID,
+				})
+				if countErr == nil && position > 0 {
+					targetPage := int((position-1)/threadPageSize) + 1
+					http.Redirect(w, r, fmt.Sprintf("/threads/%d?page=%d#post-%d", thread.ID, targetPage, fromID), http.StatusSeeOther)
+					return
+				}
+			}
+		}
+		// Unknown/stale/foreign post id: land on page 1 rather than looping
+		// back through ?from= forever.
+		http.Redirect(w, r, fmt.Sprintf("/threads/%d?page=1", thread.ID), http.StatusSeeOther)
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	isLastPage := page == totalPages
 
 	viewerID := int64(0)
 	isAdmin := false
@@ -419,46 +480,59 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	posts, err := app.queries.ListPostsByThread(ctx, thread.ID)
+	posts, err := app.queries.ListPostsByThreadPage(ctx, database.ListPostsByThreadPageParams{
+		ThreadID: thread.ID,
+		Limit:    threadPageSize,
+		Offset:   int64((page - 1) * threadPageSize),
+	})
 	if err != nil {
 		http.Error(w, "failed to load posts", http.StatusInternalServerError)
 		return
 	}
 
-	allAttachments, err := app.queries.ListAttachmentsByThreadID(ctx, thread.ID)
-	if err != nil {
-		http.Error(w, "failed to load attachments", http.StatusInternalServerError)
-		return
+	postIDs := make([]int64, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
 	}
 
-	// Group attachments by post ID
+	var pageAttachments []database.Attachment
+	if len(postIDs) > 0 {
+		pageAttachments, err = app.queries.ListAttachmentsByPostIDs(ctx, postIDs)
+		if err != nil {
+			http.Error(w, "failed to load attachments", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Group attachments by post ID.
 	attMap := make(map[int64][]database.Attachment)
-	for _, att := range allAttachments {
+	for _, att := range pageAttachments {
 		attMap[att.PostID] = append(attMap[att.PostID], att)
 	}
 
-	// Reactions: one query for the whole thread, grouped per post in Go. A
-	// guest has no user ID, so no chip ever shows the active state for them.
-	reactionRows, err := app.queries.ListReactionsByThreadID(ctx, thread.ID)
-	if err != nil {
-		http.Error(w, "failed to load reactions", http.StatusInternalServerError)
-		return
-	}
+	// Reactions for this page only. A guest has no user ID, so no chip ever
+	// shows the active state for them.
 	var rRows []reactionRow
-	for _, r := range reactionRows {
-		rRows = append(rRows, reactionRow{
-			postID:      r.PostID,
-			userID:      r.UserID,
-			emojiID:     r.EmojiID,
-			name:        r.EmojiName,
-			source:      r.EmojiSource,
-			glyph:       r.EmojiGlyph,
-			storagePath: r.EmojiStoragePath,
-			username:    r.Username,
-		})
+	if len(postIDs) > 0 {
+		reactionRows, err := app.queries.ListReactionsByPostIDs(ctx, postIDs)
+		if err != nil {
+			http.Error(w, "failed to load reactions", http.StatusInternalServerError)
+			return
+		}
+		for _, r := range reactionRows {
+			rRows = append(rRows, reactionRow{
+				postID:      r.PostID,
+				userID:      r.UserID,
+				emojiID:     r.EmojiID,
+				name:        r.EmojiName,
+				source:      r.EmojiSource,
+				glyph:       r.EmojiGlyph,
+				storagePath: r.EmojiStoragePath,
+				username:    r.Username,
+			})
+		}
 	}
-	currentUserID := viewerID
-	reactionGroups := groupReactions(rRows, currentUserID)
+	reactionGroups := groupReactions(rRows, viewerID)
 
 	// Every bar carries the full emoji list for its picker.
 	emojis, err := app.queries.ListAllEmojis(ctx)
@@ -467,33 +541,42 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	firstPostID, err := app.queries.GetFirstPostIDByThreadID(ctx, thread.ID)
+	if err != nil {
+		http.Error(w, "failed to load thread", http.StatusInternalServerError)
+		return
+	}
+
 	// CanEdit is author-only (no admin override, per tasks/plan-editing.md);
-	// guests have no user so it is always false for them.
+	// guests have no user so it is always false for them. The opening post is
+	// deleted through the thread header, never through the post card.
 	var postViews []PostViewItem
-	for i, p := range posts {
+	for _, p := range posts {
 		postViews = append(postViews, PostViewItem{
 			Post:        p,
 			Attachments: attMap[p.ID],
 			Reactions:   reactionGroups[p.ID],
 			Emojis:      emojis,
 			CanEdit:     p.UserID == viewerID,
-			// The opening post is deleted through the thread header, never
-			// through the post card (deleting it would leave a headless thread).
-			CanDelete: (p.UserID == viewerID || isAdmin) && i > 0,
+			CanDelete:   (p.UserID == viewerID || isAdmin) && p.ID != firstPostID,
 		})
 	}
 
-	replyCount := len(posts) - 1 // the opening post is not a reply
+	replyCount := totalPosts - 1 // the opening post is not a reply
 	if replyCount < 0 {
 		replyCount = 0
 	}
 
 	// The "N new replies" pill polls for posts newer than the newest one
-	// rendered here. posts are ordered by created_at/id ASC, so the last row
-	// is the highest id; the thread always has at least the opening post.
+	// rendered here. It is only meaningful on the last page; earlier pages
+	// would immediately offer already-existing later pages as "new".
 	lastPostID := int64(0)
 	if len(posts) > 0 {
 		lastPostID = posts[len(posts)-1].ID
+	}
+	newPosts := NewPostsView{}
+	if isLastPage {
+		newPosts = newPostsView(thread.ID, lastPostID, 0, 0)
 	}
 
 	app.render(w, r, "thread.html", map[string]any{
@@ -501,8 +584,11 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		"Posts":           postViews,
 		"ReplyCount":      replyCount,
 		"ExpiryPercent":   expiryPercent(thread.TtlSeconds, thread.ExpiresAt),
-		"NewPosts":        newPostsView(thread.ID, lastPostID, 0, 0),
+		"NewPosts":        newPosts,
 		"CanDeleteThread": thread.UserID == viewerID || isAdmin,
+		"Page":            page,
+		"TotalPages":      totalPages,
+		"IsLastPage":      isLastPage,
 	}, thread.Title)
 }
 

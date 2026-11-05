@@ -600,3 +600,31 @@ Plan: [tasks/plan-mention-autocomplete.md](plan-mention-autocomplete.md)
   - [x] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
   - [x] No schema change, no new dependency
   - [ ] Review with human
+
+---
+
+# Task List: Thread Pagination — DONE
+
+Chronological thread pages (20 posts/page): page 1 starts at the opening post,
+the last page carries the composer and live-update pill, and `?from={post-id}`
+resolves permalinks to the page containing the post.
+
+- [x] Query layer  (DONE)
+  - `ListPostsByThreadPage`, `CountPostsByThreadID`, `CountPostsUpToInThread`
+  - `ListAttachmentsByPostIDs` so attachments/reactions load only for the rendered page
+- [x] Handler  (DONE)
+  - `?page` clamped to 1..TotalPages; `?from={post-id}` redirects to `?page=N#post-{id}`
+  - Unknown/foreign/deleted post ids fall back to page 1 (no redirect loop)
+  - Composer and poller only on the last page; `CanDelete` compares the opening post id, not the page-local index
+- [x] Template/UI  (DONE)
+  - Pagination frame with Page X of Y, Prev/Next, at top and bottom
+  - Non-last pages show "Go to the latest replies to reply"
+  - All permalink surfaces now emit `?from=`: front-page last comment, inbox, gallery, quote, edit breadcrumb/cancel, post-create/edit redirects
+- [x] Legacy anchors  (DONE)
+  - `disjoint.js` upgrades fragment-only `#post-N` links once when the target is absent and no `?page=` is present
+- [x] Tests  (DONE)
+  - Default/page 2/last/out-of-range pages, post counts, composer/poller placement, delete control on page 2, `?from=` resolution and fallbacks
+- [x] Checkpoint: Complete
+  - [x] `go test -race -count=1 ./...` green; `gofmt`/`go vet` clean
+  - [x] No migration, no new dependency
+  - [ ] Review with human

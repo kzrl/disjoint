@@ -157,7 +157,7 @@ func TestGalleryListsOpeningAndReplyImages(t *testing.T) {
 	if strings.Contains(body, "document.pdf") || strings.Contains(body, "clip.mp4") {
 		t.Error("non-image attachments leaked into the wall")
 	}
-	if !strings.Contains(body, `href="/threads/`+fmt.Sprint(thread.ID)+`#post-`+fmt.Sprint(reply.ID)+`"`) {
+	if !strings.Contains(body, `href="/threads/`+fmt.Sprint(thread.ID)+`?from=`+fmt.Sprint(reply.ID)+`#post-`+fmt.Sprint(reply.ID)+`"`) {
 		t.Error("reply image caption does not link to the reply")
 	}
 	if !strings.Contains(body, "gallery thread") {

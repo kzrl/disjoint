@@ -63,7 +63,7 @@
               {{if .Row.LastCommentID.Valid}}
                 <span class="is-size-7">{{.ReplyCount}} {{if eq .ReplyCount 1}}comment{{else}}comments{{end}}</span>
                 <span class="is-size-7 muted" aria-hidden="true">&bull;</span>
-                <a class="is-size-7" href="/threads/{{.Row.ID}}#post-{{.Row.LastCommentID.Int64}}" title="View the latest comment">{{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time></a>
+                <a class="is-size-7" href="/threads/{{.Row.ID}}?from={{.Row.LastCommentID.Int64}}#post-{{.Row.LastCommentID.Int64}}" title="View the latest comment">{{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time></a>
               {{else}}
                 <span class="is-size-7 muted">No comments yet</span>
               {{end}}

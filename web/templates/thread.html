@@ -27,6 +27,7 @@
                  UA [hidden] rule. The script below toggles via data-toggle-form. -->
             <button type="button" class="button is-small is-secondary" id="edit-title-btn" data-toggle-form="#title-edit-form">Edit title</button>
             <form method="POST" action="/threads/{{.Thread.ID}}/title" id="title-edit-form" class="field has-addons mb-1 is-hidden">
+              <input type="hidden" name="page" value="{{.Page}}">
               <div class="control">
                 <input type="text" name="title" class="input is-small" value="{{.Thread.Title}}" required maxlength="200" placeholder="Thread title">
               </div>
@@ -39,6 +40,7 @@
             </form>
             <button type="button" class="button is-small is-secondary" id="change-expiration-btn" data-toggle-form="#expiration-edit-form">Change expiration</button>
             <form method="POST" action="/threads/{{.Thread.ID}}/expiration" id="expiration-edit-form" class="field has-addons mb-1 is-hidden">
+              <input type="hidden" name="page" value="{{.Page}}">
               <div class="control">
                 <select name="expiration" class="input is-small">
                   <option value="24h" {{if expirationIs .Thread.TtlSeconds 86400}}selected{{end}}>24 hours</option>
@@ -82,17 +84,22 @@
     {{end}}
   </div>
 
+  {{template "thread_pagination" .}}
+
   <div id="posts-container" class="posts-container" data-thread-id="{{.Thread.ID}}" data-lightbox-group>
     {{range .Posts}}
       {{template "post_card" .}}
     {{end}}
   </div>
 
-  {{template "new_posts" .NewPosts}}
+  {{template "thread_pagination" .}}
 
-  <!-- Reply box with HTMX. No heading: the box after the posts is obviously
-       the composer; Ctrl/Cmd+Enter posts (see disjoint.js). -->
-  <div class="box mb-5 composer-box">
+  {{if .IsLastPage}}
+    {{template "new_posts" .NewPosts}}
+
+    <!-- Reply box with HTMX. No heading: the box after the posts is obviously
+         the composer; Ctrl/Cmd+Enter posts (see disjoint.js). -->
+    <div class="box mb-5 composer-box">
     <form id="reply-form"
           hx-post="/threads/{{.Thread.ID}}/posts"
           hx-target="#posts-container"
@@ -138,9 +145,14 @@
         </div>
       </div>
 
-      <button type="submit" class="button is-primary">Post Reply</button>
-    </form>
-  </div>
+        <button type="submit" class="button is-primary">Post Reply</button>
+      </form>
+    </div>
+  {{else}}
+    <div class="has-text-centered my-5">
+      <a class="button is-secondary" href="/threads/{{.Thread.ID}}?page={{.TotalPages}}">Go to the latest replies to reply</a>
+    </div>
+  {{end}}
 
   <!-- Title edit + expiration change: each button toggles its inline form
        (data-toggle-form points at the form's id). One delegated listener
@@ -216,7 +228,7 @@
         var quote = '> **' + author + ' wrote:**\n' +
           lines.map(function (l) { return l === '' ? '>' : '> ' + l; }).join('\n') +
           '\n>\n' +
-          '> \u2014 [view original](/threads/' + threadID + '#post-' + postID + ')';
+          '> \u2014 [view original](/threads/' + threadID + '?from=' + postID + '#post-' + postID + ')';
 
         // Append after any existing reply text; never clobber it.
         var existing = textarea.value;
@@ -229,4 +241,18 @@
     })();
   </script>
 </div>
+{{end}}
+
+{{define "thread_pagination"}}
+{{if gt .TotalPages 1}}
+<nav class="pagination-wrap py-2 has-text-centered" aria-label="Thread pages">
+  {{if gt .Page 1}}
+    <a class="button is-secondary is-small" href="/threads/{{.Thread.ID}}?page={{sub .Page 1}}">&larr; Prev</a>
+  {{end}}
+  <span class="is-size-7 muted px-2">Page {{.Page}} of {{.TotalPages}}</span>
+  {{if lt .Page .TotalPages}}
+    <a class="button is-secondary is-small" href="/threads/{{.Thread.ID}}?page={{add .Page 1}}">Next &rarr;</a>
+  {{end}}
+</nav>
+{{end}}
 {{end}}

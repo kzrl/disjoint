@@ -153,7 +153,7 @@ func TestDeletePostAndThreadPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	rr := deleteRequest(router, "/posts/"+strconv.FormatInt(replyByBob.ID, 10)+"/delete", bobCookie)
-	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/threads/"+strconv.FormatInt(fx.thread.ID, 10) {
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/threads/"+strconv.FormatInt(fx.thread.ID, 10)+"?page=1" {
 		t.Fatalf("own reply delete = %d to %s", rr.Code, rr.Header().Get("Location"))
 	}
 	if _, err := queries.GetPostByID(ctx, replyByBob.ID); err == nil {

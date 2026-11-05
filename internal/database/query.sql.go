@@ -87,12 +87,41 @@ func (q *Queries) CountAttachmentsByPostID(ctx context.Context, postID int64) (i
 	return count, err
 }
 
+const countPostsByThreadID = `-- name: CountPostsByThreadID :one
+SELECT COUNT(*) FROM posts WHERE thread_id = ?
+`
+
+func (q *Queries) CountPostsByThreadID(ctx context.Context, threadID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPostsByThreadID, threadID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPostsByUserID = `-- name: CountPostsByUserID :one
 SELECT COUNT(*) FROM posts WHERE user_id = ?
 `
 
 func (q *Queries) CountPostsByUserID(ctx context.Context, userID int64) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPostsByUserID, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPostsUpToInThread = `-- name: CountPostsUpToInThread :one
+SELECT COUNT(*) FROM posts WHERE thread_id = ? AND id <= ?
+`
+
+type CountPostsUpToInThreadParams struct {
+	ThreadID int64
+	ID       int64
+}
+
+// Position of a post within its thread, used to resolve ?from=<post-id>
+// links (front page, inbox, quotes) to the page that contains the post.
+func (q *Queries) CountPostsUpToInThread(ctx context.Context, arg CountPostsUpToInThreadParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPostsUpToInThread, arg.ThreadID, arg.ID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -827,6 +856,52 @@ func (q *Queries) ListAttachmentsByPostID(ctx context.Context, postID int64) ([]
 	return items, nil
 }
 
+const listAttachmentsByPostIDs = `-- name: ListAttachmentsByPostIDs :many
+SELECT id, post_id, filename, storage_path, mime_type, file_size, created_at FROM attachments WHERE post_id IN (/*SLICE:postIds*/?) ORDER BY id ASC
+`
+
+// Attachments for one rendered thread page in a single round trip.
+func (q *Queries) ListAttachmentsByPostIDs(ctx context.Context, postids []int64) ([]Attachment, error) {
+	query := listAttachmentsByPostIDs
+	var queryParams []interface{}
+	if len(postids) > 0 {
+		for _, v := range postids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:postIds*/?", strings.Repeat(",?", len(postids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:postIds*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.PostID,
+			&i.Filename,
+			&i.StoragePath,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttachmentsByThreadID = `-- name: ListAttachmentsByThreadID :many
 SELECT a.id, a.post_id, a.filename, a.storage_path, a.mime_type, a.file_size, a.created_at
 FROM attachments a
@@ -1352,6 +1427,80 @@ func (q *Queries) ListPostsByThread(ctx context.Context, threadID int64) ([]List
 	var items []ListPostsByThreadRow
 	for rows.Next() {
 		var i ListPostsByThreadRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ThreadID,
+			&i.UserID,
+			&i.Body,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AuthorUsername,
+			&i.AuthorAvatar,
+			&i.AuthorAvatarNonce,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPostsByThreadPage = `-- name: ListPostsByThreadPage :many
+SELECT
+    p.id,
+    p.thread_id,
+    p.user_id,
+    p.body,
+    COALESCE(p.url, '') AS url,
+    p.created_at,
+    p.updated_at,
+    COALESCE(u.username, '') AS author_username,
+    COALESCE(u.avatar_path, '') AS author_avatar,
+    COALESCE(u.avatar_nonce, 0) AS author_avatar_nonce
+FROM posts p
+LEFT JOIN users u ON p.user_id = u.id
+WHERE p.thread_id = ?
+ORDER BY p.created_at ASC, p.id ASC
+LIMIT ? OFFSET ?
+`
+
+type ListPostsByThreadPageParams struct {
+	ThreadID int64
+	Limit    int64
+	Offset   int64
+}
+
+type ListPostsByThreadPageRow struct {
+	ID                int64
+	ThreadID          int64
+	UserID            int64
+	Body              string
+	Url               string
+	CreatedAt         sql.NullTime
+	UpdatedAt         sql.NullTime
+	AuthorUsername    string
+	AuthorAvatar      string
+	AuthorAvatarNonce int64
+}
+
+// One page of a thread in chronological order. Page 1 includes the opening
+// post; the last page carries the composer.
+func (q *Queries) ListPostsByThreadPage(ctx context.Context, arg ListPostsByThreadPageParams) ([]ListPostsByThreadPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPostsByThreadPage, arg.ThreadID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPostsByThreadPageRow
+	for rows.Next() {
+		var i ListPostsByThreadPageRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ThreadID,
