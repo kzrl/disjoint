@@ -311,11 +311,12 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 				m["UnreadNotifications"] = n
 			}
 		}
-		// Build commit for the footer; omitted ("dev") when the stamp was
-		// not applied at build time.
+		// Repository link for the footer is always available; the per-build
+		// commit link is omitted ("dev") when the stamp was not applied at
+		// build time.
+		m["RepoURL"] = buildinfo.RepoURL
 		if buildinfo.Commit != "dev" {
 			m["Commit"] = buildinfo.Commit
-			m["RepoURL"] = buildinfo.RepoURL
 		}
 	}
 

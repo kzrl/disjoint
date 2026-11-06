@@ -75,6 +75,10 @@
   <footer class="site-footer">
     <div class="container">
       Disjoint
+      {{if .RepoURL}}
+        &bull;
+        <a class="is-size-7" href="{{.RepoURL}}" rel="noopener" title="Disjoint on GitHub">Source on GitHub</a>
+      {{end}}
       {{if .Commit}}
         &bull;
         <a class="is-size-7" href="{{.RepoURL}}/commit/{{.Commit}}" title="View this build's commit">{{.Commit}}</a>
