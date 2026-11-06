@@ -1,8 +1,8 @@
 # Disjoint
 
-**Disjoint** is free & open-source web application that brings the vibes from classic internet forums and BBSes.
+**Disjoint** is free & open-source web application that brings the vibes from classic [internet forums](https://en.wikipedia.org/wiki/Internet_forum) [BBSes](https://en.wikipedia.org/wiki/Bulletin_board_system) and the [Cozy Web](https://maggieappleton.com/cozy-web). 
 
-It's a place for the group chat to hang out on the web. Share fun stuff. Be weird, it's private and posts expire after a specified amount of time.
+It's a place for the group chat to hang out on the web and share fun stuff. It's private and posts can expire after a specified amount of time.
 
 Designed to be self hosted. It's not some corporate advertising funnel to mine your data. Run it on a cheap virtual server somewhere and bring your mates.
 
@@ -12,20 +12,9 @@ Built with Go, SQLite, sqlc, HTMX, and Bulma.
 
 ## Some of the features
 
-- **Global Front Page**: Every thread lives on the front page, sorted by creation date (newest first).
+- **Global Front Page**: Every thread lives on the front page, sorted by creation date (newest first). No weird algorithms designed to steal your attention.
 
-- **Search**: The front page searches thread titles and post bodies, with paginated results that keep the query in the URL.
-
-- **Unread Markers**: Threads with posts you have not seen yet carry a dot on the front page. Opening a thread clears it; your own posts never count.
-
-- **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
-
-- **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
-
-- **Embedded File Attachments & Media**:
-  - **Images** (`image/jpeg`, `image/png`, `image/webp`, `image/gif`) render responsive inline previews, served as cached 320/640/1280px thumbnails (`srcset`) with the full-size original one click away in the lightbox.
-  - **Videos** (`video/mp4`, `video/webm`) render with native HTML5 players.
-  - **Documents** and other files render as downloadable attachment cards.
+- **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active discussions continue and old posts disappear.
 
 - **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch, with a position counter. The thumbnail paints instantly and sharpens to full resolution in place.
 
@@ -33,7 +22,7 @@ Built with Go, SQLite, sqlc, HTMX, and Bulma.
 
 - **@User Mentions**: `@username` tokens in posts (and bios) render as links to that user's card.
 
-- **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community emoji
+- **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community uploaded emoji
 
 ---
 
