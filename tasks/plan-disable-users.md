@@ -16,7 +16,7 @@ Scope guardrails:
 
 ## 1. Database
 
-### `db/migrations/00018_user_disabled.sql` (new)
+### `db/migrations/00019_user_disabled.sql` (new)
 
 ```sql
 -- +goose Up
@@ -295,7 +295,7 @@ Run: `go test ./...` and `go test -race ./internal/...` before deploy.
    spot -p deploy-disjoint.yml -t node1.prd.springupsoftware.com \
      -e DOMAIN:disjoint.kzrl.org -e APP_PORT:8082
    ```
-   Goose runs `00018_user_disabled.sql` at startup **before** the new binary
+   Goose runs `00019_user_disabled.sql` at startup **before** the new binary
    serves requests, so no window where the app queries a missing column.
 4. Smoke test: `/admin/users` shows the Status column and Disable buttons;
    after disabling a test account, `GET /api/mentions?q=<prefix>` (while signed
