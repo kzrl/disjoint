@@ -2285,6 +2285,67 @@ main.container,
    The accent color is reserved for hover/focus. */
 .board-title a {
   color: var(--bulma-text-strong);
+  /* A title with no spaces (or a pasted URL) breaks instead of pushing the
+     row wider than the viewport. */
+  overflow-wrap: anywhere;
+}
+
+/* --- Thread header --------------------------------------------------------- */
+
+/* Bulma's .level-left is flex-shrink:0 with an auto min-width, so a long
+   thread title set that column's width from its content and widened the page
+   on phones instead of wrapping. Let the column shrink and break long tokens
+   only when they genuinely cannot fit. */
+.thread-header .level-left {
+  flex-shrink: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.thread-header .level-left > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.thread-header .title {
+  overflow-wrap: anywhere;
+}
+
+/* Bulma's .level.is-mobile keeps the title and the edit/delete controls on
+   one row on phones, which left the title a few characters wide. Stack them:
+   title full width, controls wrap underneath. */
+@media screen and (max-width: 768px) {
+  .thread-header .level.is-mobile {
+    display: block;
+  }
+
+  .thread-header .level-left,
+  .thread-header .level-right {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .thread-header .level-right {
+    margin-top: 0.75rem;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .thread-header .level-right .mr-3 {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0;
+  }
+
+  .thread-header .level-right .mr-3 > .button + .button {
+    margin-left: 0;
+  }
 }
 
 .board-title a:hover,
