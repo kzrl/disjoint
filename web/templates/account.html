@@ -89,6 +89,7 @@
         </div>
       </div>
       <button type="submit" class="button is-primary" id="add-passkey-btn">Add passkey</button>
+      <p class="help">You will tap twice: once to confirm your password, then again to create the passkey with Face ID, Touch ID, or your security key.</p>
     </form>
     <p class="is-size-7 mt-2" id="passkey-status" role="status" aria-live="polite" hidden></p>
     <noscript>
@@ -110,4 +111,4 @@
 </div>
 {{end}}
 
-{{define "scripts"}}<script src="/static/passkeys.js"></script>{{end}}
+{{define "scripts"}}<script src="/static/passkeys.js?v=2"></script>{{end}}
