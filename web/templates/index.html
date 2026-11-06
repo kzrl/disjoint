@@ -27,7 +27,7 @@
               <div class="board-title">
                 {{if .Unread}}<span class="unread-dot" role="img" title="Unread posts" aria-label="Unread posts"></span>{{end}}
                 {{if .IsLive}}<span class="live-dot" role="img" title="Active in the last hour" aria-label="Active in the last hour"></span>{{end}}
-                <a href="/threads/{{.Row.ID}}">{{.Row.Title}}{{if .Row.FirstPostUrl.Valid}} <span class="board-link-icon" role="img" aria-label="Includes a link" title="Includes a link: {{.Row.FirstPostUrl.String}}">&#x1F517;</span>{{end}}</a>
+                <a href="/threads/{{.Row.ID}}">{{if .Row.FirstPostUrl.Valid}}<span class="board-link-icon" role="img" aria-label="Includes a link" title="Includes a link: {{.Row.FirstPostUrl.String}}">&#x1F517;</span> {{end}}{{.Row.Title}}</a>
                 {{if .ExpiryUrgent}}
                   <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
                 {{end}}
