@@ -4776,7 +4776,7 @@ func TestInlineEmojiInPostsAndBios(t *testing.T) {
 		`SELECT id, storage_path FROM emojis WHERE name = 'shipit'`).Scan(&emojiID, &storagePath); err != nil {
 		t.Fatalf("failed to load uploaded emoji: %v", err)
 	}
-	imgTag := `<img class="emoji-img emoji-inline" src="/uploads/` + storagePath + `" alt=":shipit:" loading="lazy">`
+	imgTag := `<img class="emoji-img emoji-inline" src="/uploads/` + storagePath + `" alt=":shipit:" title=":shipit:" loading="lazy">`
 
 	// 2. Thread body: unicode built-in, custom upload, unknown name, code span.
 	threadID := e.newThread(alice, "Emoji thread",

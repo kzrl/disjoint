@@ -23,7 +23,13 @@ func TestInlineEmojiRendering(t *testing.T) {
 
 	customImg := func(name, path string) string {
 		return `<img class="emoji-img emoji-inline" src="/uploads/` + path +
-			`" alt=":` + name + `:" loading="lazy">`
+			`" alt=":` + name + `:" title=":` + name + `:" loading="lazy">`
+	}
+
+	// Built-in unicode emoji render as a span so hovering can reveal the
+	// :name: token that produced the glyph.
+	glyph := func(name, g string) string {
+		return `<span class="emoji-inline" title=":` + name + `:">` + g + `</span>`
 	}
 
 	tests := []struct {
@@ -35,7 +41,7 @@ func TestInlineEmojiRendering(t *testing.T) {
 		{
 			name:     "unicode glyph",
 			input:    "feeling :joy: today",
-			contains: []string{"feeling 😂 today"},
+			contains: []string{"feeling " + glyph("joy", "😂") + " today"},
 		},
 		{
 			name:     "custom image",
@@ -50,12 +56,12 @@ func TestInlineEmojiRendering(t *testing.T) {
 		{
 			name:     "at line start and after punctuation",
 			input:    ":joy: then (:shipit:)",
-			contains: []string{"😂 then (", customImg("shipit", "custom-shipit.png")},
+			contains: []string{glyph("joy", "😂") + " then (", customImg("shipit", "custom-shipit.png")},
 		},
 		{
 			name:     "inside emphasis",
 			input:    "**before :joy: after**",
-			contains: []string{"<strong>before 😂 after</strong>"},
+			contains: []string{"<strong>before " + glyph("joy", "😂") + " after</strong>"},
 		},
 		{
 			name:     "blockquote and heading",
@@ -173,6 +179,17 @@ func TestInlineEmojiEscaping(t *testing.T) {
 	}
 	if !strings.Contains(out, "&lt;script&gt;") {
 		t.Errorf("expected escaped script tag in %q", out)
+	}
+
+	// The unicode glyph is database-sourced too and must be escaped rather
+	// than written raw into the tooltip wrapper.
+	SetEmojis([]Emoji{{Name: "evilglyph", Glyph: "<script>alert(2)</script>"}})
+	glyphOut := string(Render(":evilglyph:"))
+	if strings.Contains(glyphOut, "<script>") {
+		t.Fatalf("glyph must be escaped, got %q", glyphOut)
+	}
+	if !strings.Contains(glyphOut, `title=":evilglyph:"`) {
+		t.Errorf("glyph wrapper missing the token tooltip: %q", glyphOut)
 	}
 	if !strings.Contains(out, `src="/uploads/x&quot;&gt;&lt;script&gt;`) {
 		t.Errorf("expected the quote to be escaped in the src attribute, got %q", out)

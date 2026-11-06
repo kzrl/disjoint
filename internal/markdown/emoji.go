@@ -137,13 +137,30 @@ func (r *emojiRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 	reg.Register(KindEmoji, r.renderEmoji)
 }
 
+// tokenAttribute renders the :name: token for an HTML attribute. The name is
+// constrained by the upload grammar (^[a-z0-9_]{2,64}$), but it still comes from
+// the database, so it is escaped like any other untrusted value.
+func tokenAttribute(name string) []byte {
+	return util.EscapeHTML([]byte(":" + name + ":"))
+}
+
 func (r *emojiRenderer) renderEmoji(w util.BufWriter, source []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
 		return ast.WalkContinue, nil
 	}
 	e, _ := n.(*EmojiNode)
+	title := tokenAttribute(e.Emoji.Name)
+
+	// Both flavours carry title=":name:" so hovering reveals which token
+	// produced the emoji — the only way to tell look-alike custom uploads
+	// apart, and useful for unicode emoji that render as tofu without a
+	// suitable font.
 	if !e.Emoji.Custom {
-		w.WriteString(e.Emoji.Glyph)
+		w.WriteString(`<span class="emoji-inline" title="`)
+		w.Write(title)
+		w.WriteString(`">`)
+		w.Write(util.EscapeHTML([]byte(e.Emoji.Glyph)))
+		w.WriteString(`</span>`)
 		return ast.WalkContinue, nil
 	}
 
@@ -154,7 +171,9 @@ func (r *emojiRenderer) renderEmoji(w util.BufWriter, source []byte, n ast.Node,
 	w.WriteString(`<img class="emoji-img emoji-inline" src="/uploads/`)
 	w.Write(util.EscapeHTML([]byte(e.Emoji.StoragePath)))
 	w.WriteString(`" alt="`)
-	w.Write(util.EscapeHTML([]byte(":" + e.Emoji.Name + ":")))
+	w.Write(title)
+	w.WriteString(`" title="`)
+	w.Write(title)
 	w.WriteString(`" loading="lazy">`)
 	return ast.WalkContinue, nil
 }
