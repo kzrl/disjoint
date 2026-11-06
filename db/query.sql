@@ -28,6 +28,7 @@ WHERE id = ? LIMIT 1;
 
 -- name: ListFrontPageThreads :many
 -- Global front page: non-expired threads, newest first (created_at DESC).
+-- first_post_url is the opening post's optional link (NULL when absent).
 -- Last-comment columns describe the thread's most recent reply: the newest
 -- post after the opening post (MIN(id) is the opening post, created in the
 -- same transaction as the thread). All NULL when the thread has no replies.
@@ -42,6 +43,9 @@ SELECT
     -- Threads always have an opening post (created in the same transaction);
     -- COALESCE + CAST keep the column non-NULL and typed for the scanner.
     CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
+    -- The opening post's optional first-class link; NULL when the thread was
+    -- started without one. Drives the link badge on the front page.
+    (SELECT p2.url FROM posts p2 WHERE p2.thread_id = t.id ORDER BY p2.id ASC LIMIT 1) AS first_post_url,
     lc.id AS last_comment_id,
     lc.body AS last_comment_body,
     lc.created_at AS last_comment_at,
@@ -75,6 +79,9 @@ SELECT
     COALESCE(u.username, '') AS author_username,
     COUNT(p.id) AS post_count,
     CAST(COALESCE((SELECT MIN(p2.id) FROM posts p2 WHERE p2.thread_id = t.id), 0) AS INTEGER) AS first_post_id,
+    -- The opening post's optional first-class link; NULL when the thread was
+    -- started without one. Drives the link badge on the front page.
+    (SELECT p2.url FROM posts p2 WHERE p2.thread_id = t.id ORDER BY p2.id ASC LIMIT 1) AS first_post_url,
     lc.id AS last_comment_id,
     lc.body AS last_comment_body,
     lc.created_at AS last_comment_at,

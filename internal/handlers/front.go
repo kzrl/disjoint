@@ -113,6 +113,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 				AuthorUsername:    sr.AuthorUsername,
 				PostCount:         sr.PostCount,
 				FirstPostID:       sr.FirstPostID,
+				FirstPostUrl:      sr.FirstPostUrl,
 				LastCommentID:     sr.LastCommentID,
 				LastCommentBody:   sr.LastCommentBody,
 				LastCommentAt:     sr.LastCommentAt,

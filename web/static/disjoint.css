@@ -2353,6 +2353,16 @@ main.container,
   color: var(--bulma-primary);
 }
 
+/* Link badge: the thread's opening post carries a first-class URL. The emoji
+   is a static glyph (no image request) and the tooltip names the target, so
+   the badge is informative without opening the link by surprise. */
+.board-link-icon {
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: help;
+  flex-shrink: 0;
+}
+
 /* Pulsing dot on threads that got a reply within the last hour — the front
    page equivalent of the on-air indicator. */
 .live-dot {
