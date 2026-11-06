@@ -4,11 +4,21 @@
 // into JSON.
 //
 // Loaded only on /login and /account (see the "scripts" block).
+//
+// Safari (and therefore every iOS browser) requires navigator.credentials.* to
+// be called from the same task as the user gesture. A `fetch()` for the
+// ceremony options before the call loses that activation, so the flow is
+// two-phase: the first tap fetches and stores the options, the second tap calls
+// WebAuthn synchronously and then posts the result. Chrome/Firefox work with
+// the same two taps, so there is one code path everywhere.
 (function () {
   "use strict";
 
+  var PENDING_TTL_MS = 4 * 60 * 1000; // ceremonies expire after 5 minutes server-side
+
   function supported() {
-    return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+    return !!(window.PublicKeyCredential && navigator.credentials &&
+      navigator.credentials.create && navigator.credentials.get);
   }
 
   function b64urlToBuf(value) {
@@ -27,9 +37,6 @@
     return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
 
-  // The server hands back the PublicKeyCredentialCreationOptions/
-  // PublicKeyCredentialRequestOptions with every binary member base64url
-  // encoded, exactly as JSON serialization requires.
   function decodeCreationOptions(options) {
     var pk = options.publicKey || options;
     pk.challenge = b64urlToBuf(pk.challenge);
@@ -93,32 +100,44 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {})
     }).then(function (res) {
-      return res.json().catch(function () { return {}; }).then(function (data) {
+      return res.text().then(function (text) {
+        var data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) { /* non-JSON error page */ }
         if (!res.ok) {
-          throw new Error(data.error || "Request failed");
+          var err = new Error(data.error || ("Request failed (" + res.status + ")"));
+          err.status = res.status;
+          throw err;
         }
         return data;
       });
+    }, function () {
+      throw new Error("Network error. Check your connection and try again.");
     });
   }
 
-  function status(el, message, isError) {
+  function status(el, message, kind) {
     if (!el) return;
     el.hidden = false;
     el.textContent = message;
-    el.classList.toggle("has-text-danger", !!isError);
-    el.classList.toggle("has-text-success", !isError);
+    el.classList.toggle("has-text-danger", kind === "error");
+    el.classList.toggle("has-text-success", kind === "ok");
   }
 
-  function friendlyError(err) {
-    if (err && err.name === "NotAllowedError") {
-      return "Passkey prompt was dismissed or timed out.";
+  function messageFor(err) {
+    if (!err) return "Passkey operation failed.";
+    if (err.name === "NotAllowedError") {
+      return "The passkey prompt was cancelled or timed out. Try again.";
     }
-    if (err && err.name === "InvalidStateError") {
+    if (err.name === "InvalidStateError") {
       return "That passkey is already registered to this account.";
     }
-    return (err && err.message) || "Passkey operation failed.";
+    if (err.name === "NotSupportedError" || err.name === "SecurityError") {
+      return "This browser cannot create a passkey for this site. Passkeys need HTTPS and a recent browser.";
+    }
+    return err.message || "Passkey operation failed.";
   }
+
+  function now() { return Date.now(); }
 
   // --- Login page ---------------------------------------------------------
 
@@ -126,30 +145,68 @@
     var button = document.getElementById("passkey-login-btn");
     if (!button) return;
     var statusEl = document.getElementById("passkey-login-status");
-    if (!supported()) {
-      // Password form remains; nothing to show.
-      return;
-    }
+    if (!supported() || window.isSecureContext === false) return; // password form is the fallback
     button.hidden = false;
 
-    button.addEventListener("click", function () {
-      button.disabled = true;
-      status("", "", false);
-      if (statusEl) statusEl.hidden = true;
-      postJSON("/login/passkey/begin", {})
-        .then(function (data) {
-          return navigator.credentials.get({ publicKey: decodeRequestOptions(data) });
-        })
-        .then(function (cred) {
-          return postJSON("/login/passkey/finish", encodeAssertion(cred));
-        })
+    var pending = null; // { publicKey, token, at }
+    var pendingValid = function () {
+      return pending && pending.publicKey && (now() - pending.at) < PENDING_TTL_MS;
+    };
+
+    // Prefetch assertion options so the tap can call WebAuthn synchronously
+    // (required by Safari/iOS). Failure is silent: tapping still retries.
+    postJSON("/login/passkey/begin", {}).then(function (data) {
+      pending = { publicKey: data.publicKey, token: data.token, at: now() };
+    }).catch(function () { /* retried on tap */ });
+
+    function fetchOptions() {
+      return postJSON("/login/passkey/begin", {}).then(function (data) {
+        pending = { publicKey: data.publicKey, token: data.token, at: now() };
+        return pending;
+      });
+    }
+
+    function finish(cred) {
+      status(statusEl, "Signing you in…", "ok");
+      postJSON("/login/passkey/finish", encodeAssertion(cred))
         .then(function (data) {
           window.location.assign(data.redirect || "/");
         })
         .catch(function (err) {
-          status(statusEl, friendlyError(err), true);
+          pending = null;
+          status(statusEl, messageFor(err), "error");
           button.disabled = false;
         });
+    }
+
+    button.addEventListener("click", function () {
+      button.disabled = true;
+      status(statusEl, "", "ok");
+      if (statusEl) statusEl.hidden = true;
+
+      // Safari-safe path: WebAuthn is called before any fetch in this task.
+      if (pendingValid()) {
+        var options = decodeRequestOptions(pending);
+        var p = navigator.credentials.get({ publicKey: options });
+        status(statusEl, "Confirm with your passkey…", "ok");
+        p.then(finish).catch(function (err) {
+          pending = null;
+          status(statusEl, messageFor(err), "error");
+          button.disabled = false;
+        });
+        return;
+      }
+
+      // Chrome/Firefox are happy with a fetch-then-get; Safari users get a
+      // second tap if the prefetch did not finish in time.
+      status(statusEl, "Preparing sign-in…", "ok");
+      fetchOptions().then(function () {
+        button.disabled = false;
+        status(statusEl, "Tap “Sign in with a passkey” again to continue.", "ok");
+      }).catch(function (err) {
+        status(statusEl, messageFor(err), "error");
+        button.disabled = false;
+      });
     });
   }
 
@@ -162,34 +219,92 @@
     var button = document.getElementById("add-passkey-btn");
     var statusEl = document.getElementById("passkey-status");
 
-    if (!supported()) {
+    if (!supported() || window.isSecureContext === false) {
       form.hidden = true;
-      status(statusEl, "This browser does not support passkeys.", true);
+      status(statusEl, "This browser cannot create passkeys. They need HTTPS and a recent browser.", "error");
       return;
+    }
+
+    var pending = null; // { publicKey, token, at }
+    var pendingValid = function () {
+      return pending && pending.publicKey && (now() - pending.at) < PENDING_TTL_MS;
+    };
+    var resetButton = function (label) {
+      button.disabled = false;
+      button.textContent = label;
+    };
+
+    function finish(cred) {
+      status(statusEl, "Saving passkey…", "ok");
+      button.disabled = true;
+      postJSON("/account/passkeys/finish", encodeRegistration(cred))
+        .then(function () {
+          status(statusEl, "Passkey saved. Reloading…", "ok");
+          window.location.reload();
+        })
+        .catch(function (err) {
+          pending = null;
+          resetButton("Add passkey");
+          status(statusEl, messageFor(err), "error");
+        });
     }
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+
+      // Phase 2: the options are already fetched, so the WebAuthn call happens
+      // synchronously inside this tap — the only form iOS Safari accepts.
+      if (pendingValid()) {
+        var options = decodeCreationOptions(pending);
+        status(statusEl, "Confirm with Face ID, Touch ID, or your security key…", "ok");
+        button.disabled = true;
+        var p;
+        try {
+          p = navigator.credentials.create({ publicKey: options });
+        } catch (err) {
+          pending = null;
+          resetButton("Add passkey");
+          status(statusEl, messageFor(err), "error");
+          return;
+        }
+        p.then(finish).catch(function (err) {
+          pending = null;
+          resetButton("Add passkey");
+          status(statusEl, messageFor(err), "error");
+        });
+        return;
+      }
+
+      // Phase 1: confirm the password and fetch the ceremony options.
+      if (!passwordInput || passwordInput.value === "") {
+        status(statusEl, "Enter your current password first.", "error");
+        if (passwordInput) passwordInput.focus();
+        return;
+      }
       button.disabled = true;
-      status(statusEl, "Waiting for your authenticator…", false);
+      status(statusEl, "Checking your password…", "ok");
       postJSON("/account/passkeys/begin", { password: passwordInput.value })
         .then(function (data) {
-          return navigator.credentials.create({ publicKey: decodeCreationOptions(data) });
-        })
-        .then(function (cred) {
-          return postJSON("/account/passkeys/finish", encodeRegistration(cred));
-        })
-        .then(function () {
-          // Reload so the new row and its server-assigned name appear.
-          window.location.reload();
+          pending = { publicKey: data.publicKey, token: data.token, at: now() };
+          button.textContent = "Create passkey";
+          button.disabled = false;
+          status(statusEl, "Password confirmed. Tap “Create passkey” to finish.", "ok");
+          if (passwordInput) passwordInput.value = "";
         })
         .catch(function (err) {
-          status(statusEl, friendlyError(err), true);
-          button.disabled = false;
+          resetButton("Add passkey");
+          status(statusEl, messageFor(err), "error");
         });
     });
   }
 
-  bindLogin();
-  bindAccount();
+  try {
+    bindLogin();
+    bindAccount();
+  } catch (err) {
+    // Never leave the user with a silent, dead button.
+    var el = document.getElementById("passkey-status") ||
+      document.getElementById("passkey-login-status");
+    if (el) status(el, "Passkeys could not start on this page: " + messageFor(err), "error");
+  }
 })();

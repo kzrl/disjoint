@@ -203,7 +203,14 @@ prefix).
   hidden until `window.PublicKeyCredential` exists (progressive enhancement;
   no-JS users keep the password form). Stretch: conditional UI by adding
   `autocomplete="webauthn"` to the username input and calling `begin` on load.
-- `web/static/passkeys.js` (new, no inline JS so the CSP stays tight):
+- `web/static/passkeys.js` (new, no inline JS so the CSP stays tight).
+  **Safari/iOS requires `navigator.credentials.*` in the same task as the user
+  gesture**, so a `fetch()` for the options first loses activation and
+  `create()`/`get()` fail. The flow is therefore two-phase: the first tap
+  fetches and stores the options (on `/account` after the password check; on
+  `/login` as a silent prefetch), the second tap calls WebAuthn synchronously
+  and posts the result. Chrome/Firefox use the same two taps, so there is one
+  code path, and every failure writes a message next to the button.
   - `b64urlToBuf` / `bufToB64url` helpers (challenges and ids must be decoded
     before `navigator.credentials.*`).
   - Registration: fetch begin → `navigator.credentials.create` →

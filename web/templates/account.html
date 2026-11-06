@@ -90,7 +90,10 @@
       </div>
       <button type="submit" class="button is-primary" id="add-passkey-btn">Add passkey</button>
     </form>
-    <p class="is-size-7 mt-2" id="passkey-status" role="status" hidden></p>
+    <p class="is-size-7 mt-2" id="passkey-status" role="status" aria-live="polite" hidden></p>
+    <noscript>
+      <p class="is-size-7 has-text-danger mt-2">Adding a passkey requires JavaScript.</p>
+    </noscript>
   </div>
   {{end}}
 

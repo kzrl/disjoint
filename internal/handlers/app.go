@@ -355,8 +355,14 @@ func (app *App) SetPasskeyService(s PasskeyService) { app.passkeys = s }
 func (app *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Embedded static assets (/static/*)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(app.staticFS))))
+	// Embedded static assets (/static/*). no-cache makes browsers revalidate
+	// (cheap 304s) instead of running a stale script for a day after a deploy,
+	// which matters for the passkey client glue.
+	staticFiles := http.StripPrefix("/static/", http.FileServer(http.FS(app.staticFS)))
+	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		staticFiles.ServeHTTP(w, r)
+	}))
 
 	// Liveness/readiness probe and favicon are public (see
 	// middleware.FirstRunAndAuth). Favicon needs its own route so it cannot
