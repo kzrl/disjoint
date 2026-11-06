@@ -98,6 +98,41 @@ main.container,
   color: var(--bulma-primary);
 }
 
+/* --- Passkeys ------------------------------------------------------------- */
+
+/* One row per registered passkey on /account: name form and metadata left,
+   destructive action right. */
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--bulma-border-weak);
+}
+
+.passkey-row:last-child {
+  border-bottom: none;
+}
+
+.passkey-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.passkey-name-form {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.passkey-name-form .input {
+  width: 12rem;
+  font-size: 0.75rem;
+}
+
 /* --- Admin user list ------------------------------------------------------ */
 
 /* The delete control carries its own confirmation input; keep it on one line

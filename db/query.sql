@@ -750,3 +750,45 @@ FROM posts p
 WHERE p.thread_id = sqlc.arg('thread_id')
   AND p.id > sqlc.arg('after')
   AND p.user_id <> sqlc.arg('viewer_id');
+
+-- name: CreateWebAuthnCredential :exec
+INSERT INTO webauthn_credentials (
+    id, user_id, public_key, sign_count, transports, aaguid,
+    backup_eligible, backup_state, name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListWebAuthnCredentialsByUser :many
+SELECT * FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC, id ASC;
+
+-- name: GetWebAuthnCredential :one
+SELECT * FROM webauthn_credentials WHERE id = ? LIMIT 1;
+
+-- name: UpdateWebAuthnCredentialUsage :exec
+-- Called after every successful assertion: the counter and last-used stamp
+-- must be written back for clone detection to work on the next login.
+UPDATE webauthn_credentials
+SET sign_count = ?, last_used_at = CURRENT_TIMESTAMP, backup_state = ?
+WHERE id = ?;
+
+-- name: UpdateWebAuthnCredentialName :execrows
+UPDATE webauthn_credentials SET name = ? WHERE id = ? AND user_id = ?;
+
+-- name: DeleteWebAuthnCredential :execrows
+DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?;
+
+-- name: CountWebAuthnCredentialsByUser :one
+SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?;
+
+-- name: CreateWebAuthnCeremony :exec
+INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, expires_at)
+VALUES (?, ?, ?, ?, ?);
+
+-- name: TakeWebAuthnCeremony :one
+-- Single use: the row is deleted and returned atomically, so a replayed or
+-- concurrent finish call gets no ceremony.
+DELETE FROM webauthn_ceremonies
+WHERE id = ? AND kind = ? AND expires_at > CURRENT_TIMESTAMP
+RETURNING user_id, kind, session_data;
+
+-- name: DeleteExpiredWebAuthnCeremonies :exec
+DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP;

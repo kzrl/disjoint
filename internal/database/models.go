@@ -108,3 +108,26 @@ type UserPresence struct {
 	UserID     int64
 	LastSeenAt time.Time
 }
+
+type WebauthnCeremony struct {
+	ID          string
+	UserID      sql.NullInt64
+	Kind        string
+	SessionData []byte
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
+type WebauthnCredential struct {
+	ID             string
+	UserID         int64
+	PublicKey      []byte
+	SignCount      int64
+	Transports     string
+	Aaguid         string
+	BackupEligible int64
+	BackupState    int64
+	Name           string
+	CreatedAt      time.Time
+	LastUsedAt     sql.NullTime
+}

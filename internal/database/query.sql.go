@@ -166,6 +166,17 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countWebAuthnCredentialsByUser = `-- name: CountWebAuthnCredentialsByUser :one
+SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?
+`
+
+func (q *Queries) CountWebAuthnCredentialsByUser(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countWebAuthnCredentialsByUser, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAttachment = `-- name: CreateAttachment :one
 INSERT INTO attachments (
     post_id,
@@ -408,6 +419,64 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const createWebAuthnCeremony = `-- name: CreateWebAuthnCeremony :exec
+INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, expires_at)
+VALUES (?, ?, ?, ?, ?)
+`
+
+type CreateWebAuthnCeremonyParams struct {
+	ID          string
+	UserID      sql.NullInt64
+	Kind        string
+	SessionData []byte
+	ExpiresAt   time.Time
+}
+
+func (q *Queries) CreateWebAuthnCeremony(ctx context.Context, arg CreateWebAuthnCeremonyParams) error {
+	_, err := q.db.ExecContext(ctx, createWebAuthnCeremony,
+		arg.ID,
+		arg.UserID,
+		arg.Kind,
+		arg.SessionData,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const createWebAuthnCredential = `-- name: CreateWebAuthnCredential :exec
+INSERT INTO webauthn_credentials (
+    id, user_id, public_key, sign_count, transports, aaguid,
+    backup_eligible, backup_state, name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateWebAuthnCredentialParams struct {
+	ID             string
+	UserID         int64
+	PublicKey      []byte
+	SignCount      int64
+	Transports     string
+	Aaguid         string
+	BackupEligible int64
+	BackupState    int64
+	Name           string
+}
+
+func (q *Queries) CreateWebAuthnCredential(ctx context.Context, arg CreateWebAuthnCredentialParams) error {
+	_, err := q.db.ExecContext(ctx, createWebAuthnCredential,
+		arg.ID,
+		arg.UserID,
+		arg.PublicKey,
+		arg.SignCount,
+		arg.Transports,
+		arg.Aaguid,
+		arg.BackupEligible,
+		arg.BackupState,
+		arg.Name,
+	)
+	return err
+}
+
 const deleteCustomEmojisByCreator = `-- name: DeleteCustomEmojisByCreator :exec
 DELETE FROM emojis
 WHERE created_by = ? AND source = 'custom'
@@ -434,6 +503,15 @@ WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
 
 func (q *Queries) DeleteExpiredThreads(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredThreads)
+	return err
+}
+
+const deleteExpiredWebAuthnCeremonies = `-- name: DeleteExpiredWebAuthnCeremonies :exec
+DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP
+`
+
+func (q *Queries) DeleteExpiredWebAuthnCeremonies(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredWebAuthnCeremonies)
 	return err
 }
 
@@ -494,6 +572,23 @@ WHERE id = ?
 func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteUser, id)
 	return err
+}
+
+const deleteWebAuthnCredential = `-- name: DeleteWebAuthnCredential :execrows
+DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?
+`
+
+type DeleteWebAuthnCredentialParams struct {
+	ID     string
+	UserID int64
+}
+
+func (q *Queries) DeleteWebAuthnCredential(ctx context.Context, arg DeleteWebAuthnCredentialParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWebAuthnCredential, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const disableUser = `-- name: DisableUser :execrows
@@ -841,6 +936,29 @@ func (q *Queries) GetUserPresence(ctx context.Context, userID int64) (time.Time,
 	var last_seen_at time.Time
 	err := row.Scan(&last_seen_at)
 	return last_seen_at, err
+}
+
+const getWebAuthnCredential = `-- name: GetWebAuthnCredential :one
+SELECT id, user_id, public_key, sign_count, transports, aaguid, backup_eligible, backup_state, name, created_at, last_used_at FROM webauthn_credentials WHERE id = ? LIMIT 1
+`
+
+func (q *Queries) GetWebAuthnCredential(ctx context.Context, id string) (WebauthnCredential, error) {
+	row := q.db.QueryRowContext(ctx, getWebAuthnCredential, id)
+	var i WebauthnCredential
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PublicKey,
+		&i.SignCount,
+		&i.Transports,
+		&i.Aaguid,
+		&i.BackupEligible,
+		&i.BackupState,
+		&i.Name,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+	)
+	return i, err
 }
 
 const listAllEmojis = `-- name: ListAllEmojis :many
@@ -2088,6 +2206,45 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 	return items, nil
 }
 
+const listWebAuthnCredentialsByUser = `-- name: ListWebAuthnCredentialsByUser :many
+SELECT id, user_id, public_key, sign_count, transports, aaguid, backup_eligible, backup_state, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListWebAuthnCredentialsByUser(ctx context.Context, userID int64) ([]WebauthnCredential, error) {
+	rows, err := q.db.QueryContext(ctx, listWebAuthnCredentialsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WebauthnCredential
+	for rows.Next() {
+		var i WebauthnCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.PublicKey,
+			&i.SignCount,
+			&i.Transports,
+			&i.Aaguid,
+			&i.BackupEligible,
+			&i.BackupState,
+			&i.Name,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAllNotificationsRead = `-- name: MarkAllNotificationsRead :exec
 UPDATE notifications SET read_at = CURRENT_TIMESTAMP
 WHERE user_id = ?1 AND read_at IS NULL
@@ -2416,6 +2573,32 @@ func (q *Queries) SumUserStorageBytes(ctx context.Context, userID int64) (int64,
 	return total_bytes, err
 }
 
+const takeWebAuthnCeremony = `-- name: TakeWebAuthnCeremony :one
+DELETE FROM webauthn_ceremonies
+WHERE id = ? AND kind = ? AND expires_at > CURRENT_TIMESTAMP
+RETURNING user_id, kind, session_data
+`
+
+type TakeWebAuthnCeremonyParams struct {
+	ID   string
+	Kind string
+}
+
+type TakeWebAuthnCeremonyRow struct {
+	UserID      sql.NullInt64
+	Kind        string
+	SessionData []byte
+}
+
+// Single use: the row is deleted and returned atomically, so a replayed or
+// concurrent finish call gets no ceremony.
+func (q *Queries) TakeWebAuthnCeremony(ctx context.Context, arg TakeWebAuthnCeremonyParams) (TakeWebAuthnCeremonyRow, error) {
+	row := q.db.QueryRowContext(ctx, takeWebAuthnCeremony, arg.ID, arg.Kind)
+	var i TakeWebAuthnCeremonyRow
+	err := row.Scan(&i.UserID, &i.Kind, &i.SessionData)
+	return i, err
+}
+
 const touchSession = `-- name: TouchSession :exec
 UPDATE sessions
 SET last_used_at = strftime('%s', 'now')
@@ -2507,6 +2690,43 @@ type UpdateUserPasswordParams struct {
 
 func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
 	_, err := q.db.ExecContext(ctx, updateUserPassword, arg.PasswordHash, arg.ID)
+	return err
+}
+
+const updateWebAuthnCredentialName = `-- name: UpdateWebAuthnCredentialName :execrows
+UPDATE webauthn_credentials SET name = ? WHERE id = ? AND user_id = ?
+`
+
+type UpdateWebAuthnCredentialNameParams struct {
+	Name   string
+	ID     string
+	UserID int64
+}
+
+func (q *Queries) UpdateWebAuthnCredentialName(ctx context.Context, arg UpdateWebAuthnCredentialNameParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateWebAuthnCredentialName, arg.Name, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateWebAuthnCredentialUsage = `-- name: UpdateWebAuthnCredentialUsage :exec
+UPDATE webauthn_credentials
+SET sign_count = ?, last_used_at = CURRENT_TIMESTAMP, backup_state = ?
+WHERE id = ?
+`
+
+type UpdateWebAuthnCredentialUsageParams struct {
+	SignCount   int64
+	BackupState int64
+	ID          string
+}
+
+// Called after every successful assertion: the counter and last-used stamp
+// must be written back for clone detection to work on the next login.
+func (q *Queries) UpdateWebAuthnCredentialUsage(ctx context.Context, arg UpdateWebAuthnCredentialUsageParams) error {
+	_, err := q.db.ExecContext(ctx, updateWebAuthnCredentialUsage, arg.SignCount, arg.BackupState, arg.ID)
 	return err
 }
 

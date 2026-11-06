@@ -366,7 +366,8 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 		}
 
 		// 3. Access Control
-		isPublicRoute := path == "/login" || path == "/register"
+		isPublicRoute := path == "/login" || path == "/register" ||
+			strings.HasPrefix(path, "/login/passkey/")
 
 		if currentUser == nil {
 			if isPublicRoute {

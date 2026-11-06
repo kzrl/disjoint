@@ -141,3 +141,31 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_inbox ON notifications(user_id, last_event_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id) WHERE read_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id              TEXT PRIMARY KEY,          -- base64url(raw credential id)
+    user_id         INTEGER NOT NULL,
+    public_key      BLOB NOT NULL,
+    sign_count      INTEGER NOT NULL DEFAULT 0,
+    transports      TEXT NOT NULL DEFAULT '',
+    aaguid          TEXT NOT NULL DEFAULT '',
+    backup_eligible INTEGER NOT NULL DEFAULT 0,
+    backup_state    INTEGER NOT NULL DEFAULT 0,
+    name            TEXT NOT NULL DEFAULT '',
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at    DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user ON webauthn_credentials(user_id);
+
+CREATE TABLE IF NOT EXISTS webauthn_ceremonies (
+    id           TEXT PRIMARY KEY,
+    user_id      INTEGER,
+    kind         TEXT NOT NULL,
+    session_data BLOB NOT NULL,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at   DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_webauthn_ceremonies_expiry ON webauthn_ceremonies(expires_at);

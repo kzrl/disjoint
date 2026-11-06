@@ -24,6 +24,7 @@
   <script src="/static/htmx.min.js"></script>
   <script src="/static/disjoint.js"></script>
   <script src="/static/mentions.js"></script>
+  {{block "scripts" .}}{{end}}
 </head>
 <body>
   <!-- Bulma navbar component: markup per ~/src/bulma/docs/documentation/components/navbar.html -->
@@ -52,8 +53,8 @@
           <div class="navbar-item">
             <a href="/threads/new" class="button is-primary">+ New Thread</a>
           </div>
-	  <a href="/search" class="navbar-item">Search</a>
 	  <a href="/gallery" class="navbar-item">Gallery</a>
+	  <a href="/search" class="navbar-item">Search</a>
           <a href="/emojis" class="navbar-item">Emoji</a>
           {{if .CurrentUser.IsAdmin}}
           <a href="/invites" class="navbar-item">Invites</a>

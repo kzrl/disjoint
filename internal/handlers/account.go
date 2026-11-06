@@ -11,7 +11,18 @@ import (
 // AccountPage renders the viewer's account-security page: password change and
 // session revocation. Profile editing lives on the public user card.
 func (app *App) AccountPage(w http.ResponseWriter, r *http.Request) {
-	app.render(w, r, "account.html", map[string]any{}, "Account")
+	data := map[string]any{}
+	// Passkey rows are only loaded when WebAuthn is configured; the template
+	// hides the section otherwise.
+	if app.passkeys != nil {
+		if user := middleware.UserFromContext(r.Context()); user != nil {
+			if creds, err := app.passkeys.ListCredentials(r.Context(), user.ID); err == nil {
+				data["Passkeys"] = creds
+			}
+		}
+		data["PasskeysEnabled"] = true
+	}
+	app.render(w, r, "account.html", data, "Account")
 }
 
 // ChangePasswordSubmit verifies the current password, stores the new hash, and

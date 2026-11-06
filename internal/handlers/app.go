@@ -46,6 +46,10 @@ type App struct {
 	passwordLimiter *middleware.RateLimiter
 	// thumbLimiter bounds CPU/disk work from thumbnail requests.
 	thumbLimiter *middleware.RateLimiter
+	// passkeys performs WebAuthn ceremonies. nil when the deployment has no
+	// WebAuthn configuration; the endpoints then answer 501 and the account
+	// page omits the section.
+	passkeys PasskeyService
 }
 
 // NewApp instantiates an App and compiles HTML templates.
@@ -343,6 +347,11 @@ func setFlash(w http.ResponseWriter, r *http.Request, name, value string) {
 }
 
 // Routes constructs the HTTP handler mux with all routes and middleware applied.
+// SetPasskeyService wires WebAuthn after construction (main.go reads the RP
+// configuration from the environment; tests swap in a stub).
+func (app *App) SetPasskeyService(s PasskeyService) { app.passkeys = s }
+
+// Routes constructs the HTTP handler mux with all routes and middleware applied.
 func (app *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 
@@ -418,6 +427,12 @@ func (app *App) Routes() http.Handler {
 
 	// Account security: password change and session revocation
 	mux.HandleFunc("GET /account", app.AccountPage)
+	mux.HandleFunc("POST /account/passkeys/begin", app.PasskeyRegisterBegin)
+	mux.HandleFunc("POST /account/passkeys/finish", app.PasskeyRegisterFinish)
+	mux.HandleFunc("POST /account/passkeys/{id}/delete", app.PasskeyDelete)
+	mux.HandleFunc("POST /account/passkeys/{id}/name", app.PasskeyRename)
+	mux.Handle("POST /login/passkey/begin", authLimited(http.HandlerFunc(app.PasskeyLoginBegin)))
+	mux.Handle("POST /login/passkey/finish", authLimited(http.HandlerFunc(app.PasskeyLoginFinish)))
 	mux.HandleFunc("POST /account/password", app.ChangePasswordSubmit)
 	mux.HandleFunc("POST /account/sign-out-everywhere", app.SignOutEverywhereSubmit)
 

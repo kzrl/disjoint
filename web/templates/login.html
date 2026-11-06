@@ -25,6 +25,12 @@
       </div>
       <button type="submit" class="button is-primary is-fullwidth mt-2">Sign In</button>
     </form>
+
+    <div class="has-text-centered my-4"><span class="is-size-7 muted">or</span></div>
+    <button type="button" class="button is-secondary is-fullwidth" id="passkey-login-btn" hidden>
+      Sign in with a passkey
+    </button>
+    <p class="is-size-7 mt-2" id="passkey-login-status" role="status" hidden></p>
   </div>
 
   <div class="has-text-centered is-size-7 muted">
@@ -32,3 +38,5 @@
   </div>
 </div>
 {{end}}
+
+{{define "scripts"}}<script src="/static/passkeys.js"></script>{{end}}

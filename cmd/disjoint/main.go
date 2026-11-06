@@ -12,6 +12,7 @@ import (
 
 	"disjoint/internal/database"
 	"disjoint/internal/handlers"
+	"disjoint/internal/passkeys"
 	"disjoint/internal/worker"
 )
 
@@ -54,6 +55,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("[disjoint] App initialization failed: %v", err)
 	}
+
+	// Passkeys: the Relying Party identity is configuration because WebAuthn
+	// matches origins exactly. A bad value fails here, at startup, instead of
+	// breaking sign-in silently later.
+	passkeyConfig, err := passkeys.ConfigFromEnv()
+	if err != nil {
+		log.Fatalf("[disjoint] Passkey configuration invalid: %v", err)
+	}
+	passkeyService, err := passkeys.NewService(passkeyConfig, queries)
+	if err != nil {
+		log.Fatalf("[disjoint] Passkey initialization failed: %v", err)
+	}
+	app.SetPasskeyService(passkeyService)
+	log.Printf("[disjoint] Passkeys enabled (RP ID %s, origins %v)", passkeyConfig.RPID, passkeyConfig.RPOrigins)
 
 	addr := host + ":" + port
 	server := &http.Server{

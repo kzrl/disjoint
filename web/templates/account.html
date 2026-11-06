@@ -42,6 +42,58 @@
     </form>
   </div>
 
+  {{if .PasskeysEnabled}}
+  <div class="box" id="passkeys-box">
+    <h2 class="title is-5 mb-2">Passkeys</h2>
+    <p class="is-size-7 muted mb-4">
+      Sign in without typing your password using Touch ID, Windows Hello, a phone,
+      or a security key. Your password keeps working, so losing a device never locks
+      you out of your account.
+    </p>
+
+    {{if .Passkeys}}
+    <div class="passkey-list mb-4">
+      {{range .Passkeys}}
+      <div class="passkey-row">
+        <div class="passkey-meta">
+          <form method="POST" action="/account/passkeys/{{.ID}}/name" class="passkey-name-form">
+            <input type="text" name="name" value="{{.Name}}" maxlength="40" class="input is-small"
+                   aria-label="Passkey name">
+            <button class="button is-small is-secondary" type="submit">Rename</button>
+          </form>
+          <span class="is-size-7 muted">
+            Added <time datetime="{{isoTime .CreatedAt}}" title="{{formatTime .CreatedAt}}">{{formatTime .CreatedAt}}</time>
+            {{if .LastUsedAt.Valid}}
+              &bull; Last used <time datetime="{{isoTime .LastUsedAt.Time}}" title="{{formatTime .LastUsedAt.Time}}">{{formatRelative .LastUsedAt.Time}}</time>
+            {{else}}
+              &bull; Never used
+            {{end}}
+          </span>
+        </div>
+        <form method="POST" action="/account/passkeys/{{.ID}}/delete"
+              onsubmit="return confirm('Delete this passkey? You can add another one later.');">
+          <button class="button is-small is-danger is-light" type="submit">Delete</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="is-size-7 muted mb-4">No passkeys yet.</p>
+    {{end}}
+
+    <form id="add-passkey-form">
+      <div class="field">
+        <label for="passkey_password" class="label is-size-7">Confirm your password to add a passkey</label>
+        <div class="control">
+          <input type="password" id="passkey_password" class="input" autocomplete="current-password" required>
+        </div>
+      </div>
+      <button type="submit" class="button is-primary" id="add-passkey-btn">Add passkey</button>
+    </form>
+    <p class="is-size-7 mt-2" id="passkey-status" role="status" hidden></p>
+  </div>
+  {{end}}
+
   <div class="box">
     <h2 class="title is-5 mb-2">Sessions</h2>
     <p class="is-size-7 muted mb-4">
@@ -54,3 +106,5 @@
   </div>
 </div>
 {{end}}
+
+{{define "scripts"}}<script src="/static/passkeys.js"></script>{{end}}
