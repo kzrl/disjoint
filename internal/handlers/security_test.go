@@ -65,11 +65,16 @@ func TestFaviconDoesNotLeakIndex(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
-		if rr.Code != http.StatusNoContent {
-			t.Fatalf("%s = %d, want 204", target, rr.Code)
+		// The icon itself is a public asset now; the point of this test is
+		// that the path never renders the authenticated front page.
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s = %d, want 200", target, rr.Code)
 		}
-		if rr.Body.Len() != 0 {
-			t.Fatalf("%s leaked a body: %q", target, rr.Body.String())
+		if ct := rr.Header().Get("Content-Type"); ct != "image/png" {
+			t.Fatalf("%s Content-Type = %q, want image/png", target, ct)
+		}
+		if strings.Contains(strings.ToLower(rr.Body.String()), "<html") {
+			t.Fatalf("%s leaked the index page", target)
 		}
 	}
 }

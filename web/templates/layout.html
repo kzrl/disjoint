@@ -4,6 +4,21 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{if .PageTitle}}{{.PageTitle}} - {{end}}Disjoint</title>
+
+  <!-- App icons. The tab favicon is inlined as an SVG data URI so it paints
+       with the first byte of the document; the PNG set is what Android and
+       iOS use when the site is added to the homescreen (iOS ignores SVG
+       favicons, so apple-touch-icon is a real PNG). /static/site.webmanifest
+       carries the Android/Chrome install metadata. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDIuOTE2IDE0Mi45MTYiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iRGlzam9pbnQiPgogIDxyZWN0IHdpZHRoPSIxNDIuOTE2IiBoZWlnaHQ9IjE0Mi45MTYiIGZpbGw9IiMzYzgzZjYiLz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyMC4wMDggMjAuMDA4KSBzY2FsZSgwLjcyKSI+CiAgICA8cGF0aCBmaWxsPSIjZmZmZmZmIiBkPSJNMzIuOTAxLDExNC43OTlsLTEyLjAxNSwxNi41MDdjLTIuMzc1LDMuMjY1LTEuNjU2LDcuODM1LDEuNjA4LDEwLjIxYzEuMzAxLDAuOTQ1LDIuODA3LDEuNCw0LjI5NSwxLjQgYzIuMjYxLDAsNC40ODctMS4wNDMsNS45MTctMy4wMDZsMTIuMTEtMTYuNjM4YzcuOTUxLDQuMjM5LDE3LjAxOSw2LjY1MSwyNi42NDQsNi42NTFjMzEuMzQyLDAsNTYuODQtMjUuNDk5LDU2Ljg0LTU2Ljg0MiBjMC0xNS45NzktNi42MzYtMzAuNDI3LTE3LjI4My00MC43NjRsMTUuMDc0LTIwLjcwOWMyLjM3NS0zLjI2NSwxLjY1NS03LjgzNC0xLjYwNy0xMC4yMWMtMy4yNzMtMi4zNzctNy44NC0xLjY1MS0xMC4yMDksMS42MDggTDk5LjMxMywyMy41NjJjLTguMjQxLTQuNjU1LTE3LjczOS03LjMyMy0yNy44NTYtNy4zMjNjLTMxLjM0MywwLTU2Ljg0MiwyNS40OTktNTYuODQyLDU2Ljg0MSBDMTQuNjE1LDg5LjU1NywyMS42NjUsMTA0LjQwOSwzMi45MDEsMTE0Ljc5OXogTTExMy42ODIsNzMuMDhjMCwyMy4yODQtMTguOTQsNDIuMjI2LTQyLjIyNiw0Mi4yMjYgYy02LjQwNywwLTEyLjQ2MS0xLjQ3Ny0xNy45MDUtNC4wMzlsNDguNzI5LTY2Ljk1MUMxMDkuMzMxLDUxLjg2NCwxMTMuNjgyLDYxLjk2NCwxMTMuNjgyLDczLjA4eiBNNzEuNDU3LDMwLjg1NiBjNi45MDEsMCwxMy40MDMsMS42OTgsMTkuMTU5LDQuNjQ2bC00OS4wNDMsNjcuMzgxYy03LjYyMy03LjY0My0xMi4zNDQtMTguMTgxLTEyLjM0NC0yOS44MDEgQzI5LjIzMiw0OS43OTgsNDguMTczLDMwLjg1Niw3MS40NTcsMzAuODU2eiIvPgogIDwvZz4KPC9zdmc+Cg==">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/site.webmanifest">
+  <meta name="theme-color" content="#3c83f6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Disjoint">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
   <link rel="stylesheet" href="/static/bulma.min.css">
   <link rel="stylesheet" href="/static/disjoint.css">
   <script src="/static/htmx.min.js"></script>
@@ -37,8 +52,8 @@
           <div class="navbar-item">
             <a href="/threads/new" class="button is-primary">+ New Thread</a>
           </div>
+	  <a href="/gallery" class="navbar-item">Gallery</a>
           <a href="/emojis" class="navbar-item">Emoji</a>
-          <a href="/gallery" class="navbar-item">Gallery</a>
           {{if .CurrentUser.IsAdmin}}
           <a href="/invites" class="navbar-item">Invites</a>
           <a href="/admin/users" class="navbar-item">Users</a>

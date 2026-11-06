@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 )
@@ -26,10 +27,20 @@ func (app *App) Healthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-// Favicon is the public /favicon.ico endpoint. It returns an empty 204 rather
-// than letting the request fall through to the authenticated front page (the
-// previous behavior leaked the whole index to unauthenticated visitors).
+// Favicon is the public /favicon.ico endpoint. It serves the embedded 32x32
+// PNG (browsers accept an image/png payload for this path) and never falls
+// through to the authenticated front page, which would leak the whole index to
+// unauthenticated visitors. The richer icon set lives in the <head> links
+// (/static/favicon.svg, apple-touch-icon.png) and /static/site.webmanifest.
 func (app *App) Favicon(w http.ResponseWriter, r *http.Request) {
+	f, err := app.staticFS.Open("favicon-32.png")
+	if err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.WriteHeader(http.StatusNoContent)
+	_, _ = io.Copy(w, f)
 }

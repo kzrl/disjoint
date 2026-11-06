@@ -8,3 +8,6 @@ uploads/
 .DS_Store
 backups/
 *.pre-restore-*
+
+# Agent scratch attachments (pi web), never part of the source tree.
+.pi-web/
