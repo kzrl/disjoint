@@ -298,13 +298,24 @@
     });
   }
 
-  try {
-    bindLogin();
-    bindAccount();
-  } catch (err) {
-    // Never leave the user with a silent, dead button.
-    var el = document.getElementById("passkey-status") ||
-      document.getElementById("passkey-login-status");
-    if (el) status(el, "Passkeys could not start on this page: " + messageFor(err), "error");
+  function init() {
+    try {
+      bindLogin();
+      bindAccount();
+    } catch (err) {
+      // Never leave the user with a silent, dead button.
+      var el = document.getElementById("passkey-status") ||
+        document.getElementById("passkey-login-status");
+      if (el) status(el, "Passkeys could not start on this page: " + messageFor(err), "error");
+    }
+  }
+
+  // The script lives in <head> (with defer) but this guard makes the file safe
+  // to include without it: binding before the DOM exists silently did nothing,
+  // which is exactly the "button does nothing" failure.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
 })();

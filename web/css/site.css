@@ -75,6 +75,13 @@ main.container,
   padding-right: 1rem;
 }
 
+/* The `hidden` attribute must actually hide: Bulma's components set display
+   (e.g. .button is inline-flex), which overrides the UA [hidden] rule. The
+   passkey controls and status lines rely on the attribute. */
+[hidden] {
+  display: none !important;
+}
+
 .logo {
   font-family: var(--bulma-family-code);
   font-size: 1.25rem;

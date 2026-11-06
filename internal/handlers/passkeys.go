@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -110,6 +111,7 @@ func (app *App) PasskeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 
 	options, err := app.passkeys.BeginRegistration(ctx, user)
 	if err != nil {
+		log.Printf("[passkeys] begin registration failed for user %d: %v", user.ID, err)
 		if errors.Is(err, passkeys.ErrCredentialLimit) {
 			jsonError(w, http.StatusBadRequest, "You already have the maximum number of passkeys")
 			return
@@ -138,6 +140,9 @@ func (app *App) PasskeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
 
 	name, err := app.passkeys.FinishRegistration(ctx, user, token, r)
 	if err != nil {
+		// Logged server-side (never sent to the client) so a failing browser
+		// can be diagnosed from the journal.
+		log.Printf("[passkeys] finish registration failed for user %d: %v", user.ID, err)
 		if errors.Is(err, passkeys.ErrCeremony) || errors.Is(err, passkeys.ErrCredentialLimit) {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
@@ -160,6 +165,7 @@ func (app *App) PasskeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	options, err := app.passkeys.BeginLogin(r.Context())
 	if err != nil {
+		log.Printf("[passkeys] begin login failed: %v", err)
 		http.Error(w, "failed to start passkey sign-in", http.StatusInternalServerError)
 		return
 	}
@@ -181,6 +187,7 @@ func (app *App) PasskeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 
 	userID, _, err := app.passkeys.FinishLogin(ctx, token, r)
 	if err != nil {
+		log.Printf("[passkeys] finish login failed: %v", err)
 		if errors.Is(err, passkeys.ErrSignCountRegression) {
 			audit(r, 0, "passkey_sign_count_regression", 0)
 		}
@@ -190,6 +197,7 @@ func (app *App) PasskeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 
 	account, err := app.queries.GetUserByID(ctx, userID)
 	if err != nil {
+		log.Printf("[passkeys] login succeeded for unknown user %d: %v", userID, err)
 		jsonError(w, http.StatusUnauthorized, "Passkey sign-in failed")
 		return
 	}

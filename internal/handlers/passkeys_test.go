@@ -326,7 +326,7 @@ func TestAccountPageListsPasskeys(t *testing.T) {
 		t.Fatalf("GET /account = %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Passkeys", "Work laptop", `id="add-passkey-form"`, "/static/passkeys.js"} {
+	for _, want := range []string{"Passkeys", "Work laptop", `id="add-passkey-form"`, "/static/passkeys.js", "defer"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("account page missing %q", want)
 		}
