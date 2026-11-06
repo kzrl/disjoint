@@ -1256,7 +1256,9 @@ func TestOnTheAirPresence(t *testing.T) {
 
 	// 1. An authenticated request writes presence and the homepage lists the user
 	body := getHome()
-	if !strings.Contains(body, "On the air:") || !strings.Contains(body, "onair_user") {
+	// Assert the presence strip structurally rather than by its label copy
+	// (the heading text is presentation and changes).
+	if !strings.Contains(body, `class="on-air-user"`) || !strings.Contains(body, "onair_user") {
 		t.Fatalf("homepage should list onair_user in the on-air strip, got:\n%s", body)
 	}
 	ts1, err := queries.GetUserPresence(ctx, user.ID)

@@ -193,6 +193,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	// Parse individual page templates combined with layout.html
 	pages := []string{
 		"index.html",
+		"search.html",
 		"thread.html",
 		"new_thread.html",
 		"edit_post.html",
@@ -214,7 +215,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// (and post_partial.html); parsed into every set so the define resolves.
 		// reaction_bar.html is parsed into every set: post_card includes the
 		// reaction bar, and post_card is included in every set.
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/"+page)
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/thread_rows.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}
@@ -397,6 +398,7 @@ func (app *App) Routes() http.Handler {
 
 	// Front page & threads
 	mux.HandleFunc("GET /", app.IndexPage)
+	mux.HandleFunc("GET /search", app.SearchPage)
 	mux.HandleFunc("GET /threads/new", app.NewThreadPage)
 	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)
 	mux.HandleFunc("GET /threads/{id}", app.ThreadPage)

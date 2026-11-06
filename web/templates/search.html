@@ -1,0 +1,41 @@
+{{define "content"}}
+<div>
+  <section class="card forum-section my-5">
+    <div class="card-header">
+      <p class="card-header-title">Search</p>
+    </div>
+
+    <form method="GET" action="/search" role="search" class="px-4 pt-4 pb-2">
+      <div class="field has-addons">
+        <div class="control is-expanded">
+          <input type="search" name="q" class="input" value="{{.Query}}"
+                 maxlength="100" placeholder="Search thread titles and posts"
+                 aria-label="Search thread titles and posts" {{if not .Searched}}autofocus{{end}}>
+        </div>
+        <div class="control">
+          <button type="submit" class="button is-primary">Search</button>
+        </div>
+      </div>
+    </form>
+
+    {{if .Searched}}
+      {{if .Threads}}
+        <p class="is-size-7 muted px-4 pb-2">
+          {{len .Threads}} {{if eq (len .Threads) 1}}match{{else}}matches{{end}} for “{{.Query}}”
+        </p>
+        {{template "thread_rows" .}}
+        {{template "thread_pagination" .}}
+      {{else}}
+        <div class="forum-section py-6 has-text-centered">
+          <p class="muted mb-4">No threads match “{{.Query}}”.</p>
+          <a href="/search" class="button is-secondary is-small">Clear search</a>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="forum-section py-6 has-text-centered">
+        <p class="muted">Search thread titles and post bodies. Expired threads are not included.</p>
+      </div>
+    {{end}}
+  </section>
+</div>
+{{end}}

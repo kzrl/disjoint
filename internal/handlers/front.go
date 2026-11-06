@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,9 +20,8 @@ const frontPagePageSize = 30
 // 8 lazy-loaded images at most).
 const frontPageImageCap = 8
 
-// maxSearchQueryLength bounds the front-page search term supplied as ?q= (the
-// page has no search box, so the URL is the only entry point). Longer input is
-// truncated rather than rejected.
+// maxSearchQueryLength bounds a search term supplied as ?q= (front page or
+// /search). Longer input is truncated rather than rejected.
 const maxSearchQueryLength = 100
 
 // expiryBadgeWindow is how close to expiration a thread must be for its TTL
@@ -53,40 +54,11 @@ type FrontPageThreadItem struct {
 	MoreImages   int                         // image count beyond frontPageImageCap
 }
 
-// IndexPage renders the global front page: all non-expired threads sorted
-// by created date (newest first), each with a preview of its most recent
-// comment. Replaces the old per-board index.
-func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Defense-in-depth: the middleware normally guarantees this, but the
-	// index must never render without a viewer even if a public path is
-	// accidentally routed here.
-	if middleware.UserFromContext(ctx) == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	// Front-page search: the term filters threads by title or any post body.
-	// LIKE's % and _ act as wildcards here, which is acceptable for a simple
-	// self-hosted search; the pattern is still length-capped.
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if runes := []rune(query); len(runes) > maxSearchQueryLength {
-		query = string(runes[:maxSearchQueryLength])
-	}
-	if query != "" {
-		if user := middleware.UserFromContext(ctx); user != nil && !allowUser(app.apiLimiter, user.ID) {
-			w.Header().Set("Retry-After", "300")
-			http.Error(w, "too many searches; slow down", http.StatusTooManyRequests)
-			return
-		}
-	}
-
+// loadThreadItems builds one page of thread rows: the threads themselves
+// (filtered by query when non-empty), their opening-post reactions, image
+// strips, unread markers and last-comment snippet. Shared by the front page
+// and the dedicated search view so both render identical rows.
+func (app *App) loadThreadItems(ctx context.Context, viewer *database.User, page int, query string) ([]FrontPageThreadItem, bool, error) {
 	limit := int64(frontPagePageSize)
 	offset := int64((page - 1) * frontPagePageSize)
 	var rows []database.ListFrontPageThreadsRow
@@ -99,8 +71,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 			Offset: offset,
 		})
 		if err != nil {
-			http.Error(w, "failed to search threads", http.StatusInternalServerError)
-			return
+			return nil, false, fmt.Errorf("failed to search threads: %w", err)
 		}
 		rows = make([]database.ListFrontPageThreadsRow, 0, len(searchRows))
 		for _, sr := range searchRows {
@@ -127,16 +98,8 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 			Offset: offset,
 		})
 		if err != nil {
-			http.Error(w, "failed to load threads", http.StatusInternalServerError)
-			return
+			return nil, false, fmt.Errorf("failed to load threads: %w", err)
 		}
-	}
-
-	// "On the air": users seen within the last 5 minutes (includes the viewer)
-	online, err := app.queries.ListOnlineUsers(ctx)
-	if err != nil {
-		http.Error(w, "failed to load online users", http.StatusInternalServerError)
-		return
 	}
 
 	// Reactions on each thread's opening post: one query for the whole
@@ -153,8 +116,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	if len(postIDs) > 0 {
 		reactionRows, err := app.queries.ListReactionsByPostIDs(ctx, postIDs)
 		if err != nil {
-			http.Error(w, "failed to load reactions", http.StatusInternalServerError)
-			return
+			return nil, false, fmt.Errorf("failed to load reactions: %w", err)
 		}
 		for _, r := range reactionRows {
 			rRows = append(rRows, reactionRow{
@@ -170,27 +132,24 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	currentUserID := int64(0)
-	var currentUser *database.User
-	if u := middleware.UserFromContext(ctx); u != nil {
-		currentUser = u
-		currentUserID = u.ID
+	if viewer != nil {
+		currentUserID = viewer.ID
 	}
 
 	// Unread threads for the viewer: one lightweight query returning thread
 	// IDs, then a set lookup while building the rows. Guests get no dots.
 	unread := make(map[int64]bool)
-	if currentUser != nil {
+	if viewer != nil {
 		accountCreatedAt := sql.NullTime{Time: time.Now().UTC(), Valid: true}
-		if currentUser.CreatedAt.Valid {
-			accountCreatedAt = currentUser.CreatedAt
+		if viewer.CreatedAt.Valid {
+			accountCreatedAt = viewer.CreatedAt
 		}
 		unreadIDs, err := app.queries.ListUnreadThreadIDs(ctx, database.ListUnreadThreadIDsParams{
-			ViewerID:         currentUser.ID,
+			ViewerID:         viewer.ID,
 			AccountCreatedAt: accountCreatedAt,
 		})
 		if err != nil {
-			http.Error(w, "failed to load unread threads", http.StatusInternalServerError)
-			return
+			return nil, false, fmt.Errorf("failed to load unread threads: %w", err)
 		}
 		for _, id := range unreadIDs {
 			unread[id] = true
@@ -205,8 +164,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	if len(postIDs) > 0 {
 		imageRows, err := app.queries.ListFrontPageThreadImages(ctx, postIDs)
 		if err != nil {
-			http.Error(w, "failed to load thread images", http.StatusInternalServerError)
-			return
+			return nil, false, fmt.Errorf("failed to load thread images: %w", err)
 		}
 		imagePathsByThread = make(map[int64][]FrontPageImage, len(imageRows))
 		for _, r := range imageRows {
@@ -220,8 +178,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 	// Every row's bar carries the full emoji list for its picker.
 	emojis, err := app.queries.ListAllEmojis(ctx)
 	if err != nil {
-		http.Error(w, "failed to load emojis", http.StatusInternalServerError)
-		return
+		return nil, false, fmt.Errorf("failed to load emojis: %w", err)
 	}
 
 	items := make([]FrontPageThreadItem, 0, len(rows))
@@ -253,13 +210,108 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	return items, len(rows) == frontPagePageSize, nil
+}
+
+// IndexPage renders the global front page: all non-expired threads sorted
+// by created date (newest first), each with a preview of its most recent
+// comment. Replaces the old per-board index.
+func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Defense-in-depth: the middleware normally guarantees this, but the
+	// index must never render without a viewer even if a public path is
+	// accidentally routed here.
+	currentUser := middleware.UserFromContext(ctx)
+	if currentUser == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	// Front-page search: the term filters threads by title or any post body.
+	// LIKE's % and _ act as wildcards here, which is acceptable for a simple
+	// self-hosted search; the pattern is still length-capped.
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if runes := []rune(query); len(runes) > maxSearchQueryLength {
+		query = string(runes[:maxSearchQueryLength])
+	}
+	if query != "" && !allowUser(app.apiLimiter, currentUser.ID) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "too many searches; slow down", http.StatusTooManyRequests)
+		return
+	}
+
+	items, hasNext, err := app.loadThreadItems(ctx, currentUser, page, query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// "On the air": users seen within the last 5 minutes (includes the viewer)
+	online, err := app.queries.ListOnlineUsers(ctx)
+	if err != nil {
+		http.Error(w, "failed to load online users", http.StatusInternalServerError)
+		return
+	}
+
 	app.render(w, r, "index.html", map[string]any{
 		"Threads": items,
 		"Online":  online,
 		"Page":    page,
-		"HasNext": len(rows) == frontPagePageSize,
+		"HasNext": hasNext,
 		"Query":   query,
+		"Base":    "/",
 	}, "Front Page")
+}
+
+// SearchPage renders the dedicated search view. It reuses the front page's
+// row builder, so results look exactly like the front page, and the query
+// lives in the URL (?q=) so results are linkable and reloadable.
+func (app *App) SearchPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	viewer := middleware.UserFromContext(ctx)
+	// Defense-in-depth, same as the index: never render without a viewer.
+	if viewer == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if runes := []rune(query); len(runes) > maxSearchQueryLength {
+		query = string(runes[:maxSearchQueryLength])
+	}
+
+	data := map[string]any{
+		"Page":     page,
+		"Query":    query,
+		"Searched": query != "",
+		"Base":     "/search",
+	}
+	if query != "" {
+		if !allowUser(app.apiLimiter, viewer.ID) {
+			w.Header().Set("Retry-After", "300")
+			http.Error(w, "too many searches; slow down", http.StatusTooManyRequests)
+			return
+		}
+		items, hasNext, err := app.loadThreadItems(ctx, viewer, page, query)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data["Threads"] = items
+		data["HasNext"] = hasNext
+	}
+
+	app.render(w, r, "search.html", data, "Search")
 }
 
 // commentSnippet flattens a raw markdown body into a plain-text preview.

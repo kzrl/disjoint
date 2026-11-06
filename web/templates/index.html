@@ -3,13 +3,13 @@
   {{if .Online}}
     <div class="on-air">
       <span class="on-air-dot" aria-hidden="true"></span>
-      <span class="is-uppercase is-size-7 muted">On the air:</span>
+      <span class="is-uppercase is-size-7 muted">Online:</span>
       {{range .Online}}
         <span class="on-air-user">{{userLink .Username}} <span class="is-size-7 muted"><time datetime="{{isoTime .LastSeenAt}}" title="{{formatTime .LastSeenAt}}">{{formatRelative .LastSeenAt}}</time></span></span>
       {{end}}
     </div>
   {{else}}
-    <div class="on-air on-air-empty">No one else is on the air</div>
+    <div class="on-air on-air-empty">No one is online</div>
   {{end}}
 
   <section class="card forum-section my-5">
@@ -20,56 +20,8 @@
       {{end}}
     </div>
     {{if .Threads}}
-      <div>
-        {{range .Threads}}
-          <div class="board-row">
-            <div class="board-main">
-              <div class="board-title">
-                {{if .Unread}}<span class="unread-dot" role="img" title="Unread posts" aria-label="Unread posts"></span>{{end}}
-                {{if .IsLive}}<span class="live-dot" role="img" title="Active in the last hour" aria-label="Active in the last hour"></span>{{end}}
-                <a href="/threads/{{.Row.ID}}">{{if .Row.FirstPostUrl.Valid}}<span class="board-link-icon" role="img" aria-label="Includes a link" title="Includes a link: {{.Row.FirstPostUrl.String}}">&#x1F517;</span> {{end}}{{.Row.Title}}</a>
-                {{if .ExpiryUrgent}}
-                  <span class="tag is-subtle" title="This thread expires automatically">&#x23F3; {{formatExpiry .Row.ExpiresAt}}</span>
-                {{end}}
-              </div>
-              {{template "reaction_bar" (reactionBar .Row.FirstPostID .Reactions .Emojis)}}
-              {{if .Images}}
-                {{$tid := .Row.ID}}
-                <div class="front-strip" role="list" aria-label="Images in this thread">
-                  {{range .Images}}
-                    <a class="front-strip-thumb" role="listitem" href="/threads/{{$tid}}">
-                      <img src="/thumbs/{{.StoragePath}}?w=320" loading="lazy" alt="{{.Filename}}">
-                    </a>
-                  {{end}}
-                  {{if gt .MoreImages 0}}
-                    <a class="front-strip-more" href="/threads/{{$tid}}">+{{.MoreImages}}</a>
-                  {{end}}
-                </div>
-              {{end}}
-            </div>
-            <div class="board-activity">
-              {{if .Row.LastCommentID.Valid}}
-                <span class="is-size-7">{{.ReplyCount}} {{if eq .ReplyCount 1}}comment{{else}}comments{{end}}</span>
-                <span class="is-size-7 muted" aria-hidden="true">&bull;</span>
-                <a class="is-size-7" href="/threads/{{.Row.ID}}?from={{.Row.LastCommentID.Int64}}#post-{{.Row.LastCommentID.Int64}}" title="View the latest comment">{{userLink .Row.LastCommentAuthor}} &bull; <time datetime="{{isoTime .Row.LastCommentAt.Time}}" title="{{formatTime .Row.LastCommentAt.Time}}">{{formatRelative .Row.LastCommentAt.Time}}</time></a>
-              {{else}}
-                <span class="is-size-7 muted">No comments yet</span>
-              {{end}}
-            </div>
-          </div>
-        {{end}}
-      </div>
-      {{if or (gt .Page 1) .HasNext}}
-      <div class="pagination-wrap py-3 px-4 has-text-centered">
-        {{if gt .Page 1}}
-          <a class="button is-secondary is-small" href="/?page={{sub .Page 1}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">&larr; Prev</a>
-        {{end}}
-        {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
-        {{if .HasNext}}
-          <a class="button is-secondary is-small" href="/?page={{add .Page 1}}{{if .Query}}&amp;q={{urlquery .Query}}{{end}}">Next &rarr;</a>
-        {{end}}
-      </div>
-      {{end}}
+      {{template "thread_rows" .}}
+      {{template "thread_pagination" .}}
     {{else}}
       <div class="forum-section py-6 has-text-centered">
         {{if .Query}}
