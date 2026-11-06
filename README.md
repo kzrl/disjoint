@@ -230,4 +230,18 @@ make css         # re-vendor Bulma and regenerate web/static/disjoint.css
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[GNU General Public License v3.0](LICENSE)
+
+Disjoint is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+Disjoint is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Vendored third-party assets keep their own licenses:
+
+- Bulma v1 — MIT (see `web/static/bulma-LICENSE`)
+- HTMX — BSD 2-Clause
