@@ -367,13 +367,23 @@ DELETE FROM users
 WHERE id = ?;
 
 -- name: ListUsers :many
-SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC;
+SELECT id, username, is_admin, is_disabled, created_at FROM users ORDER BY id ASC;
+
+-- name: DisableUser :execrows
+-- Suspends a non-admin account. Guarded in SQL so a promote racing with a
+-- disable cannot leave an administrator locked out; 0 rows means the target
+-- is an admin or does not exist.
+UPDATE users SET is_disabled = 1 WHERE id = ? AND is_admin = 0;
+
+-- name: EnableUser :exec
+UPDATE users SET is_disabled = 0 WHERE id = ?;
 
 -- name: ListMentionCandidates :many
 -- Mention autocomplete: case-insensitive ASCII prefix match. Recently active
 -- users sort first; the boolean expression puts NULL presence last without
 -- relying on SQLite's NULLS LAST syntax. The caller supplies the escaped
--- pattern (including the trailing %).
+-- pattern (including the trailing %). Disabled accounts are skipped: they
+-- cannot read what is posted, so completing them only produces dead mentions.
 SELECT
     u.username,
     u.avatar_path,
@@ -381,6 +391,7 @@ SELECT
 FROM users u
 LEFT JOIN user_presence p ON p.user_id = u.id
 WHERE u.username LIKE ? ESCAPE '\'
+  AND u.is_disabled = 0
 ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
 LIMIT 10;
 

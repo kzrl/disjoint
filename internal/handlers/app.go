@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"disjoint/internal/auth"
 	"disjoint/internal/buildinfo"
 	"disjoint/internal/database"
 	"disjoint/internal/markdown"
@@ -274,14 +275,14 @@ func (app *App) render(w http.ResponseWriter, r *http.Request, page string, data
 		flashErr = c.Value
 		http.SetCookie(w, &http.Cookie{
 			Name: "flash_error", Value: "", Path: "/", MaxAge: -1,
-			Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
+			Secure: auth.SecureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
 		})
 	}
 	if c, err := r.Cookie("flash_success"); err == nil && c.Value != "" {
 		flashSucc = c.Value
 		http.SetCookie(w, &http.Cookie{
 			Name: "flash_success", Value: "", Path: "/", MaxAge: -1,
-			Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
+			Secure: auth.SecureCookie(r), SameSite: http.SameSiteLaxMode, HttpOnly: true,
 		})
 	}
 
@@ -333,7 +334,7 @@ func setFlash(w http.ResponseWriter, r *http.Request, name, value string) {
 		Name:     name,
 		Value:    value,
 		Path:     "/",
-		Secure:   secureCookie(r),
+		Secure:   auth.SecureCookie(r),
 		SameSite: http.SameSiteLaxMode,
 		HttpOnly: true,
 	})
@@ -378,6 +379,8 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/users", app.UsersPage)
 	mux.HandleFunc("POST /admin/users/{id}/promote", app.PromoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
+	mux.HandleFunc("POST /admin/users/{id}/disable", app.DisableUserSubmit)
+	mux.HandleFunc("POST /admin/users/{id}/enable", app.EnableUserSubmit)
 
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)

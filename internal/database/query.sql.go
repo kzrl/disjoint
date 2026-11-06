@@ -383,7 +383,7 @@ INSERT INTO users (
     password_hash
 ) VALUES (
     ?, ?
-) RETURNING id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce
+) RETURNING id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce
 `
 
 type CreateUserParams struct {
@@ -399,6 +399,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Username,
 		&i.PasswordHash,
 		&i.IsAdmin,
+		&i.IsDisabled,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -482,6 +483,30 @@ WHERE id = ?
 
 func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteUser, id)
+	return err
+}
+
+const disableUser = `-- name: DisableUser :execrows
+UPDATE users SET is_disabled = 1 WHERE id = ? AND is_admin = 0
+`
+
+// Suspends a non-admin account. Guarded in SQL so a promote racing with a
+// disable cannot leave an administrator locked out; 0 rows means the target
+// is an admin or does not exist.
+func (q *Queries) DisableUser(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disableUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const enableUser = `-- name: EnableUser :exec
+UPDATE users SET is_disabled = 0 WHERE id = ?
+`
+
+func (q *Queries) EnableUser(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, enableUser, id)
 	return err
 }
 
@@ -730,7 +755,7 @@ func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users
+SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE id = ? LIMIT 1
 `
 
@@ -742,6 +767,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.Username,
 		&i.PasswordHash,
 		&i.IsAdmin,
+		&i.IsDisabled,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -751,7 +777,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users
+SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE username = ? LIMIT 1
 `
 
@@ -763,6 +789,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.Username,
 		&i.PasswordHash,
 		&i.IsAdmin,
+		&i.IsDisabled,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -772,7 +799,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 }
 
 const getUserByUsernameFold = `-- name: GetUserByUsernameFold :one
-SELECT id, username, password_hash, is_admin, created_at, bio, avatar_path, avatar_nonce FROM users WHERE username = ? COLLATE NOCASE LIMIT 1
+SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users WHERE username = ? COLLATE NOCASE LIMIT 1
 `
 
 // Case-insensitive lookup used only for registration uniqueness. Login stays
@@ -786,6 +813,7 @@ func (q *Queries) GetUserByUsernameFold(ctx context.Context, username string) (U
 		&i.Username,
 		&i.PasswordHash,
 		&i.IsAdmin,
+		&i.IsDisabled,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -1359,6 +1387,7 @@ SELECT
 FROM users u
 LEFT JOIN user_presence p ON p.user_id = u.id
 WHERE u.username LIKE ? ESCAPE '\'
+  AND u.is_disabled = 0
 ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
 LIMIT 10
 `
@@ -1372,7 +1401,8 @@ type ListMentionCandidatesRow struct {
 // Mention autocomplete: case-insensitive ASCII prefix match. Recently active
 // users sort first; the boolean expression puts NULL presence last without
 // relying on SQLite's NULLS LAST syntax. The caller supplies the escaped
-// pattern (including the trailing %).
+// pattern (including the trailing %). Disabled accounts are skipped: they
+// cannot read what is posted, so completing them only produces dead mentions.
 func (q *Queries) ListMentionCandidates(ctx context.Context, username string) ([]ListMentionCandidatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listMentionCandidates, username)
 	if err != nil {
@@ -1916,14 +1946,15 @@ func (q *Queries) ListUserIDsByUsernames(ctx context.Context, usernames []string
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC
+SELECT id, username, is_admin, is_disabled, created_at FROM users ORDER BY id ASC
 `
 
 type ListUsersRow struct {
-	ID        int64
-	Username  string
-	IsAdmin   int64
-	CreatedAt sql.NullTime
+	ID         int64
+	Username   string
+	IsAdmin    int64
+	IsDisabled int64
+	CreatedAt  sql.NullTime
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
@@ -1939,6 +1970,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 			&i.ID,
 			&i.Username,
 			&i.IsAdmin,
+			&i.IsDisabled,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

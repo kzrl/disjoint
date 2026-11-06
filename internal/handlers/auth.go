@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -22,20 +21,6 @@ var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9]{3,32}$`)
 // password changes.
 const minPasswordLength = 8
 
-// secureCookie reports whether session cookies should carry the Secure
-// flag. COOKIE_SECURE forces the decision ("1"/"true" on, "0"/"false" off)
-// for deployments behind a TLS-terminating proxy where r.TLS is nil;
-// otherwise TLS on the current request is detected automatically.
-func secureCookie(r *http.Request) bool {
-	switch strings.ToLower(os.Getenv("COOKIE_SECURE")) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-	return r.TLS != nil
-}
-
 // startSession creates a server-side session row for the user and sets the
 // cookie holding the (unhashed) token. The table stores only the token's
 // SHA-256 hash.
@@ -51,7 +36,7 @@ func (app *App) startSession(ctx context.Context, w http.ResponseWriter, r *http
 	}); err != nil {
 		return err
 	}
-	auth.SetSessionCookie(w, token, secureCookie(r))
+	auth.SetSessionCookie(w, token, auth.SecureCookie(r))
 	return nil
 }
 
@@ -135,7 +120,11 @@ func (app *App) SetupSubmit(w http.ResponseWriter, r *http.Request) {
 
 // LoginPage renders the login form.
 func (app *App) LoginPage(w http.ResponseWriter, r *http.Request) {
-	app.render(w, r, "login.html", map[string]any{}, "Sign In")
+	// ?disabled=1 is set by the auth middleware when it evicts a session whose
+	// account has just been suspended, so the evicted browser is told why.
+	app.render(w, r, "login.html", map[string]any{
+		"Disabled": r.URL.Query().Get("disabled") == "1",
+	}, "Sign In")
 }
 
 // LoginSubmit authenticates the user and creates an HTTP-only session.
@@ -159,6 +148,14 @@ func (app *App) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if !auth.CheckPassword(user.PasswordHash, password) {
 		setFlash(w, r, "flash_error", "Invalid username or password.")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	// Checked after the password so a legitimate user learns why they cannot
+	// get in, while a wrong password still gets the generic message.
+	if user.IsDisabled == 1 {
+		setFlash(w, r, "flash_error", "This account has been disabled. Contact an administrator.")
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -277,6 +274,6 @@ func (app *App) LogoutSubmit(w http.ResponseWriter, r *http.Request) {
 		// already-expired token is harmless.
 		_ = app.queries.DeleteSession(r.Context(), auth.TokenHash(token))
 	}
-	auth.ClearSessionCookie(w, secureCookie(r))
+	auth.ClearSessionCookie(w, auth.SecureCookie(r))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

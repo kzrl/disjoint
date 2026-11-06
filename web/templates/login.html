@@ -5,6 +5,10 @@
     <p class="muted">Sign in to your account</p>
   </div>
 
+  {{if .Disabled}}
+  <p class="notification is-warning is-size-7">Your account has been disabled. Contact an administrator.</p>
+  {{end}}
+
   <div class="box">
     <form method="POST" action="/login">
       <div class="field">

@@ -51,6 +51,8 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Deletion & Moderation**: Authors can delete their own replies and threads; administrators can remove any thread or reply. Deleting an opening post takes the whole thread with it, and attachment files and thumbnails are cleaned up from disk.
 
+- **Account Suspension**: Administrators can disable a non-admin account from `/admin/users`. Disabling signs the user out everywhere and blocks login until an admin re-enables them; their posts, threads and profile are left intact, and disabled users are not offered as `@mention` completions.
+
 - **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
 
 - **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.

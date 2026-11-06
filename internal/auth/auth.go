@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -62,6 +64,22 @@ func GetSessionTokenFromRequest(r *http.Request) string {
 		return ""
 	}
 	return cookie.Value
+}
+
+// SecureCookie reports whether the session and flash cookies should carry the
+// Secure flag. COOKIE_SECURE forces the decision ("1"/"true" on, "0"/"false"
+// off) for deployments behind a TLS-terminating proxy where r.TLS is nil;
+// otherwise TLS on the current request is detected automatically. Shared by the
+// handlers and the auth middleware so a disabled-session cookie is cleared with
+// the same attributes it was set with.
+func SecureCookie(r *http.Request) bool {
+	switch strings.ToLower(os.Getenv("COOKIE_SECURE")) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return r.TLS != nil
 }
 
 // SetSessionCookie sets the session cookie on the response. secure marks

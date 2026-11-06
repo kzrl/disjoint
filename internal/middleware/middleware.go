@@ -323,6 +323,9 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 		// expiry check happens in SQL). A missing or expired session just
 		// means the request proceeds anonymously.
 		var currentUser *database.User
+		// set when a live session belonged to an account disabled in the
+		// meantime, so the owner of that browser is told why they were kicked.
+		disabledEvicted := false
 		if token := auth.GetSessionTokenFromRequest(r); token != "" {
 			now := time.Now()
 			tokenHash := auth.TokenHash(token)
@@ -335,11 +338,22 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 				},
 			}); err == nil {
 				if user, err := m.queries.GetUserByID(ctx, userID); err == nil {
-					currentUser = &user
-					r = r.WithContext(ContextWithUser(r.Context(), currentUser))
-					// Touch at most every 5 minutes; best-effort so a write
-					// error never breaks the request.
-					_ = m.queries.TouchSession(ctx, tokenHash)
+					if user.IsDisabled == 1 {
+						// The account was suspended while this session lived. The
+						// disable handler already purges sessions, but a concurrent
+						// request may have replayed this token: drop the row and the
+						// cookie so the token can never authenticate again, then fall
+						// through as anonymous below.
+						_ = m.queries.DeleteSession(ctx, tokenHash)
+						auth.ClearSessionCookie(w, auth.SecureCookie(r))
+						disabledEvicted = true
+					} else {
+						currentUser = &user
+						r = r.WithContext(ContextWithUser(r.Context(), currentUser))
+						// Touch at most every 5 minutes; best-effort so a write
+						// error never breaks the request.
+						_ = m.queries.TouchSession(ctx, tokenHash)
+					}
 				}
 			}
 		}
@@ -360,14 +374,19 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 				return
 			}
 
+			loginURL := "/login"
+			if disabledEvicted {
+				loginURL = "/login?disabled=1"
+			}
+
 			// HTMX request: instruct HTMX to redirect to /login
 			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("HX-Redirect", "/login")
+				w.Header().Set("HX-Redirect", loginURL)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
 			return
 		}
 

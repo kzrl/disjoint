@@ -125,6 +125,26 @@ func TestMentionSuggestionsEndpoint(t *testing.T) {
 		t.Fatalf("presence order = %+v, want alice first", out.Users)
 	}
 
+	// Disabled accounts are not offered as completions: they cannot read what
+	// is posted, so completing them would only create dead mentions. A disabled
+	// user that currently ranks first (fresh presence) must disappear without
+	// disturbing the presence-ordered join for the rest.
+	if rows, err := queries.DisableUser(ctx, alice.ID); err != nil || rows != 1 {
+		t.Fatalf("disable alice: rows=%d err=%v", rows, err)
+	}
+	_, out = get("al")
+	if len(out.Users) != 2 || out.Users[0].Name != "albert" || out.Users[1].Name != "alex" {
+		t.Fatalf("disabled user still completed: %+v", out.Users)
+	}
+	// Re-enabling restores the completion (and its presence ranking).
+	if err := queries.EnableUser(ctx, alice.ID); err != nil {
+		t.Fatalf("enable alice: %v", err)
+	}
+	_, out = get("al")
+	if len(out.Users) != 3 || out.Users[0].Name != "alice" {
+		t.Fatalf("re-enabled user missing from completions: %+v", out.Users)
+	}
+
 	// LIKE metacharacters are escaped, not treated as wildcards.
 	rr, out = get("%")
 	if rr.Code != http.StatusOK || len(out.Users) != 0 {

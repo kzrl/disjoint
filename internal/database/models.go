@@ -97,6 +97,7 @@ type User struct {
 	Username     string
 	PasswordHash string
 	IsAdmin      int64
+	IsDisabled   int64
 	CreatedAt    sql.NullTime
 	Bio          sql.NullString
 	AvatarPath   sql.NullString

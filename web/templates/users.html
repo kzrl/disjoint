@@ -10,6 +10,7 @@
           <th scope="col">ID</th>
           <th scope="col">Username</th>
           <th scope="col">Role</th>
+          <th scope="col">Status</th>
           <th scope="col">Joined</th>
           <th scope="col"><span class="is-sr-only">Actions</span></th>
         </tr>
@@ -29,6 +30,13 @@
               <span class="muted is-size-7">Member</span>
             {{end}}
           </td>
+          <td>
+            {{if eq .IsDisabled 1}}
+              <span class="tag is-danger">Disabled</span>
+            {{else}}
+              <span class="muted is-size-7">Active</span>
+            {{end}}
+          </td>
           <td class="is-size-7 muted"><time datetime="{{isoTime .CreatedAt.Time}}">{{formatTime .CreatedAt.Time}}</time></td>
           <td class="has-text-right">
             {{if eq .IsAdmin 1}}
@@ -38,9 +46,21 @@
               </form>
               {{end}}
             {{else}}
-            <form method="POST" action="/admin/users/{{.ID}}/promote">
-              <button type="submit" class="button is-primary is-small">Promote to Admin</button>
-            </form>
+            <div class="buttons is-right">
+              <form method="POST" action="/admin/users/{{.ID}}/promote">
+                <button type="submit" class="button is-primary is-small">Promote to Admin</button>
+              </form>
+              {{if eq .IsDisabled 1}}
+              <form method="POST" action="/admin/users/{{.ID}}/enable">
+                <button type="submit" class="button is-primary is-small">Enable</button>
+              </form>
+              {{else}}
+              <form method="POST" action="/admin/users/{{.ID}}/disable"
+                    onsubmit="return confirm('Disable {{.Username}}? They will be signed out and unable to log in.');">
+                <button type="submit" class="button is-danger is-small">Disable</button>
+              </form>
+              {{end}}
+            </div>
             {{end}}
           </td>
         </tr>

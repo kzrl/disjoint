@@ -80,7 +80,7 @@ func (app *App) ChangePasswordSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password changed, but failed to revoke sessions", http.StatusInternalServerError)
 		return
 	}
-	auth.ClearSessionCookie(w, secureCookie(r))
+	auth.ClearSessionCookie(w, auth.SecureCookie(r))
 
 	setFlash(w, r, "flash_success", "Password changed. Sign in again on every device.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -102,7 +102,7 @@ func (app *App) SignOutEverywhereSubmit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	audit(r, user.ID, "sign_out_everywhere", user.ID)
-	auth.ClearSessionCookie(w, secureCookie(r))
+	auth.ClearSessionCookie(w, auth.SecureCookie(r))
 
 	setFlash(w, r, "flash_success", "Signed out everywhere.")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
