@@ -87,6 +87,17 @@ main.container,
   color: var(--bulma-primary);
 }
 
+/* The navbar wordmark ends in the empty-set app mark instead of a caret: the
+   glyph is the same art as the favicon/app icon, tinted with the primary
+   accent and sized to the wordmark's cap height. */
+.logo-mark {
+  width: 0.95em;
+  height: 0.95em;
+  margin-left: 0.15rem;
+  vertical-align: -0.12em;
+  color: var(--bulma-primary);
+}
+
 /* --- Theme toggle --------------------------------------------------------- */
 
 /* Sun when the effective theme is dark (click → light), moon when light

@@ -65,6 +65,12 @@ func TestAppIconsAndManifestArePublic(t *testing.T) {
 		}
 	}
 
+	// The navbar wordmark uses the same mark inline (no extra request, and it
+	// inherits the theme accent through currentColor).
+	if !strings.Contains(page, `<svg class="logo-mark"`) || !strings.Contains(page, `fill="currentColor"`) {
+		t.Errorf("navbar logo mark missing from the page")
+	}
+
 	// /favicon.ico keeps answering to legacy clients with a real image.
 	if ct := get("/favicon.ico").Header().Get("Content-Type"); ct != "image/png" {
 		t.Errorf("favicon.ico Content-Type = %q, want image/png", ct)
