@@ -18,8 +18,9 @@ const frontPagePageSize = 30
 // 8 lazy-loaded images at most).
 const frontPageImageCap = 8
 
-// maxSearchQueryLength bounds the front-page search term (the input also
-// carries maxlength). Longer input is truncated rather than rejected.
+// maxSearchQueryLength bounds the front-page search term supplied as ?q= (the
+// page has no search box, so the URL is the only entry point). Longer input is
+// truncated rather than rejected.
 const maxSearchQueryLength = 100
 
 // expiryBadgeWindow is how close to expiration a thread must be for its TTL

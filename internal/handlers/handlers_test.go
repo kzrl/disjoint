@@ -3982,11 +3982,14 @@ func TestFrontPageSearchCoversTitlesAndBodies(t *testing.T) {
 	if strings.Contains(page, "Cooking thread") {
 		t.Errorf("search goroutine: unrelated thread leaked into results")
 	}
-	if !strings.Contains(page, `value="goroutine"`) {
-		t.Errorf("search goroutine: query not preserved in the input")
-	}
-	if !strings.Contains(page, "Results for") {
+	// The front page deliberately has no search box; the ?q= URL is the only
+	// entry point. Pin both facts: the results heading names the term, and no
+	// input is rendered for it.
+	if !strings.Contains(page, "Results for") || !strings.Contains(page, "goroutine") {
 		t.Errorf("search goroutine: missing results heading")
+	}
+	if strings.Contains(page, `name="q"`) {
+		t.Errorf("search goroutine: front page must not render a search input")
 	}
 
 	// Body-only match, case-insensitively.
