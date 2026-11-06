@@ -12,16 +12,6 @@ import (
 	"disjoint/internal/middleware"
 )
 
-// truncateTitle shortens a fetched page title to the stored limit on a rune
-// boundary (never mid-character) and trims the resulting trailing space.
-func truncateTitle(title string) string {
-	runes := []rune(strings.TrimSpace(title))
-	if len(runes) > maxThreadTitleLength {
-		runes = runes[:maxThreadTitleLength]
-	}
-	return strings.TrimSpace(string(runes))
-}
-
 // maxThreadTitleLength bounds the title input. The front-page rows are
 // single-line, so unbounded titles would wreck the layout. Applies to new
 // values only; pre-existing long titles remain viewable.
@@ -104,13 +94,6 @@ func (app *App) CreateThreadSubmit(w http.ResponseWriter, r *http.Request) {
 	body := strings.TrimSpace(r.FormValue("body"))
 	expiration := r.FormValue("expiration")
 	postURL, urlErr := cleanPostURL(r.FormValue("url"))
-	// A link-only thread can leave the title blank; use the linked page's own
-	// <title>. Failure is not fatal — the user is asked to type one instead.
-	if title == "" && urlErr == nil && postURL != "" && app.FetchLinkTitle != nil {
-		if fetched, err := app.FetchLinkTitle(ctx, postURL); err == nil {
-			title = truncateTitle(fetched)
-		}
-	}
 	bodyTooLong := len(body) > maxPostBodyBytes
 	if err := app.checkStorageQuota(ctx, user.ID, uploadFieldBytes(r, "files")); err != nil {
 		setFlash(w, r, "flash_error", err.Error())

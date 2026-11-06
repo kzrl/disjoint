@@ -15,7 +15,6 @@ import (
 	"disjoint/internal/auth"
 	"disjoint/internal/buildinfo"
 	"disjoint/internal/database"
-	"disjoint/internal/linkmeta"
 	"disjoint/internal/markdown"
 	"disjoint/internal/middleware"
 	"disjoint/web"
@@ -47,10 +46,6 @@ type App struct {
 	passwordLimiter *middleware.RateLimiter
 	// thumbLimiter bounds CPU/disk work from thumbnail requests.
 	thumbLimiter *middleware.RateLimiter
-	// FetchLinkTitle resolves a linked page's <title>, used to fill in a
-	// thread title left empty when a link is supplied. Overridable so tests can
-	// stub it (the real fetcher refuses loopback addresses by design).
-	FetchLinkTitle func(ctx context.Context, rawURL string) (string, error)
 }
 
 // NewApp instantiates an App and compiles HTML templates.
@@ -67,7 +62,6 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		apiLimiter:      middleware.NewRateLimiter(300, 5*time.Minute),
 		passwordLimiter: middleware.NewRateLimiter(5, 15*time.Minute),
 		thumbLimiter:    middleware.NewRateLimiter(1200, 5*time.Minute),
-		FetchLinkTitle:  linkmeta.FetchTitle,
 	}
 
 	staticFS, err := fs.Sub(web.Files, "static")
