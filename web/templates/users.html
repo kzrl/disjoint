@@ -60,6 +60,17 @@
                 <button type="submit" class="button is-danger is-small">Disable</button>
               </form>
               {{end}}
+
+              <!-- Deleting is irreversible and removes the account's posts and
+                   uploads, so it requires typing the phrase (checked again on
+                   the server). -->
+              <form method="POST" action="/admin/users/{{.ID}}/delete" class="delete-user-form">
+                <input type="text" name="confirm" class="input is-small" required
+                       pattern="DELETE USER" placeholder="DELETE USER" autocomplete="off"
+                       aria-label="Type DELETE USER to delete {{.Username}}"
+                       title="Type DELETE USER to enable the Delete button">
+                <button type="submit" class="button is-danger is-small">Delete</button>
+              </form>
             </div>
             {{end}}
           </td>

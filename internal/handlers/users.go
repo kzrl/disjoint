@@ -1,9 +1,21 @@
 package handlers
 
 import (
+	"database/sql"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+
+	"disjoint/internal/database"
+	"disjoint/internal/thumbs"
 )
+
+// deleteUserConfirmPhrase is the literal text an admin must type to delete an
+// account (checked server-side; the form's pattern= is only a convenience).
+const deleteUserConfirmPhrase = "DELETE USER"
 
 func (app *App) UsersPage(w http.ResponseWriter, r *http.Request) {
 	user := requireAdmin(w, r)
@@ -157,5 +169,104 @@ func (app *App) EnableUserSubmit(w http.ResponseWriter, r *http.Request) {
 		setFlash(w, r, "flash_success", "User enabled")
 	}
 
+	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+}
+
+// DeleteUserSubmit permanently removes an account: the user row goes, which
+// cascades their threads (and those threads' posts), their replies, reactions,
+// reads, notifications and sessions. Their uploads — attachments, cached
+// thumbnails, avatar, custom emoji — are unlinked from disk afterwards.
+//
+// Destructive and irreversible, so the form must echo the literal phrase
+// "DELETE USER"; that check is enforced here, not just in the browser.
+func (app *App) DeleteUserSubmit(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := requireAdmin(w, r)
+	if user == nil {
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		setFlash(w, r, "flash_error", "Invalid user ID")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	if id == user.ID {
+		setFlash(w, r, "flash_error", "You cannot delete your own account")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	if strings.TrimSpace(r.FormValue("confirm")) != deleteUserConfirmPhrase {
+		setFlash(w, r, "flash_error", "Type DELETE USER to confirm deleting an account")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	target, err := app.queries.GetUserByID(ctx, id)
+	if err != nil {
+		setFlash(w, r, "flash_error", "User not found")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+	if target.IsAdmin == 1 {
+		setFlash(w, r, "flash_error", "Admins cannot be deleted. Revoke admin first")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	// Collect the file paths before the rows vanish. Attachments covers the
+	// user's own posts and every post in threads they started, because those
+	// threads (and all their replies) are deleted with the account.
+	attachments, err := app.queries.ListAttachmentsByUser(ctx, database.ListAttachmentsByUserParams{
+		UserID:   id,
+		UserID_2: id,
+	})
+	if err != nil {
+		setFlash(w, r, "flash_error", "Failed to load the account's files")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+	emojis, err := app.queries.ListCustomEmojisByCreator(ctx, sql.NullInt64{Int64: id, Valid: true})
+	if err != nil {
+		setFlash(w, r, "flash_error", "Failed to load the account's emoji")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	// emojis.created_by is ON DELETE SET NULL, so the rows must go explicitly
+	// or they would survive as orphaned custom emoji with no owner.
+	if err := app.queries.DeleteCustomEmojisByCreator(ctx, sql.NullInt64{Int64: id, Valid: true}); err != nil {
+		setFlash(w, r, "flash_error", "Failed to delete the account's emoji")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+	if err := app.queries.DeleteUser(ctx, id); err != nil {
+		setFlash(w, r, "flash_error", "Failed to delete user")
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+		return
+	}
+
+	app.removeAttachmentFiles(attachments)
+	removeAvatarFile(app.uploadDir, target.AvatarPath)
+	for _, e := range emojis {
+		if !e.StoragePath.Valid || e.StoragePath.String == "" {
+			continue
+		}
+		name := filepath.Base(filepath.Clean(e.StoragePath.String))
+		if name == "." || name == ".." || name == "" {
+			continue
+		}
+		fullPath := filepath.Join(app.uploadDir, name)
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[handlers] Warning: could not delete emoji file %s: %v", fullPath, err)
+		}
+		thumbs.Remove(app.uploadDir, e.StoragePath.String)
+	}
+
+	audit(r, user.ID, "delete_user", id)
+	setFlash(w, r, "flash_success", "User deleted")
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }

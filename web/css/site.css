@@ -98,6 +98,21 @@ main.container,
   color: var(--bulma-primary);
 }
 
+/* --- Admin user list ------------------------------------------------------ */
+
+/* The delete control carries its own confirmation input; keep it on one line
+   with the buttons and stop the input from stretching the actions cell. */
+.delete-user-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.delete-user-form .input {
+  width: 8.5rem;
+  font-size: 0.75rem;
+}
+
 /* --- Theme toggle --------------------------------------------------------- */
 
 /* Sun when the effective theme is dark (click → light), moon when light

@@ -408,6 +408,16 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteCustomEmojisByCreator = `-- name: DeleteCustomEmojisByCreator :exec
+DELETE FROM emojis
+WHERE created_by = ? AND source = 'custom'
+`
+
+func (q *Queries) DeleteCustomEmojisByCreator(ctx context.Context, createdBy sql.NullInt64) error {
+	_, err := q.db.ExecContext(ctx, deleteCustomEmojisByCreator, createdBy)
+	return err
+}
+
 const deleteEmoji = `-- name: DeleteEmoji :exec
 DELETE FROM emojis WHERE id = ?
 `
@@ -1002,6 +1012,92 @@ func (q *Queries) ListAttachmentsByThreadID(ctx context.Context, threadID int64)
 			&i.FileSize,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttachmentsByUser = `-- name: ListAttachmentsByUser :many
+SELECT a.id, a.post_id, a.filename, a.storage_path, a.mime_type, a.file_size, a.created_at
+FROM attachments a
+JOIN posts p ON p.id = a.post_id
+JOIN threads t ON t.id = p.thread_id
+WHERE p.user_id = ? OR t.user_id = ?
+ORDER BY a.id ASC
+`
+
+type ListAttachmentsByUserParams struct {
+	UserID   int64
+	UserID_2 int64
+}
+
+// Every attachment whose row disappears when this user is deleted: the
+// user's own posts, plus every post in a thread the user started (deleting
+// the opener deletes the thread, and a thread's posts cascade). The caller
+// unlinks these files from disk after the rows are gone.
+func (q *Queries) ListAttachmentsByUser(ctx context.Context, arg ListAttachmentsByUserParams) ([]Attachment, error) {
+	rows, err := q.db.QueryContext(ctx, listAttachmentsByUser, arg.UserID, arg.UserID_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.PostID,
+			&i.Filename,
+			&i.StoragePath,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomEmojisByCreator = `-- name: ListCustomEmojisByCreator :many
+SELECT id, storage_path FROM emojis
+WHERE created_by = ? AND source = 'custom'
+ORDER BY id ASC
+`
+
+type ListCustomEmojisByCreatorRow struct {
+	ID          int64
+	StoragePath sql.NullString
+}
+
+// Custom uploads owned by a user; their files must be unlinked when the
+// account is deleted, and their rows are removed explicitly because
+// emojis.created_by is only ON DELETE SET NULL.
+func (q *Queries) ListCustomEmojisByCreator(ctx context.Context, createdBy sql.NullInt64) ([]ListCustomEmojisByCreatorRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCustomEmojisByCreator, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCustomEmojisByCreatorRow
+	for rows.Next() {
+		var i ListCustomEmojisByCreatorRow
+		if err := rows.Scan(&i.ID, &i.StoragePath); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

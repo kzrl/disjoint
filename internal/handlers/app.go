@@ -382,6 +382,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/demote", app.DemoteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/disable", app.DisableUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/enable", app.EnableUserSubmit)
+	mux.HandleFunc("POST /admin/users/{id}/delete", app.DeleteUserSubmit)
 
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)

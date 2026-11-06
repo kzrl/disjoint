@@ -366,6 +366,30 @@ UPDATE users SET is_admin = 0 WHERE id = ?;
 DELETE FROM users
 WHERE id = ?;
 
+-- name: ListAttachmentsByUser :many
+-- Every attachment whose row disappears when this user is deleted: the
+-- user's own posts, plus every post in a thread the user started (deleting
+-- the opener deletes the thread, and a thread's posts cascade). The caller
+-- unlinks these files from disk after the rows are gone.
+SELECT a.*
+FROM attachments a
+JOIN posts p ON p.id = a.post_id
+JOIN threads t ON t.id = p.thread_id
+WHERE p.user_id = ? OR t.user_id = ?
+ORDER BY a.id ASC;
+
+-- name: ListCustomEmojisByCreator :many
+-- Custom uploads owned by a user; their files must be unlinked when the
+-- account is deleted, and their rows are removed explicitly because
+-- emojis.created_by is only ON DELETE SET NULL.
+SELECT id, storage_path FROM emojis
+WHERE created_by = ? AND source = 'custom'
+ORDER BY id ASC;
+
+-- name: DeleteCustomEmojisByCreator :exec
+DELETE FROM emojis
+WHERE created_by = ? AND source = 'custom';
+
 -- name: ListUsers :many
 SELECT id, username, is_admin, is_disabled, created_at FROM users ORDER BY id ASC;
 
