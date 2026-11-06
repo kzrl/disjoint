@@ -1,14 +1,16 @@
 # Disjoint
 
-**Disjoint** is free & open-source web application that tries to bring the vibes from classic internet forums and BBSes. Another place for the group chat to hang out online.
+**Disjoint** is free & open-source web application that brings the vibes from classic internet forums and BBSes.
 
-Self hosted, not some corporate advertising funnel.
+It's a place for the group chat to hang out on the web. Share fun stuff. Be weird, it's private and posts expire after a specified amount of time.
 
-Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
+Designed to be self hosted. It's not some corporate advertising funnel to mine your data. Run it on a cheap virtual server somewhere and bring your mates.
+
+Built with Go, SQLite, sqlc, HTMX, and Bulma.
 
 ---
 
-## Features
+## Some of the features
 
 - **Global Front Page**: Every thread lives on the front page, sorted by creation date (newest first).
 
@@ -17,8 +19,6 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 - **Unread Markers**: Threads with posts you have not seen yet carry a dot on the front page. Opening a thread clears it; your own posts never count.
 
 - **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active threads keep living. A background worker automatically purges expired threads along with all attachments from disk.
-
-- **Thread Pagination**: Long threads are split into chronological pages of 20 posts. Page 1 starts with the opening post, the last page carries the reply box, and permalinks resolve to the page containing the linked post.
 
 - **HTMX Real-Time Interactions**: Live replies append directly to the thread without full page reloads (`multipart/form-data` supported).
 
@@ -29,35 +29,11 @@ Built with **Go**, **SQLite**, **sqlc**, **HTMX**, and Bulma v1.
 
 - **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch, with a position counter. The thumbnail paints instantly and sharpens to full resolution in place.
 
-- **Image Gallery**: `/gallery` collects every image on live threads — opening posts and replies — newest first, 48 per page, in a responsive masonry wall. Tiles open the lightbox, and each caption jumps back to the exact post.
+- **Image Gallery**: `/gallery` collects every image on live threads — opening posts and replies — newest first.
 
-- **Markdown Support**: Rich formatting, tables, task lists, blockquotes, and code blocks powered by Goldmark with safe HTML rendering.
-
-- **@User Mentions**: `@username` tokens in posts (and bios) render as tinted pill links to that user's card. Code spans, e-mail addresses, and malformed tokens are never linked.
-
-- **Mention Autocomplete**: Typing `@` in any compose box suggests matching usernames (recently active first); arrow keys navigate and Enter/Tab/click inserts `@name ` with a trailing space.
-
-- **First-Class Link Posts**: Every post — opening post or reply — can carry a separate link field, rendered as a clean link card under the post. Links are validated to http(s) server-side, making URL sharing instant.
+- **@User Mentions**: `@username` tokens in posts (and bios) render as links to that user's card.
 
 - **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community emoji
-
-- **Inline Emoji**: Type `:joy:` or any community emoji name in a post or your bio and it renders inline — built-ins as their glyph, custom uploads at reaction-chip size. Typos and deleted names stay as plain text.
-
-- **Live Updates**: The navbar bell refreshes itself every minute, and open threads grow a "N new replies" pill as the conversation continues — no manual reload. Polling pauses on hidden tabs.
-
-- **Mentions & Replies Inbox**: A navbar bell counts the conversations waiting for you. An `@mention` notifies exactly the users whose names render as pills, and replies notify everyone in the thread. One row per thread (not per reply), read only when you open the thread or press “Mark all read”.
-
-- **Account Security**: Change your password from `/account` (minimum 8 characters); doing so revokes every session, and a separate “Sign out everywhere” action clears all devices without changing the password.
-
-- **Deletion & Moderation**: Authors can delete their own replies and threads; administrators can remove any thread or reply. Deleting an opening post takes the whole thread with it, and attachment files and thumbnails are cleaned up from disk.
-
-- **Account Suspension**: Administrators can disable a non-admin account from `/admin/users`. Disabling signs the user out everywhere and blocks login until an admin re-enables them; their posts, threads and profile are left intact, and disabled users are not offered as `@mention` completions.
-
-- **User Avatars**: Profile pictures (JPG, PNG, WEBP, up to 5MB) uploaded from your user card and shown next to your posts.
-
-- **Self-Contained Offline Deployment**: Vendored HTMX and vendored Bulma v1 plus a small site stylesheet; no external CDNs required.
-
-- **First-Run Setup**: Automatic detection on initial launch to create the administrator account.
 
 ---
 
