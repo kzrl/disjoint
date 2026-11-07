@@ -120,7 +120,7 @@ func (app *App) loadThreadItems(ctx context.Context, viewer *database.User, page
 		}
 		for _, r := range reactionRows {
 			rRows = append(rRows, reactionRow{
-				postID:      r.PostID,
+				targetID:    r.PostID,
 				userID:      r.UserID,
 				emojiID:     r.EmojiID,
 				name:        r.EmojiName,

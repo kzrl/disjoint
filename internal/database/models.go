@@ -19,6 +19,14 @@ type Attachment struct {
 	CreatedAt   sql.NullTime
 }
 
+type AttachmentReaction struct {
+	ID           int64
+	AttachmentID int64
+	UserID       int64
+	EmojiID      int64
+	CreatedAt    sql.NullTime
+}
+
 type Emoji struct {
 	ID          int64
 	Name        string

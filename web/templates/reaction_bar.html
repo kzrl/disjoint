@@ -6,7 +6,7 @@
   {{range .Reactions}}
   <button type="button"
       class="reaction-chip{{if .You}} is-active{{end}}"
-      hx-post="/posts/{{$.PostID}}/reactions"
+      hx-post="{{$.ActionURL}}"
       hx-target="closest .reaction-bar"
       hx-swap="outerHTML"
       hx-vals='{"emoji_id": {{.EmojiID}}}'
@@ -26,7 +26,7 @@
     <div class="emoji-picker is-hidden" aria-label="Emoji picker">
       {{range .Emojis}}
       <button type="button" class="emoji-picker-btn"
-          hx-post="/posts/{{$.PostID}}/reactions"
+          hx-post="{{$.ActionURL}}"
           hx-target="closest .reaction-bar"
           hx-swap="outerHTML"
           hx-vals='{"emoji_id": {{.ID}}}'

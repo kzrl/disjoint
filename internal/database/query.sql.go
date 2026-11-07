@@ -28,6 +28,26 @@ func (q *Queries) ActivatePendingUser(ctx context.Context, id int64) (int64, err
 	return result.RowsAffected()
 }
 
+const addAttachmentReaction = `-- name: AddAttachmentReaction :execrows
+INSERT OR IGNORE INTO attachment_reactions (attachment_id, user_id, emoji_id)
+VALUES (?, ?, ?)
+`
+
+type AddAttachmentReactionParams struct {
+	AttachmentID int64
+	UserID       int64
+	EmojiID      int64
+}
+
+// Toggle-on for a per-image reaction; 0 rows means it already existed.
+func (q *Queries) AddAttachmentReaction(ctx context.Context, arg AddAttachmentReactionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addAttachmentReaction, arg.AttachmentID, arg.UserID, arg.EmojiID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const addReaction = `-- name: AddReaction :execrows
 INSERT OR IGNORE INTO reactions (post_id, user_id, emoji_id) VALUES (?, ?, ?)
 `
@@ -762,6 +782,25 @@ func (q *Queries) FirstUserID(ctx context.Context) (int64, error) {
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getAttachmentByID = `-- name: GetAttachmentByID :one
+SELECT id, post_id, filename, storage_path, mime_type, file_size, created_at FROM attachments WHERE id = ? LIMIT 1
+`
+
+func (q *Queries) GetAttachmentByID(ctx context.Context, id int64) (Attachment, error) {
+	row := q.db.QueryRowContext(ctx, getAttachmentByID, id)
+	var i Attachment
+	err := row.Scan(
+		&i.ID,
+		&i.PostID,
+		&i.Filename,
+		&i.StoragePath,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getAttachmentsForExpiredThreads = `-- name: GetAttachmentsForExpiredThreads :many
@@ -1548,6 +1587,7 @@ func (q *Queries) ListFrontPageThreads(ctx context.Context, arg ListFrontPageThr
 
 const listGalleryImages = `-- name: ListGalleryImages :many
 SELECT
+    a.id        AS attachment_id,
     a.storage_path,
     a.filename,
     a.created_at,
@@ -1570,12 +1610,13 @@ type ListGalleryImagesParams struct {
 }
 
 type ListGalleryImagesRow struct {
-	StoragePath string
-	Filename    string
-	CreatedAt   sql.NullTime
-	PostID      int64
-	ThreadID    int64
-	ThreadTitle string
+	AttachmentID int64
+	StoragePath  string
+	Filename     string
+	CreatedAt    sql.NullTime
+	PostID       int64
+	ThreadID     int64
+	ThreadTitle  string
 }
 
 // The image wall: every image attachment on a non-expired thread, newest
@@ -1592,6 +1633,7 @@ func (q *Queries) ListGalleryImages(ctx context.Context, arg ListGalleryImagesPa
 	for rows.Next() {
 		var i ListGalleryImagesRow
 		if err := rows.Scan(
+			&i.AttachmentID,
 			&i.StoragePath,
 			&i.Filename,
 			&i.CreatedAt,
@@ -1970,6 +2012,136 @@ func (q *Queries) ListPostsByThreadPage(ctx context.Context, arg ListPostsByThre
 			&i.AuthorUsername,
 			&i.AuthorAvatar,
 			&i.AuthorAvatarNonce,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReactionsByAttachmentID = `-- name: ListReactionsByAttachmentID :many
+SELECT
+    r.attachment_id,
+    r.user_id,
+    r.emoji_id,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(u.username, '') AS username
+FROM attachment_reactions r
+JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
+WHERE r.attachment_id = ?
+ORDER BY r.emoji_id ASC, r.id ASC
+`
+
+type ListReactionsByAttachmentIDRow struct {
+	AttachmentID     int64
+	UserID           int64
+	EmojiID          int64
+	EmojiName        string
+	EmojiSource      string
+	EmojiGlyph       string
+	EmojiStoragePath string
+	Username         string
+}
+
+func (q *Queries) ListReactionsByAttachmentID(ctx context.Context, attachmentID int64) ([]ListReactionsByAttachmentIDRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReactionsByAttachmentID, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsByAttachmentIDRow
+	for rows.Next() {
+		var i ListReactionsByAttachmentIDRow
+		if err := rows.Scan(
+			&i.AttachmentID,
+			&i.UserID,
+			&i.EmojiID,
+			&i.EmojiName,
+			&i.EmojiSource,
+			&i.EmojiGlyph,
+			&i.EmojiStoragePath,
+			&i.Username,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReactionsByAttachmentIDs = `-- name: ListReactionsByAttachmentIDs :many
+SELECT
+    r.attachment_id,
+    r.user_id,
+    r.emoji_id,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(u.username, '') AS username
+FROM attachment_reactions r
+JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
+WHERE r.attachment_id IN (/*SLICE:attachmentIds*/?)
+ORDER BY r.attachment_id ASC, r.emoji_id ASC, r.id ASC
+`
+
+type ListReactionsByAttachmentIDsRow struct {
+	AttachmentID     int64
+	UserID           int64
+	EmojiID          int64
+	EmojiName        string
+	EmojiSource      string
+	EmojiGlyph       string
+	EmojiStoragePath string
+	Username         string
+}
+
+func (q *Queries) ListReactionsByAttachmentIDs(ctx context.Context, attachmentids []int64) ([]ListReactionsByAttachmentIDsRow, error) {
+	query := listReactionsByAttachmentIDs
+	var queryParams []interface{}
+	if len(attachmentids) > 0 {
+		for _, v := range attachmentids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:attachmentIds*/?", strings.Repeat(",?", len(attachmentids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:attachmentIds*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReactionsByAttachmentIDsRow
+	for rows.Next() {
+		var i ListReactionsByAttachmentIDsRow
+		if err := rows.Scan(
+			&i.AttachmentID,
+			&i.UserID,
+			&i.EmojiID,
+			&i.EmojiName,
+			&i.EmojiSource,
+			&i.EmojiGlyph,
+			&i.EmojiStoragePath,
+			&i.Username,
 		); err != nil {
 			return nil, err
 		}
@@ -2494,6 +2666,25 @@ DELETE FROM sessions WHERE expires_at <= ?
 func (q *Queries) PruneExpiredSessions(ctx context.Context, expiresAt int64) error {
 	_, err := q.db.ExecContext(ctx, pruneExpiredSessions, expiresAt)
 	return err
+}
+
+const removeAttachmentReaction = `-- name: RemoveAttachmentReaction :execrows
+DELETE FROM attachment_reactions
+WHERE attachment_id = ? AND user_id = ? AND emoji_id = ?
+`
+
+type RemoveAttachmentReactionParams struct {
+	AttachmentID int64
+	UserID       int64
+	EmojiID      int64
+}
+
+func (q *Queries) RemoveAttachmentReaction(ctx context.Context, arg RemoveAttachmentReactionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, removeAttachmentReaction, arg.AttachmentID, arg.UserID, arg.EmojiID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const removeReaction = `-- name: RemoveReaction :execrows

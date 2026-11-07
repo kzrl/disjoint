@@ -133,6 +133,7 @@ ORDER BY a.id ASC;
 -- are included on purpose (the wall is a browsing surface, not a row preview).
 -- id DESC rather than created_at: uploads can share a one-second timestamp.
 SELECT
+    a.id        AS attachment_id,
     a.storage_path,
     a.filename,
     a.created_at,
@@ -849,3 +850,47 @@ RETURNING user_id;
 -- name: DeleteExpiredPasswordResetTokens :exec
 DELETE FROM password_reset_tokens
 WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL;
+
+-- name: AddAttachmentReaction :execrows
+-- Toggle-on for a per-image reaction; 0 rows means it already existed.
+INSERT OR IGNORE INTO attachment_reactions (attachment_id, user_id, emoji_id)
+VALUES (?, ?, ?);
+
+-- name: RemoveAttachmentReaction :execrows
+DELETE FROM attachment_reactions
+WHERE attachment_id = ? AND user_id = ? AND emoji_id = ?;
+
+-- name: ListReactionsByAttachmentID :many
+SELECT
+    r.attachment_id,
+    r.user_id,
+    r.emoji_id,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(u.username, '') AS username
+FROM attachment_reactions r
+JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
+WHERE r.attachment_id = ?
+ORDER BY r.emoji_id ASC, r.id ASC;
+
+-- name: ListReactionsByAttachmentIDs :many
+SELECT
+    r.attachment_id,
+    r.user_id,
+    r.emoji_id,
+    e.name AS emoji_name,
+    e.source AS emoji_source,
+    COALESCE(e.glyph, '') AS emoji_glyph,
+    COALESCE(e.storage_path, '') AS emoji_storage_path,
+    COALESCE(u.username, '') AS username
+FROM attachment_reactions r
+JOIN emojis e ON r.emoji_id = e.id
+LEFT JOIN users u ON r.user_id = u.id
+WHERE r.attachment_id IN (sqlc.slice('attachmentIds'))
+ORDER BY r.attachment_id ASC, r.emoji_id ASC, r.id ASC;
+
+-- name: GetAttachmentByID :one
+SELECT * FROM attachments WHERE id = ? LIMIT 1;

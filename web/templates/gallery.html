@@ -27,7 +27,7 @@
             <figcaption class="gallery-caption">
               <a href="/threads/{{.ThreadID}}?from={{.PostID}}#post-{{.PostID}}">{{.ThreadTitle}}</a>
               <time class="is-size-7 muted" datetime="{{isoTime .Time}}" title="{{formatTime .Time}}">{{formatRelative .Time}}</time>
-              {{template "reaction_bar" (reactionBar .PostID .Reactions .Emojis)}}
+              {{template "reaction_bar" (reactionBarAttachment .AttachmentID .Reactions .Emojis)}}
             </figcaption>
           </figure>
         {{end}}

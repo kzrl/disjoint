@@ -115,6 +115,21 @@ CREATE TABLE IF NOT EXISTS reactions (
 CREATE INDEX IF NOT EXISTS idx_reactions_post_id ON reactions(post_id);
 
 
+CREATE TABLE IF NOT EXISTS attachment_reactions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    attachment_id INTEGER NOT NULL,
+    user_id       INTEGER NOT NULL,
+    emoji_id      INTEGER NOT NULL,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (attachment_id, user_id, emoji_id),
+    FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (emoji_id) REFERENCES emojis(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_reactions_attachment
+    ON attachment_reactions(attachment_id);
+
 CREATE TABLE IF NOT EXISTS thread_reads (
     user_id INTEGER NOT NULL,
     thread_id INTEGER NOT NULL,

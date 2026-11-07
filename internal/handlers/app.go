@@ -183,7 +183,11 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// reactionBar assembles the reaction_bar partial context from a post
 		// card's fields (called as (reactionBar .Post.ID .Reactions .Emojis)).
 		"reactionBar": func(postID int64, reactions []ReactionGroup, emojis []database.ListAllEmojisRow) ReactionBarData {
-			return ReactionBarData{PostID: postID, Reactions: reactions, Emojis: emojis}
+			return ReactionBarData{ActionURL: postReactionURL(postID), Reactions: reactions, Emojis: emojis}
+		},
+		// reactionBarAttachment is the gallery's per-image variant.
+		"reactionBarAttachment": func(attachmentID int64, reactions []ReactionGroup, emojis []database.ListAllEmojisRow) ReactionBarData {
+			return ReactionBarData{ActionURL: attachmentReactionURL(attachmentID), Reactions: reactions, Emojis: emojis}
 		},
 		"authorAvatar": func(path, username string, nonce int64) template.HTML {
 			if username == "" {
@@ -436,6 +440,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /posts/{id}/edit", app.UpdatePostSubmit)
 	mux.HandleFunc("POST /posts/{id}/delete", app.DeletePostSubmit)
 	mux.HandleFunc("POST /posts/{id}/reactions", app.ToggleReaction)
+	mux.HandleFunc("POST /attachments/{id}/reactions", app.ToggleAttachmentReaction)
 
 	// User cards & profiles
 	mux.HandleFunc("GET /users/{name}", app.UserCardPage)

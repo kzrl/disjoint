@@ -539,7 +539,7 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, r := range reactionRows {
 			rRows = append(rRows, reactionRow{
-				postID:      r.PostID,
+				targetID:    r.PostID,
 				userID:      r.UserID,
 				emojiID:     r.EmojiID,
 				name:        r.EmojiName,

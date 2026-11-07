@@ -15,12 +15,13 @@ const galleryPageSize = 48
 // GalleryImage is one tile on the /gallery wall. The wall shows pixels, not
 // text, so there is no snippet or markdown payload here.
 type GalleryImage struct {
-	StoragePath string
-	Filename    string
-	ThreadID    int64
-	PostID      int64
-	ThreadTitle string
-	Time        time.Time
+	AttachmentID int64
+	StoragePath  string
+	Filename     string
+	ThreadID     int64
+	PostID       int64
+	ThreadTitle  string
+	Time         time.Time
 	// Reactions and Emojis feed the same reaction_bar partial used by the
 	// front page and thread cards; gallery reactions are reactions on the post
 	// that carries the image, so they show up everywhere that post does.
@@ -53,17 +54,18 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 			t = row.CreatedAt.Time
 		}
 		items = append(items, GalleryImage{
-			StoragePath: row.StoragePath,
-			Filename:    row.Filename,
-			ThreadID:    row.ThreadID,
-			PostID:      row.PostID,
-			ThreadTitle: row.ThreadTitle,
-			Time:        t,
+			AttachmentID: row.AttachmentID,
+			StoragePath:  row.StoragePath,
+			Filename:     row.Filename,
+			ThreadID:     row.ThreadID,
+			PostID:       row.PostID,
+			ThreadTitle:  row.ThreadTitle,
+			Time:         t,
 		})
 	}
 
-	// Reactions for each tile's post: one query for the whole page, grouped
-	// with the same implementation the front page uses.
+	// Per-image reactions for each tile: one query for the whole page, grouped
+	// with the same implementation the post bars use.
 	if err := app.loadGalleryReactions(r.Context(), items); err != nil {
 		http.Error(w, "failed to load gallery reactions", http.StatusInternalServerError)
 		return
@@ -86,25 +88,25 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 	}, "Gallery")
 }
 
-// loadGalleryReactions fills each item's reaction groups and the shared emoji
-// list for its picker.
+// loadGalleryReactions fills each item's per-image reaction groups and the
+// shared emoji list for its picker.
 func (app *App) loadGalleryReactions(ctx context.Context, items []GalleryImage) error {
 	if len(items) == 0 {
 		return nil
 	}
-	postIDs := make([]int64, 0, len(items))
+	attachmentIDs := make([]int64, 0, len(items))
 	for _, item := range items {
-		postIDs = append(postIDs, item.PostID)
+		attachmentIDs = append(attachmentIDs, item.AttachmentID)
 	}
 
-	rows, err := app.queries.ListReactionsByPostIDs(ctx, postIDs)
+	rows, err := app.queries.ListReactionsByAttachmentIDs(ctx, attachmentIDs)
 	if err != nil {
 		return err
 	}
 	rRows := make([]reactionRow, 0, len(rows))
 	for _, r := range rows {
 		rRows = append(rRows, reactionRow{
-			postID:      r.PostID,
+			targetID:    r.AttachmentID,
 			userID:      r.UserID,
 			emojiID:     r.EmojiID,
 			name:        r.EmojiName,
@@ -126,7 +128,7 @@ func (app *App) loadGalleryReactions(ctx context.Context, items []GalleryImage) 
 		return err
 	}
 	for i := range items {
-		items[i].Reactions = groups[items[i].PostID]
+		items[i].Reactions = groups[items[i].AttachmentID]
 		items[i].Emojis = emojis
 	}
 	return nil

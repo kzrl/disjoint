@@ -334,8 +334,8 @@ func TestGalleryPagination(t *testing.T) {
 	}
 }
 
-// Gallery tiles react on the post that carries the image, with the same bar and
-// toggle endpoint as the thread page.
+// Gallery reactions are per image: two images in one post react independently,
+// through /attachments/{id}/reactions, and do not touch the post's own bar.
 func TestGalleryReactions(t *testing.T) {
 	app, db, queries, uploadDir := setupTestApp(t)
 	defer db.Close()
@@ -347,14 +347,21 @@ func TestGalleryReactions(t *testing.T) {
 	reactorCookie := authCookieFor(t, queries, reactor.ID)
 
 	_, post := galleryThread(t, queries, poster.ID, "reaction gallery thread", sql.NullTime{})
-	galleryAttachment(t, queries, uploadDir, post.ID, "reactable.png", "image/png")
+	firstImg := galleryAttachment(t, queries, uploadDir, post.ID, "first.png", "image/png")
+	secondImg := galleryAttachment(t, queries, uploadDir, post.ID, "second.png", "image/png")
 
 	emoji, err := queries.GetEmojiByName(ctx, "joy")
 	if err != nil {
 		t.Fatalf("built-in emoji missing: %v", err)
 	}
 
-	// The poster reacts before anyone opens the gallery.
+	// The poster reacts to the first image only.
+	if _, err := queries.AddAttachmentReaction(ctx, database.AddAttachmentReactionParams{
+		AttachmentID: firstImg.ID, UserID: poster.ID, EmojiID: emoji.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A reaction on the post itself must not leak into the image bars.
 	if _, err := queries.AddReaction(ctx, database.AddReactionParams{
 		PostID: post.ID, UserID: poster.ID, EmojiID: emoji.ID,
 	}); err != nil {
@@ -374,23 +381,41 @@ func TestGalleryReactions(t *testing.T) {
 	}
 
 	body := get(reactorCookie)
-	if !strings.Contains(body, `class="gallery-tile"`) {
-		t.Fatalf("gallery did not render the tile")
+	if !strings.Contains(body, `hx-post="/attachments/`+fmt.Sprint(firstImg.ID)+`/reactions"`) {
+		t.Errorf("first image has no per-image reaction endpoint")
 	}
-	if !strings.Contains(body, `hx-post="/posts/`+fmt.Sprint(post.ID)+`/reactions"`) {
-		t.Errorf("gallery tile has no reaction toggle for post %d", post.ID)
+	if !strings.Contains(body, `hx-post="/attachments/`+fmt.Sprint(secondImg.ID)+`/reactions"`) {
+		t.Errorf("second image has no per-image reaction endpoint")
 	}
-	// The poster's reaction is visible, with its count, and is not "you".
-	if !strings.Contains(body, `class="reaction-chip"`) || !strings.Contains(body, `class="reaction-count">1<`) {
-		t.Errorf("existing reaction not rendered in the gallery")
-	}
-	if strings.Contains(body, `reaction-chip is-active`) {
-		t.Errorf("another user's reaction was marked as the viewer's")
+	if strings.Contains(body, `hx-post="/posts/`+fmt.Sprint(post.ID)+`/reactions"`) {
+		t.Errorf("gallery fell back to post reactions")
 	}
 
-	// Toggling from the gallery goes through the normal endpoint and returns the
-	// updated bar (HTMX swaps it in place).
-	req := httptest.NewRequest(http.MethodPost, "/posts/"+fmt.Sprint(post.ID)+"/reactions",
+	// Exactly one tile shows the poster's reaction, on the first image.
+	tileFor := func(page, storage string) string {
+		tiles := strings.Split(page, `class="gallery-tile"`)
+		if len(tiles) != 3 {
+			t.Fatalf("expected 2 tiles, got %d", len(tiles)-1)
+		}
+		for _, tile := range tiles[1:] {
+			if strings.Contains(tile, storage) {
+				return tile
+			}
+		}
+		t.Fatalf("no tile for %s", storage)
+		return ""
+	}
+	firstTile := tileFor(body, firstImg.StoragePath)
+	secondTile := tileFor(body, secondImg.StoragePath)
+	if !strings.Contains(firstTile, `class="reaction-count">1<`) {
+		t.Errorf("first image missing its reaction count")
+	}
+	if strings.Contains(secondTile, `class="reaction-count">`) {
+		t.Errorf("second image inherited the first image's reaction")
+	}
+
+	// Toggling the first image updates only that bar.
+	req := httptest.NewRequest(http.MethodPost, "/attachments/"+fmt.Sprint(firstImg.ID)+"/reactions",
 		strings.NewReader("emoji_id="+fmt.Sprint(emoji.ID)))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("HX-Request", "true")
@@ -398,19 +423,47 @@ func TestGalleryReactions(t *testing.T) {
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("gallery reaction toggle = %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("attachment reaction toggle = %d: %s", rr.Code, rr.Body.String())
 	}
 	bar := rr.Body.String()
-	if !strings.Contains(bar, `class="reaction-count">2<`) {
-		t.Errorf("toggle response does not show the updated count: %s", bar)
+	if !strings.Contains(bar, `hx-post="/attachments/`+fmt.Sprint(firstImg.ID)+`/reactions"`) {
+		t.Errorf("toggle response targets the wrong bar")
 	}
-	if !strings.Contains(bar, `reaction-chip is-active`) {
-		t.Errorf("toggle response does not mark the viewer's reaction active")
+	if !strings.Contains(bar, `class="reaction-count">2<`) || !strings.Contains(bar, `reaction-chip is-active`) {
+		t.Errorf("toggle response not updated: %s", bar)
 	}
 
-	// The reaction is the post's reaction everywhere: the poster sees the same
-	// count on the gallery after a reload.
-	if body = get(reactorCookie); !strings.Contains(body, `class="reaction-count">2<`) {
-		t.Errorf("gallery did not reflect the new reaction")
+	// Reacting to the second image leaves the first untouched.
+	req = httptest.NewRequest(http.MethodPost, "/attachments/"+fmt.Sprint(secondImg.ID)+"/reactions",
+		strings.NewReader("emoji_id="+fmt.Sprint(emoji.ID)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(reactorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second toggle = %d", rr.Code)
+	}
+
+	body = get(reactorCookie)
+	firstTile = tileFor(body, firstImg.StoragePath)
+	secondTile = tileFor(body, secondImg.StoragePath)
+	if !strings.Contains(firstTile, `class="reaction-count">2<`) {
+		t.Errorf("first image count changed unexpectedly")
+	}
+	if !strings.Contains(secondTile, `class="reaction-count">1<`) {
+		t.Errorf("second image reaction not shown")
+	}
+
+	// Non-image attachments have no gallery reaction surface.
+	doc := galleryAttachment(t, queries, uploadDir, post.ID, "notes.pdf", "application/pdf")
+	req = httptest.NewRequest(http.MethodPost, "/attachments/"+fmt.Sprint(doc.ID)+"/reactions",
+		strings.NewReader("emoji_id="+fmt.Sprint(emoji.ID)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(reactorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("non-image reaction = %d, want 404", rr.Code)
 	}
 }
