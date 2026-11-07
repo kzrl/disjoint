@@ -2223,9 +2223,10 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	want := map[string]string{
 		"X-Frame-Options":         "DENY",
-		"Content-Security-Policy": "frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
+		"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "same-origin",
+		"Permissions-Policy":      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 	}
 	for header, value := range want {
 		if got := rr.Header().Get(header); got != value {
@@ -4894,7 +4895,7 @@ func TestInboxBellPolling(t *testing.T) {
 		`class="navbar-item inbox-link"`,
 		`class="inbox-badge" aria-hidden="true">1<`,
 		// The swapped element must keep polling, so the attributes live on it.
-		`hx-get="/inbox/count" hx-trigger="every 60s [!document.hidden]"`,
+		`hx-get="/inbox/count" hx-trigger="every 60s" hx-swap="outerHTML" data-pause-hidden`,
 	} {
 		if !strings.Contains(fragment, want) {
 			t.Errorf("bell fragment missing %q", want)
@@ -4905,7 +4906,7 @@ func TestInboxBellPolling(t *testing.T) {
 	}
 
 	// The full page ships the same polling attributes on the bell.
-	if page := e.get("/", alice).Body.String(); !strings.Contains(page, `hx-trigger="every 60s [!document.hidden]"`) {
+	if page := e.get("/", alice).Body.String(); !strings.Contains(page, `hx-trigger="every 60s"`) {
 		t.Errorf("navbar bell is missing its poll trigger")
 	}
 
@@ -4945,7 +4946,7 @@ func TestThreadNewPostsPolling(t *testing.T) {
 	for _, want := range []string{
 		`id="new-posts"`,
 		fmt.Sprintf(`hx-get="/threads/%d/updates?after=%d"`, threadID, openingID),
-		`every 20s [!document.hidden]`,
+		`every 20s`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("thread page missing %q", want)
@@ -4979,7 +4980,7 @@ func TestThreadNewPostsPolling(t *testing.T) {
 	for _, want := range []string{
 		"1 new reply",
 		fmt.Sprintf(`href="/threads/%d?from=%d#post-%d"`, threadID, bobPost, bobPost),
-		`hx-trigger="every 20s [!document.hidden]"`,
+		`hx-trigger="every 20s" hx-swap="outerHTML" data-pause-hidden`,
 	} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("updates fragment missing %q", want)

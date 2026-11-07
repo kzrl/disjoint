@@ -12,7 +12,7 @@
       {{if .CanEdit}}<a class="button is-small post-action" href="/posts/{{.Post.ID}}/edit" title="Edit this post">Edit</a>{{end}}
       {{if .CanDelete}}
         <form method="POST" action="/posts/{{.Post.ID}}/delete"
-              onsubmit="return confirm('Delete this post? This cannot be undone.');">
+              data-confirm="Delete this post? This cannot be undone.">
           <button type="submit" class="button is-small is-danger is-light">Delete</button>
         </form>
       {{end}}

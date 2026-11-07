@@ -1,6 +1,6 @@
 # Disjoint
 
-**Disjoint** is free & open-source web application that brings the vibes from classic [internet forums](https://en.wikipedia.org/wiki/Internet_forum) [BBSes](https://en.wikipedia.org/wiki/Bulletin_board_system) and the [Cozy Web](https://maggieappleton.com/cozy-web). 
+**Disjoint** is a web application that brings the vibes from classic [internet forums](https://en.wikipedia.org/wiki/Internet_forum) [BBSes](https://en.wikipedia.org/wiki/Bulletin_board_system) and the [Cozy Web](https://maggieappleton.com/cozy-web). 
 
 It's a place for the group chat to hang out on the web and share fun stuff. It's private and posts can expire after a specified amount of time.
 
@@ -12,17 +12,19 @@ Built with Go, SQLite, sqlc, HTMX, and Bulma.
 
 ## Some of the features
 
-- **Global Front Page**: Every thread lives on the front page, sorted by creation date (newest first). No weird algorithms designed to steal your attention.
+- **Front Page**: Every thread lives on the front page, sorted by creation date (newest first). No weird algorithms designed to steal your attention.
 
 - **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active discussions continue and old posts disappear.
 
-- **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch, with a position counter. The thumbnail paints instantly and sharpens to full resolution in place.
+- **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch.
 
-- **Image Gallery**: `/gallery` collects every image on live threads — opening posts and replies — newest first.
+- **Image Gallery**: `/gallery` collects every image on threads.
 
 - **@User Mentions**: `@username` tokens in posts (and bios) render as links to that user's card.
 
 - **Slack-Style Reactions**: React to any post with built-in unicode emoji or custom community uploaded emoji
+
+- **Passkeys**: Add Touch ID / Windows Hello / phone / security-key sign-in from `/account`, then sign in without typing a password. Passwords keep working, so losing a device never locks you out. Invited users can also create a **passkey-only account** (no password) from the invite page; those accounts can set a password later after confirming with a passkey. Requires HTTPS (or localhost) and the two `WEBAUTHN_*` variables below.
 
 ---
 
@@ -85,6 +87,9 @@ Disjoint is configured via environment variables:
 | `DATABASE_PATH` | `disjoint.db` | File path for SQLite database |
 | `UPLOAD_DIR` | `uploads` | Directory for stored media attachments |
 | `COOKIE_SECURE` | _(auto: TLS detected per request)_ | Force `Secure` on session cookies: `1` behind a TLS-terminating reverse proxy, `0` to disable |
+| `PUBLIC_BASE_URL` | _(request host)_ | Public origin (e.g. `https://disjoint.example.com`) used for admin-issued reset/invite links; also the fallback source for the WebAuthn RP ID/origins |
+| `WEBAUTHN_RP_ID` | _(derived from `PUBLIC_BASE_URL`, then `localhost`)_ | Relying Party ID for passkeys; must be the site's registrable domain (e.g. `disjoint.example.com`) |
+| `WEBAUTHN_RP_ORIGINS` | _(derived from `PUBLIC_BASE_URL`, else `https://<RP ID>`)_ | Comma-separated origins allowed to use passkeys (e.g. `https://disjoint.example.com`) |
 
 ### Uploads
 
@@ -143,7 +148,10 @@ The restore tool validates the snapshot with `PRAGMA quick_check`, requires `-fo
 
 ### Security notes
 
-- Session cookies are HttpOnly, SameSite=Lax, and Secure when TLS is detected or `COOKIE_SECURE=1` is set. Sessions have a 7-day idle timeout and a 30-day absolute lifetime; changing a password revokes every session.
+- Session cookies are HttpOnly, SameSite=Lax, and Secure when TLS is detected or `COOKIE_SECURE=1` is set. Secure sessions use the `__Host-disjoint_session` name, so a sibling subdomain cannot plant a session cookie. Sessions have a 7-day idle timeout and a 30-day absolute lifetime; changing a password revokes every session.
+- The database and its WAL/SHM sidecars are restricted to the service user (`0600`); the process runs with a `0077` umask, so newly created data files stay private. New uploads are written `0600` in a `0750` (or stricter) directory.
+- The CSP is `script-src 'self'`: all page JavaScript lives in `/static`, there are no inline scripts or `onsubmit` handlers, and HTMX eval is disabled. Responses also carry `Permissions-Policy` and, over TLS, `Strict-Transport-Security`.
+- The Compose service binds to `127.0.0.1` and sets `COOKIE_SECURE=1`; put a TLS-terminating proxy in front of it (see below).
 - New invite links expire after seven days. Existing pre-migration invites with no expiry remain valid until used.
 - Post bodies are capped at **256 KB**; attachments are capped at 100 MB per post, and each user gets a **2 GiB** attachment + custom-emoji quota.
 - SQLite runs with `secure_delete` and the expiry worker truncates the WAL, but backups are **not encrypted** and retain content from before expiry. Copy backups only to encrypted storage and apply your own retention policy. Secure erasure on SSDs is never guaranteed.

@@ -101,7 +101,7 @@
           </span>
         </div>
         <form method="POST" action="/account/passkeys/{{.ID}}/delete"
-              onsubmit="return confirm('Delete this passkey? You can add another one later.');">
+              data-confirm="Delete this passkey? You can add another one later.">
           <button class="button is-small is-danger is-light" type="submit">Delete</button>
         </form>
       </div>
@@ -141,7 +141,7 @@
       Sign out every browser and device that is currently signed in as you.
     </p>
     <form method="POST" action="/account/sign-out-everywhere"
-          onsubmit="return confirm('Sign out of every device? You will need to sign in again.');">
+          data-confirm="Sign out of every device? You will need to sign in again.">
       <button type="submit" class="button is-danger is-light">Sign out everywhere</button>
     </form>
   </div>

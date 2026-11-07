@@ -68,21 +68,28 @@ func (m *Middleware) RefreshUserCount(ctx context.Context) {
 //     upload handler's forced Content-Disposition).
 //   - Referrer-Policy: don't leak URLs (invite codes, user names) to
 //     third-party sites.
-//
-// A full CSP is intentionally NOT set: HTMX's hx-on::* attributes are
-// inline handlers that script-src 'self' would break.
+//   - Content-Security-Policy: scripts are same-origin only (all page JS lives
+//     in /static; inline scripts and handlers are gone, and HTMX eval is
+//     disabled in the layout's htmx-config meta tag). style-src keeps
+//     'unsafe-inline' because the templates use style="" attributes.
+//   - Permissions-Policy: turn off browser capabilities the app never uses.
+//   - HSTS only over TLS (direct or via a proxy): sending it on plain HTTP is
+//     ignored by browsers, so this is safe but pointless there.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
-		// img-src 'self' deliberately blocks remote Markdown images, which
-		// would otherwise let a member track other members' IPs. The rest of
-		// the policy is intentionally narrow without a script-src: the app
-		// still uses inline scripts and HTMX hx-on attributes.
 		h.Set("Content-Security-Policy",
-			"frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'")
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; media-src 'self'; font-src 'self'; "+
+				"connect-src 'self'; manifest-src 'self'; object-src 'none'; "+
+				"base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

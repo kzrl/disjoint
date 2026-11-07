@@ -7,7 +7,7 @@
      the missing ones would break chronological order, and a reload also
      refreshes the unread/notification markers. -->
 <div id="new-posts" class="new-posts{{if gt .Count 0}} has-pill{{end}}"
-     {{if .Poll}}hx-get="{{.UpdatesURL}}" hx-trigger="every 20s [!document.hidden]" hx-swap="outerHTML"{{end}}>
+     {{if .Poll}}hx-get="{{.UpdatesURL}}" hx-trigger="every 20s" hx-swap="outerHTML" data-pause-hidden{{end}}>
   {{if gt .Count 0}}
     <a class="button is-small is-primary new-posts-pill" href="{{.ReloadURL}}">
       {{.Count}} new {{if eq .Count 1}}reply{{else}}replies{{end}} &darr;

@@ -14,6 +14,12 @@ import (
 
 const (
 	SessionCookieName = "disjoint_session"
+	// SessionCookieNameSecure is the cookie name used whenever the Secure flag
+	// is set. The __Host- prefix makes browsers reject a same-named cookie set
+	// by a sibling subdomain, without Secure, or with a Path other than "/".
+	// The plain name is kept for local HTTP development, where browsers would
+	// reject a Secure cookie.
+	SessionCookieNameSecure = "__Host-disjoint_session"
 	// SessionDuration is the absolute maximum lifetime of a login.
 	SessionDuration = 30 * 24 * time.Hour
 	// SessionIdleTimeout is how long a session may go unused before it stops
@@ -57,13 +63,24 @@ func TokenHash(token string) string {
 }
 
 // GetSessionTokenFromRequest extracts the raw session token from the
-// request cookie. Returns "" if no cookie is present.
+// request cookie. Both the secure (__Host-) and local-development names are
+// accepted so a deployment can move between HTTP and HTTPS without logging
+// everyone out. Returns "" if no cookie is present.
 func GetSessionTokenFromRequest(r *http.Request) string {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil || cookie.Value == "" {
-		return ""
+	for _, name := range []string{SessionCookieNameSecure, SessionCookieName} {
+		if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+			return cookie.Value
+		}
 	}
-	return cookie.Value
+	return ""
+}
+
+// sessionCookieName returns the name to set for the given secure flag.
+func sessionCookieName(secure bool) string {
+	if secure {
+		return SessionCookieNameSecure
+	}
+	return SessionCookieName
 }
 
 // SecureCookie reports whether the session and flash cookies should carry the
@@ -87,7 +104,7 @@ func SecureCookie(r *http.Request) bool {
 // in front of it).
 func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     sessionCookieName(secure),
 		Value:    token,
 		Path:     "/",
 		MaxAge:   int(SessionDuration.Seconds()),
@@ -97,10 +114,12 @@ func SetSessionCookie(w http.ResponseWriter, token string, secure bool) {
 	})
 }
 
-// ClearSessionCookie expires the session cookie on the response.
+// ClearSessionCookie expires the session cookie on the response. Both names
+// are expired: a deployment that switched HTTP/HTTPS may still have the other
+// name in a browser.
 func ClearSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     sessionCookieName(secure),
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -108,4 +127,17 @@ func ClearSessionCookie(w http.ResponseWriter, secure bool) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+	if secure {
+		// Also clear the plain name, which is what a previous HTTP-only
+		// session (or local development) would have set.
+		http.SetCookie(w, &http.Cookie{
+			Name:     SessionCookieName,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }

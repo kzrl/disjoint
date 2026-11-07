@@ -5,12 +5,19 @@ services:
       dockerfile: Dockerfile
     container_name: disjoint
     restart: unless-stopped
+    # The app speaks plain HTTP and is meant to sit behind a TLS-terminating
+    # proxy on the same host. Binding to loopback keeps that traffic (and the
+    # unencrypted session cookie) off the network; publish 0.0.0.0 only if you
+    # really terminate TLS in front of this port.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - PORT=8080
       - DATABASE_PATH=/data/disjoint.db
       - UPLOAD_DIR=/data/uploads
+      # Mark cookies Secure when the proxy serves HTTPS. Set PUBLIC_BASE_URL
+      # (and the WEBAUTHN_* variables) to the public origin in production.
+      - COOKIE_SECURE=1
     volumes:
       - disjoint_data:/data
 

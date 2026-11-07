@@ -68,7 +68,7 @@
         {{end}}
         {{if .CanDeleteThread}}
           <form method="POST" action="/threads/{{.Thread.ID}}/delete" class="ml-2"
-                onsubmit="return confirm('Delete this thread and all its replies? This cannot be undone.');">
+                data-confirm="Delete this thread and all its replies? This cannot be undone.">
             <button type="submit" class="button is-small is-danger is-light">Delete thread</button>
           </form>
         {{end}}
@@ -106,7 +106,7 @@
           hx-swap="beforeend"
           hx-encoding="multipart/form-data"
           hx-disabled-elt="find button[type='submit']"
-          hx-on::after-request="if(event.detail.successful) { this.reset(); }"
+          data-reset-on-success
           method="POST"
           action="/threads/{{.Thread.ID}}/posts"
           enctype="multipart/form-data">
@@ -154,92 +154,6 @@
     </div>
   {{end}}
 
-  <!-- Title edit + expiration change: each button toggles its inline form
-       (data-toggle-form points at the form's id). One delegated listener
-       covers both. Same inline-script style as the quote button below. -->
-  <script>
-    (function () {
-      document.addEventListener('click', function (e) {
-        var btn = e.target.closest ? e.target.closest('[data-toggle-form]') : null;
-        if (!btn) return;
-        var form = document.querySelector(btn.getAttribute('data-toggle-form'));
-        if (!form) return;
-        form.classList.toggle('is-hidden');
-        btn.classList.toggle('is-hidden');
-        if (!form.classList.contains('is-hidden')) {
-          var input = form.querySelector('input, select');
-          if (input) {
-            input.focus();
-            if (input.select) input.select();
-          }
-        }
-      });
-    })();
-  </script>
-
-  <!-- Quote insertion: one delegated listener on #posts-container so it also
-       works on post cards appended by HTMX. If a CSP with script-src is ever
-       added, move this to a static JS file (see tasks/plan-quotes-mentions.md).
-       The blockquote string built here is pinned by
-       TestQuoteBlockquoteFormat in internal/markdown. -->
-  <script>
-    (function () {
-      var container = document.getElementById('posts-container');
-      var textarea = document.getElementById('reply-body');
-      if (!container || !textarea) return;
-      var threadID = container.getAttribute('data-thread-id');
-
-      // Soft cap on quoted post text (decision Q3). The attribution and
-      // "view original" permalink lines are fixed overhead, always kept.
-      var MAX_QUOTE_CHARS = 500;
-
-      container.addEventListener('click', function (event) {
-        var btn = event.target.closest ? event.target.closest('.quote-btn') : null;
-        if (!btn) return;
-        var card = btn.closest('.post-card');
-        if (!card) return;
-
-        var authorEl = card.querySelector('.post-author');
-        var author = authorEl ? authorEl.textContent.trim() : 'unknown';
-        var postID = card.id.replace(/^post-/, '');
-
-        // Rendered body text. innerText (not textContent) turns block
-        // boundaries and <br> into newlines; attachments live outside
-        // .content, so they are excluded by construction.
-        var content = card.querySelector('.content');
-        var lines = (content ? content.innerText : '')
-          .split('\n')
-          .map(function (l) { return l.trim(); });
-        while (lines.length && lines[0] === '') lines.shift();
-        while (lines.length && lines[lines.length - 1] === '') lines.pop();
-        if (lines.length === 0) lines = ['']; // keep the quote one blockquote
-
-        // Apply the soft cap, then re-split for line prefixing. Cutting
-        // mid-line leaves a partial last line; cutting on a line boundary
-        // leaves the ellipsis on the previous line — both render fine.
-        var text = lines.join('\n');
-        if (text.length > MAX_QUOTE_CHARS) {
-          text = text.slice(0, MAX_QUOTE_CHARS).replace(/\s+$/, '') + '\u2026';
-        }
-        lines = text.split('\n');
-
-        // Every physical line is > -prefixed (blank lines as bare >) so the
-        // whole quote is one blockquote after rendering.
-        var quote = '> **' + author + ' wrote:**\n' +
-          lines.map(function (l) { return l === '' ? '>' : '> ' + l; }).join('\n') +
-          '\n>\n' +
-          '> \u2014 [view original](/threads/' + threadID + '?from=' + postID + '#post-' + postID + ')';
-
-        // Append after any existing reply text; never clobber it.
-        var existing = textarea.value;
-        var sep = existing === '' ? '' : (existing.slice(-2) === '\n\n' ? '' : existing.slice(-1) === '\n' ? '\n' : '\n\n');
-        textarea.value = existing + sep + quote;
-        textarea.focus();
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-        textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-    })();
-  </script>
 </div>
 {{end}}
 

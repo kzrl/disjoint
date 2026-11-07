@@ -24,6 +24,11 @@ func getEnv(key, defaultVal string) string {
 }
 
 func main() {
+	// Any file this process creates (database, WAL/SHM sidecars, uploads,
+	// backups) is private to the service user. The database carries password
+	// and session hashes, so a permissive umask is not acceptable.
+	syscall.Umask(0o077)
+
 	host := getEnv("HOST", "0.0.0.0")
 	port := getEnv("PORT", "8080")
 	dbPath := getEnv("DATABASE_PATH", "disjoint.db")
@@ -73,11 +78,13 @@ func main() {
 
 	addr := host + ":" + port
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      app.Routes(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              addr,
+		Handler:           app.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 16,
 	}
 
 	// Signal handling for graceful shutdown

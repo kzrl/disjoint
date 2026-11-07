@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- HTMX must never evaluate expressions from markup: the page runs under a
+       script-src 'self' CSP and every behaviour lives in /static/*.js. -->
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false}'>
   <title>{{if .PageTitle}}{{.PageTitle}} - {{end}}Disjoint</title>
 
   <!-- App icons. The tab favicon is inlined as an SVG data URI so it paints
@@ -132,23 +135,5 @@
       <span class="lightbox-name"></span>
     </div>
   </dialog>
-
-  <script>
-    // Bulma ships without JS. This is the vanilla toggle from the navbar docs
-    // (docs/components/navbar.html): flip is-active on the burger and the
-    // navbar-menu it targets, keeping aria-expanded in sync.
-    document.addEventListener('DOMContentLoaded', () => {
-      const $navbarBurgers = Array.prototype.slice.call(document.querySelectorAll('.navbar-burger'), 0);
-      $navbarBurgers.forEach((el) => {
-        el.addEventListener('click', () => {
-          const target = el.dataset.target;
-          const $target = document.getElementById(target);
-          el.classList.toggle('is-active');
-          $target.classList.toggle('is-active');
-          el.setAttribute('aria-expanded', el.classList.contains('is-active'));
-        });
-      });
-    });
-  </script>
 </body>
 </html>

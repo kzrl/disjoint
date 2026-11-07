@@ -56,7 +56,7 @@
               </form>
               {{else}}
               <form method="POST" action="/admin/users/{{.ID}}/disable"
-                    onsubmit="return confirm('Disable {{.Username}}? They will be signed out and unable to log in.');">
+                    data-confirm="Disable {{.Username}}? They will be signed out and unable to log in.">
                 <button type="submit" class="button is-danger is-small">Disable</button>
               </form>
               {{end}}

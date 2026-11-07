@@ -11,15 +11,22 @@ func TestSetSessionCookieFlags(t *testing.T) {
 		rec := httptest.NewRecorder()
 		SetSessionCookie(rec, "token", secure)
 
+		wantName := SessionCookieName
+		if secure {
+			wantName = SessionCookieNameSecure
+		}
 		var cookie *http.Cookie
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == SessionCookieName {
+			if c.Name == wantName {
 				cookie = c
 				break
 			}
 		}
 		if cookie == nil {
-			t.Fatalf("secure=%v: no session cookie set", secure)
+			t.Fatalf("secure=%v: no %q cookie set", secure, wantName)
+		}
+		if secure && cookie.Name != "__Host-disjoint_session" {
+			t.Errorf("secure cookie name = %q, want __Host- prefix", cookie.Name)
 		}
 		if cookie.Secure != secure {
 			t.Errorf("secure=%v: cookie.Secure = %v", secure, cookie.Secure)

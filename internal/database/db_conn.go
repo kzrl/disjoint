@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -16,7 +17,10 @@ import (
 func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		// The database holds password hashes, session/reset-token hashes, and
+		// every private message. A new directory is private to the service
+		// user; an existing one is left as the operator configured it.
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
@@ -45,5 +49,20 @@ func OpenDB(dbPath string) (*sql.DB, *Queries, error) {
 		return nil, nil, fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
+	secureDBFiles(dbPath)
+
 	return conn, New(conn), nil
+}
+
+// secureDBFiles clamps the database and its SQLite sidecars to owner-only.
+// New files follow the process umask, which is commonly 022, and this file is
+// readable enough to be worth pinning explicitly. Missing sidecars are fine:
+// they are created on first write and the process umask (see cmd/disjoint)
+// keeps them private.
+func secureDBFiles(dbPath string) {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal"} {
+		if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+			log.Printf("[database] warning: could not restrict %s permissions: %v", path, err)
+		}
+	}
 }

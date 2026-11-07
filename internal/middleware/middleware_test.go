@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -138,14 +139,43 @@ func TestSecurityHeadersSetOnAllResponses(t *testing.T) {
 
 	want := map[string]string{
 		"X-Frame-Options":         "DENY",
-		"Content-Security-Policy": "frame-ancestors 'none'; img-src 'self' data: blob:; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
+		"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "same-origin",
+		"Permissions-Policy":      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 	}
 	for header, value := range want {
 		if got := rec.Header().Get(header); got != value {
 			t.Errorf("%s = %q, want %q", header, got, value)
 		}
+	}
+}
+
+func TestHSTSOnlyOverTLS(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	plain := httptest.NewRecorder()
+	handler.ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := plain.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("HSTS on plain HTTP = %q, want empty", got)
+	}
+
+	forwarded := httptest.NewRequest(http.MethodGet, "/", nil)
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, forwarded)
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Errorf("HSTS behind TLS proxy = %q, want max-age=31536000", got)
+	}
+
+	direct := httptest.NewRequest(http.MethodGet, "/", nil)
+	direct.TLS = &tls.ConnectionState{}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, direct)
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Errorf("HSTS over direct TLS = %q, want max-age=31536000", got)
 	}
 }
 

@@ -470,6 +470,142 @@
     window.location.replace('/threads/' + threadID + '?from=' + match[1] + '#post-' + match[1]);
   }
 
+  // Bulma ships without JS. This is the vanilla burger toggle from the navbar
+  // docs: flip is-active on the burger and the navbar-menu it targets, keeping
+  // aria-expanded in sync. Moved out of layout.html so the page can run under
+  // a script-src 'self' CSP.
+  function bindNavbar() {
+    var burgers = document.querySelectorAll('.navbar-burger');
+    for (var i = 0; i < burgers.length; i++) {
+      (function (el) {
+        el.addEventListener('click', function () {
+          var target = el.dataset.target;
+          var menu = target ? document.getElementById(target) : null;
+          el.classList.toggle('is-active');
+          if (menu) menu.classList.toggle('is-active');
+          el.setAttribute('aria-expanded', el.classList.contains('is-active') ? 'true' : 'false');
+        });
+      })(burgers[i]);
+    }
+  }
+
+  // Confirmation prompts declared as data-confirm="..." (replaces inline
+  // onsubmit handlers, which a script-src 'self' CSP blocks). Delegated so
+  // forms added by HTMX are covered too.
+  function bindConfirmSubmit() {
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!form || !form.hasAttribute || !form.hasAttribute('data-confirm')) return;
+      if (!window.confirm(form.getAttribute('data-confirm'))) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    });
+  }
+
+  // Inline-edit toggles: a [data-toggle-form="#id"] button shows/hides the
+  // form it points at and focuses its first field. Delegated, so it works on
+  // HTMX-swapped content.
+  function bindToggleForms() {
+    document.addEventListener('click', function (event) {
+      var btn = event.target.closest ? event.target.closest('[data-toggle-form]') : null;
+      if (!btn) return;
+      var form = document.querySelector(btn.getAttribute('data-toggle-form'));
+      if (!form) return;
+      form.classList.toggle('is-hidden');
+      btn.classList.toggle('is-hidden');
+      if (!form.classList.contains('is-hidden')) {
+        var input = form.querySelector('input, select');
+        if (input) {
+          input.focus();
+          if (input.select) input.select();
+        }
+      }
+    });
+  }
+
+  // Quote insertion: one delegated listener on #posts-container so it also
+  // works on post cards appended by HTMX. The blockquote string built here is
+  // pinned by TestQuoteBlockquoteFormat in internal/markdown. Moved out of
+  // thread.html so the page can run under a script-src 'self' CSP.
+  function bindQuoteButton() {
+    var container = document.getElementById('posts-container');
+    var textarea = document.getElementById('reply-body');
+    if (!container || !textarea) return;
+    var threadID = container.getAttribute('data-thread-id');
+
+    // Soft cap on quoted post text (decision Q3). The attribution and
+    // "view original" permalink lines are fixed overhead, always kept.
+    var MAX_QUOTE_CHARS = 500;
+
+    container.addEventListener('click', function (event) {
+      var btn = event.target.closest ? event.target.closest('.quote-btn') : null;
+      if (!btn) return;
+      var card = btn.closest('.post-card');
+      if (!card) return;
+
+      var authorEl = card.querySelector('.post-author');
+      var author = authorEl ? authorEl.textContent.trim() : 'unknown';
+      var postID = card.id.replace(/^post-/, '');
+
+      // Rendered body text. innerText (not textContent) turns block
+      // boundaries and <br> into newlines; attachments live outside
+      // .content, so they are excluded by construction.
+      var content = card.querySelector('.content');
+      var lines = (content ? content.innerText : '')
+        .split('\n')
+        .map(function (l) { return l.trim(); });
+      while (lines.length && lines[0] === '') lines.shift();
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      if (lines.length === 0) lines = ['']; // keep the quote one blockquote
+
+      // Apply the soft cap, then re-split for line prefixing. Cutting
+      // mid-line leaves a partial last line; cutting on a line boundary
+      // leaves the ellipsis on the previous line — both render fine.
+      var text = lines.join('\n');
+      if (text.length > MAX_QUOTE_CHARS) {
+        text = text.slice(0, MAX_QUOTE_CHARS).replace(/\s+$/, '') + '\u2026';
+      }
+      lines = text.split('\n');
+
+      // Every physical line is > -prefixed (blank lines as bare >) so the
+      // whole quote is one blockquote after rendering.
+      var quote = '> **' + author + ' wrote:**\n' +
+        lines.map(function (l) { return l === '' ? '>' : '> ' + l; }).join('\n') +
+        '\n>\n' +
+        '> \u2014 [view original](/threads/' + threadID + '?from=' + postID + '#post-' + postID + ')';
+
+      // Append after any existing reply text; never clobber it.
+      var existing = textarea.value;
+      var sep = existing === '' ? '' : (existing.slice(-2) === '\n\n' ? '' : existing.slice(-1) === '\n' ? '\n' : '\n\n');
+      textarea.value = existing + sep + quote;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+
+  // HTMX lifecycle hooks that replace the former inline hx-on and [...]
+  // trigger filters (both of which require eval, which the CSP forbids):
+  //   - data-pause-hidden: skip polls while the tab is hidden.
+  //   - data-reset-on-success: clear a composer after a successful request.
+  function bindHtmxLifecycle() {
+    document.addEventListener('htmx:beforeRequest', function (event) {
+      if (!document.hidden) return;
+      var elt = event.detail && event.detail.elt;
+      if (elt && elt.hasAttribute && elt.hasAttribute('data-pause-hidden')) {
+        event.preventDefault();
+      }
+    });
+    document.addEventListener('htmx:afterRequest', function (event) {
+      var detail = event.detail;
+      if (!detail || !detail.successful) return;
+      var elt = detail.elt;
+      var form = elt && elt.tagName === 'FORM' ? elt : (elt && elt.closest ? elt.closest('form') : null);
+      if (form && form.hasAttribute('data-reset-on-success')) form.reset();
+    });
+  }
+
   function init() {
     var forms = document.querySelectorAll('form');
     for (var i = 0; i < forms.length; i++) bindForm(forms[i]);
@@ -480,6 +616,11 @@
     bindShortcuts();
     bindHtmxMotion();
     bindThemeToggle();
+    bindNavbar();
+    bindConfirmSubmit();
+    bindToggleForms();
+    bindQuoteButton();
+    bindHtmxLifecycle();
   }
 
   if (document.readyState === 'loading') {
