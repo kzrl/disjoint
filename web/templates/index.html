@@ -1,16 +1,8 @@
 {{define "content"}}
 <div>
-  {{if .Online}}
-    <div class="on-air">
-      <span class="on-air-dot" aria-hidden="true"></span>
-      <span class="is-uppercase is-size-7 muted">Online:</span>
-      {{range .Online}}
-        <span class="on-air-user">{{userLink .Username}} <span class="is-size-7 muted"><time datetime="{{isoTime .LastSeenAt}}" title="{{formatTime .LastSeenAt}}">{{formatRelative .LastSeenAt}}</time></span></span>
-      {{end}}
-    </div>
-  {{else}}
-    <div class="on-air on-air-empty">No one is online</div>
-  {{end}}
+  {{template "on_air" .}}
+
+  {{template "view_switch" .}}
 
   <section class="card forum-section my-5">
     <div class="card-header">

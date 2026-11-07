@@ -266,6 +266,7 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		"HasNext": hasNext,
 		"Query":   query,
 		"Base":    "/",
+		"View":    "threads",
 	}, "Front Page")
 }
 

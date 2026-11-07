@@ -223,7 +223,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// (and post_partial.html); parsed into every set so the define resolves.
 		// reaction_bar.html is parsed into every set: post_card includes the
 		// reaction bar, and post_card is included in every set.
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/thread_rows.html", "templates/"+page)
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/thread_rows.html", "templates/view_switch.html", "templates/on_air.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}

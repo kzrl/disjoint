@@ -104,6 +104,60 @@ func TestGalleryRequiresLoginAndEmptyState(t *testing.T) {
 	if !strings.Contains(body, `href="/gallery" class="navbar-item">Gallery`) {
 		t.Error("navbar missing Gallery link")
 	}
+	if !strings.Contains(body, `class="on-air-user"`) || !strings.Contains(body, user.Username) {
+		t.Error("gallery missing on-air presence strip")
+	}
+}
+
+func TestFrontPageViewToggle(t *testing.T) {
+	app, db, queries, _ := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	user := galleryUser(t, queries, "view_switch_user")
+	cookie := authCookieFor(t, queries, user.ID)
+
+	get := func(path string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	threads := get("/")
+	if !strings.Contains(threads, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
+		t.Error("front page missing Bulma tabs switch")
+	}
+	if !strings.Contains(threads, `aria-label="Front page view"`) {
+		t.Error("front page switch missing accessible label")
+	}
+	if !strings.Contains(threads, `<a href="/" aria-current="page">Threads</a>`) {
+		t.Error("front page should mark Threads as the active view")
+	}
+	if !strings.Contains(threads, `<a href="/gallery">Gallery</a>`) {
+		t.Error("front page switch missing Gallery link")
+	}
+	if strings.Contains(threads, `<a href="/gallery" aria-current="page">`) {
+		t.Error("front page must not mark Gallery as active")
+	}
+
+	gallery := get("/gallery")
+	if !strings.Contains(gallery, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
+		t.Error("gallery missing Bulma tabs switch")
+	}
+	if !strings.Contains(gallery, `<a href="/gallery" aria-current="page">Gallery</a>`) {
+		t.Error("gallery should mark Gallery as the active view")
+	}
+	if !strings.Contains(gallery, `<a href="/">Threads</a>`) {
+		t.Error("gallery switch missing Threads link")
+	}
+	if strings.Contains(gallery, `<a href="/" aria-current="page">`) {
+		t.Error("gallery must not mark Threads as active")
+	}
 }
 
 func TestGalleryListsOpeningAndReplyImages(t *testing.T) {

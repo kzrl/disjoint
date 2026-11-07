@@ -55,9 +55,19 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// The gallery shares the front page's presence strip, so the online list
+	// is loaded here with the same semantics as IndexPage.
+	online, err := app.queries.ListOnlineUsers(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load online users", http.StatusInternalServerError)
+		return
+	}
+
 	app.render(w, r, "gallery.html", map[string]any{
 		"Items":   items,
+		"Online":  online,
 		"Page":    page,
 		"HasNext": len(rows) == galleryPageSize,
+		"View":    "gallery",
 	}, "Gallery")
 }
