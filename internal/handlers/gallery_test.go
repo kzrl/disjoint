@@ -333,3 +333,84 @@ func TestGalleryPagination(t *testing.T) {
 		t.Error("page 99 should render the empty state")
 	}
 }
+
+// Gallery tiles react on the post that carries the image, with the same bar and
+// toggle endpoint as the thread page.
+func TestGalleryReactions(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	poster := galleryUser(t, queries, "gallery_poster")
+	reactor := galleryUser(t, queries, "gallery_reactor")
+	reactorCookie := authCookieFor(t, queries, reactor.ID)
+
+	_, post := galleryThread(t, queries, poster.ID, "reaction gallery thread", sql.NullTime{})
+	galleryAttachment(t, queries, uploadDir, post.ID, "reactable.png", "image/png")
+
+	emoji, err := queries.GetEmojiByName(ctx, "joy")
+	if err != nil {
+		t.Fatalf("built-in emoji missing: %v", err)
+	}
+
+	// The poster reacts before anyone opens the gallery.
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{
+		PostID: post.ID, UserID: poster.ID, EmojiID: emoji.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(cookie *http.Cookie) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /gallery = %d", rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	body := get(reactorCookie)
+	if !strings.Contains(body, `class="gallery-tile"`) {
+		t.Fatalf("gallery did not render the tile")
+	}
+	if !strings.Contains(body, `hx-post="/posts/`+fmt.Sprint(post.ID)+`/reactions"`) {
+		t.Errorf("gallery tile has no reaction toggle for post %d", post.ID)
+	}
+	// The poster's reaction is visible, with its count, and is not "you".
+	if !strings.Contains(body, `class="reaction-chip"`) || !strings.Contains(body, `class="reaction-count">1<`) {
+		t.Errorf("existing reaction not rendered in the gallery")
+	}
+	if strings.Contains(body, `reaction-chip is-active`) {
+		t.Errorf("another user's reaction was marked as the viewer's")
+	}
+
+	// Toggling from the gallery goes through the normal endpoint and returns the
+	// updated bar (HTMX swaps it in place).
+	req := httptest.NewRequest(http.MethodPost, "/posts/"+fmt.Sprint(post.ID)+"/reactions",
+		strings.NewReader("emoji_id="+fmt.Sprint(emoji.ID)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(reactorCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("gallery reaction toggle = %d: %s", rr.Code, rr.Body.String())
+	}
+	bar := rr.Body.String()
+	if !strings.Contains(bar, `class="reaction-count">2<`) {
+		t.Errorf("toggle response does not show the updated count: %s", bar)
+	}
+	if !strings.Contains(bar, `reaction-chip is-active`) {
+		t.Errorf("toggle response does not mark the viewer's reaction active")
+	}
+
+	// The reaction is the post's reaction everywhere: the poster sees the same
+	// count on the gallery after a reload.
+	if body = get(reactorCookie); !strings.Contains(body, `class="reaction-count">2<`) {
+		t.Errorf("gallery did not reflect the new reaction")
+	}
+}

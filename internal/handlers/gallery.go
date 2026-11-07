@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
 	"disjoint/internal/database"
+	"disjoint/internal/middleware"
 )
 
 const galleryPageSize = 48
@@ -19,6 +21,11 @@ type GalleryImage struct {
 	PostID      int64
 	ThreadTitle string
 	Time        time.Time
+	// Reactions and Emojis feed the same reaction_bar partial used by the
+	// front page and thread cards; gallery reactions are reactions on the post
+	// that carries the image, so they show up everywhere that post does.
+	Reactions []ReactionGroup
+	Emojis    []database.ListAllEmojisRow
 }
 
 // GalleryPage renders every image attachment on a live thread, newest upload
@@ -55,6 +62,13 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Reactions for each tile's post: one query for the whole page, grouped
+	// with the same implementation the front page uses.
+	if err := app.loadGalleryReactions(r.Context(), items); err != nil {
+		http.Error(w, "failed to load gallery reactions", http.StatusInternalServerError)
+		return
+	}
+
 	// The gallery shares the front page's presence strip, so the online list
 	// is loaded here with the same semantics as IndexPage.
 	online, err := app.queries.ListOnlineUsers(r.Context())
@@ -70,4 +84,50 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 		"HasNext": len(rows) == galleryPageSize,
 		"View":    "gallery",
 	}, "Gallery")
+}
+
+// loadGalleryReactions fills each item's reaction groups and the shared emoji
+// list for its picker.
+func (app *App) loadGalleryReactions(ctx context.Context, items []GalleryImage) error {
+	if len(items) == 0 {
+		return nil
+	}
+	postIDs := make([]int64, 0, len(items))
+	for _, item := range items {
+		postIDs = append(postIDs, item.PostID)
+	}
+
+	rows, err := app.queries.ListReactionsByPostIDs(ctx, postIDs)
+	if err != nil {
+		return err
+	}
+	rRows := make([]reactionRow, 0, len(rows))
+	for _, r := range rows {
+		rRows = append(rRows, reactionRow{
+			postID:      r.PostID,
+			userID:      r.UserID,
+			emojiID:     r.EmojiID,
+			name:        r.EmojiName,
+			source:      r.EmojiSource,
+			glyph:       r.EmojiGlyph,
+			storagePath: r.EmojiStoragePath,
+			username:    r.Username,
+		})
+	}
+
+	currentUserID := int64(0)
+	if u := middleware.UserFromContext(ctx); u != nil {
+		currentUserID = u.ID
+	}
+	groups := groupReactions(rRows, currentUserID)
+
+	emojis, err := app.queries.ListAllEmojis(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		items[i].Reactions = groups[items[i].PostID]
+		items[i].Emojis = emojis
+	}
+	return nil
 }
