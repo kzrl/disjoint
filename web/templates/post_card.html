@@ -46,6 +46,8 @@
                        sizes="(max-width: 768px) 100vw, 25vw"
                        loading="lazy" decoding="async" alt="{{.Filename}}">
                 </a>
+                {{$imageReactions := index $.AttachmentReactions .ID}}
+                {{template "reaction_bar" (reactionBarAttachment .ID $imageReactions $.Emojis)}}
               </div>
             {{else if isVideo .MimeType}}
               <div class="attachment-video-card">

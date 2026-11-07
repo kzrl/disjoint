@@ -1493,6 +1493,35 @@ form.htmx-request button[type="submit"]::after {
   max-height: 12rem;
 }
 
+/* Inline thread images carry their own reaction bar (same attachment rows as
+   the gallery). The picker opens downward so it does not cover the image. */
+/* The card must not clip the emoji picker, so the overflow that used to live
+   on the card moves to the image wrapper (which is what needs rounding). */
+.attachment-image-card {
+  overflow: visible;
+}
+
+.attachment-image-card .lightbox-link {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--bulma-radius) var(--bulma-radius) 0 0;
+}
+
+.attachment-image-card .reaction-bar {
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.attachments-grid .emoji-picker {
+  top: calc(100% + 0.375rem);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  grid-template-columns: repeat(6, 2.25rem);
+  max-height: 12rem;
+}
+
 /* --- Mention autocomplete -------------------------------------------------- */
 
 .mention-suggestions-host {

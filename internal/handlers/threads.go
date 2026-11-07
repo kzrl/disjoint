@@ -41,7 +41,10 @@ type PostViewItem struct {
 	Post        database.ListPostsByThreadPageRow
 	Attachments []database.Attachment
 	Reactions   []ReactionGroup
-	Emojis      []database.ListAllEmojisRow // full list, rendered into the picker
+	// AttachmentReactions holds per-image reaction groups keyed by attachment
+	// id; the post card renders a bar under each image attachment.
+	AttachmentReactions map[int64][]ReactionGroup
+	Emojis              []database.ListAllEmojisRow // full list, rendered into the picker
 	// CanEdit is true when the viewing user is the post's author; the post
 	// card renders the Edit button from it. Always false for the HTMX
 	// single-post partial (a freshly created post is rendered for its
@@ -57,7 +60,10 @@ type SinglePostViewItem struct {
 	Post        database.GetPostByIDRow
 	Attachments []database.Attachment
 	Reactions   []ReactionGroup
-	Emojis      []database.ListAllEmojisRow
+	// A freshly created post's attachments cannot have reactions yet, but the
+	// field exists so the post card template has one shape.
+	AttachmentReactions map[int64][]ReactionGroup
+	Emojis              []database.ListAllEmojisRow
 	// CanEdit: the only viewer of this partial is the post's own author
 	// (they just created it), so it is always true when rendered.
 	CanEdit bool
@@ -528,6 +534,37 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 		attMap[att.PostID] = append(attMap[att.PostID], att)
 	}
 
+	// Per-image reactions for attachments shown on this page (the same
+	// attachment_reactions rows the gallery uses, so both views agree).
+	attachmentReactionGroups := make(map[int64][]ReactionGroup)
+	var attachmentIDs []int64
+	for _, att := range pageAttachments {
+		if strings.HasPrefix(att.MimeType, "image/") {
+			attachmentIDs = append(attachmentIDs, att.ID)
+		}
+	}
+	if len(attachmentIDs) > 0 {
+		attReactionRows, err := app.queries.ListReactionsByAttachmentIDs(ctx, attachmentIDs)
+		if err != nil {
+			http.Error(w, "failed to load image reactions", http.StatusInternalServerError)
+			return
+		}
+		attRows := make([]reactionRow, 0, len(attReactionRows))
+		for _, r := range attReactionRows {
+			attRows = append(attRows, reactionRow{
+				targetID:    r.AttachmentID,
+				userID:      r.UserID,
+				emojiID:     r.EmojiID,
+				name:        r.EmojiName,
+				source:      r.EmojiSource,
+				glyph:       r.EmojiGlyph,
+				storagePath: r.EmojiStoragePath,
+				username:    r.Username,
+			})
+		}
+		attachmentReactionGroups = groupReactions(attRows, viewerID)
+	}
+
 	// Reactions for this page only. A guest has no user ID, so no chip ever
 	// shows the active state for them.
 	var rRows []reactionRow
@@ -571,12 +608,13 @@ func (app *App) ThreadPage(w http.ResponseWriter, r *http.Request) {
 	var postViews []PostViewItem
 	for _, p := range posts {
 		postViews = append(postViews, PostViewItem{
-			Post:        p,
-			Attachments: attMap[p.ID],
-			Reactions:   reactionGroups[p.ID],
-			Emojis:      emojis,
-			CanEdit:     p.UserID == viewerID,
-			CanDelete:   (p.UserID == viewerID || isAdmin) && p.ID != firstPostID,
+			Post:                p,
+			Attachments:         attMap[p.ID],
+			Reactions:           reactionGroups[p.ID],
+			AttachmentReactions: attachmentReactionGroups,
+			Emojis:              emojis,
+			CanEdit:             p.UserID == viewerID,
+			CanDelete:           (p.UserID == viewerID || isAdmin) && p.ID != firstPostID,
 		})
 	}
 

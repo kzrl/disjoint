@@ -467,3 +467,109 @@ func TestGalleryReactions(t *testing.T) {
 		t.Fatalf("non-image reaction = %d, want 404", rr.Code)
 	}
 }
+
+// Inline thread images use the same per-image attachment reactions as the
+// gallery, so a reaction cast in either place shows in both.
+func TestThreadPageImageReactions(t *testing.T) {
+	app, db, queries, uploadDir := setupTestApp(t)
+	defer db.Close()
+	router := app.Routes()
+	ctx := context.Background()
+
+	poster := galleryUser(t, queries, "thread_poster")
+	reactor := galleryUser(t, queries, "thread_reactor")
+	reactorCookie := authCookieFor(t, queries, reactor.ID)
+
+	thread, post := galleryThread(t, queries, poster.ID, "inline image thread", sql.NullTime{})
+	firstImg := galleryAttachment(t, queries, uploadDir, post.ID, "inline-first.png", "image/png")
+	secondImg := galleryAttachment(t, queries, uploadDir, post.ID, "inline-second.png", "image/png")
+
+	emoji, err := queries.GetEmojiByName(ctx, "joy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.AddAttachmentReaction(ctx, database.AddAttachmentReactionParams{
+		AttachmentID: firstImg.ID, UserID: poster.ID, EmojiID: emoji.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A post reaction must still render on the post's own bar, separately.
+	if _, err := queries.AddReaction(ctx, database.AddReactionParams{
+		PostID: post.ID, UserID: poster.ID, EmojiID: emoji.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/"+fmt.Sprint(thread.ID), nil)
+	req.AddCookie(reactorCookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET thread = %d", rr.Code)
+	}
+	body := rr.Body.String()
+
+	for _, att := range []database.Attachment{firstImg, secondImg} {
+		if !strings.Contains(body, `hx-post="/attachments/`+fmt.Sprint(att.ID)+`/reactions"`) {
+			t.Errorf("image %d has no per-image reaction endpoint on the thread page", att.ID)
+		}
+	}
+	if !strings.Contains(body, `hx-post="/posts/`+fmt.Sprint(post.ID)+`/reactions"`) {
+		t.Errorf("post reaction bar missing")
+	}
+
+	// The poster's image reaction is on the first image only; the post bar's
+	// chip is independent.
+	cards := strings.Split(body, `class="attachment-image-card"`)
+	if len(cards) != 3 {
+		t.Fatalf("expected 2 image cards, got %d", len(cards)-1)
+	}
+	cardFor := func(storage string) string {
+		for _, card := range cards[1:] {
+			if strings.Contains(card, storage) {
+				return card
+			}
+		}
+		t.Fatalf("no card for %s", storage)
+		return ""
+	}
+	firstCard := cardFor(firstImg.StoragePath)
+	secondCard := cardFor(secondImg.StoragePath)
+	if !strings.Contains(firstCard, `hx-post="/attachments/`+fmt.Sprint(firstImg.ID)+`/reactions"`) {
+		t.Errorf("first card targets the wrong endpoint")
+	}
+	if !strings.Contains(firstCard, `class="reaction-count">1<`) {
+		t.Errorf("first image missing its reaction count")
+	}
+	if strings.Contains(secondCard, `class="reaction-count">`) {
+		t.Errorf("second image inherited the first image's reaction")
+	}
+
+	// Toggling from the thread page updates the same attachment rows the wall
+	// reads.
+	req = httptest.NewRequest(http.MethodPost, "/attachments/"+fmt.Sprint(firstImg.ID)+"/reactions",
+		strings.NewReader("emoji_id="+fmt.Sprint(emoji.ID)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.AddCookie(reactorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("toggle = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `class="reaction-count">2<`) {
+		t.Errorf("toggle response not updated")
+	}
+
+	// The gallery shows the same reaction.
+	req = httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req.AddCookie(reactorCookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	tiles := strings.Split(rr.Body.String(), `class="gallery-tile"`)
+	for _, tile := range tiles[1:] {
+		if strings.Contains(tile, firstImg.StoragePath) && !strings.Contains(tile, `class="reaction-count">2<`) {
+			t.Errorf("gallery does not show the thread-page reaction")
+		}
+	}
+}

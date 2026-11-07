@@ -221,9 +221,11 @@ func (app *App) CreatePostSubmit(w http.ResponseWriter, r *http.Request) {
 		viewItem := SinglePostViewItem{
 			Post:        postWithAuthor,
 			Attachments: attachments,
-			Emojis:      newPostEmojis,
-			CanEdit:     true, // the viewer just created this post
-			CanDelete:   true,
+			// A brand-new post's attachments cannot have reactions yet.
+			AttachmentReactions: map[int64][]ReactionGroup{},
+			Emojis:              newPostEmojis,
+			CanEdit:             true, // the viewer just created this post
+			CanDelete:           true,
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
