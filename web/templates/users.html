@@ -73,6 +73,14 @@
               </form>
             </div>
             {{end}}
+            {{if ne $.CurrentUser.ID .ID}}
+            <form method="POST" action="/admin/users/{{.ID}}/reset-link" class="mt-2">
+              <button type="submit" class="button is-secondary is-small"
+                      title="Generate a one-hour link the user can use to set a new password">
+                Reset link
+              </button>
+            </form>
+            {{end}}
           </td>
         </tr>
         {{end}}

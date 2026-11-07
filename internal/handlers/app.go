@@ -46,6 +46,9 @@ type App struct {
 	passwordLimiter *middleware.RateLimiter
 	// thumbLimiter bounds CPU/disk work from thumbnail requests.
 	thumbLimiter *middleware.RateLimiter
+	// baseURL is PUBLIC_BASE_URL when set, used to build absolute links the
+	// admin has to copy (password reset). Empty falls back to the request host.
+	baseURL string
 	// passkeys performs WebAuthn ceremonies. nil when the deployment has no
 	// WebAuthn configuration; the endpoints then answer 501 and the account
 	// page omits the section.
@@ -212,6 +215,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		"inbox.html",
 		"account.html",
 		"gallery.html",
+		"reset.html",
 	}
 
 	for _, page := range pages {
@@ -351,6 +355,9 @@ func setFlash(w http.ResponseWriter, r *http.Request, name, value string) {
 // configuration from the environment; tests swap in a stub).
 func (app *App) SetPasskeyService(s PasskeyService) { app.passkeys = s }
 
+// SetBaseURL records PUBLIC_BASE_URL for absolute link generation.
+func (app *App) SetBaseURL(base string) { app.baseURL = strings.TrimRight(base, "/") }
+
 // Routes constructs the HTTP handler mux with all routes and middleware applied.
 func (app *App) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -384,6 +391,8 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("GET /login", app.LoginPage)
 	mux.Handle("POST /login", authLimited(http.HandlerFunc(app.LoginSubmit)))
 	mux.HandleFunc("GET /register", app.RegisterPage)
+	mux.HandleFunc("GET /reset", app.ResetPage)
+	mux.Handle("POST /reset", authLimited(http.HandlerFunc(app.ResetSubmit)))
 	mux.Handle("POST /register", authLimited(http.HandlerFunc(app.RegisterSubmit)))
 	mux.HandleFunc("POST /logout", app.LogoutSubmit)
 
@@ -399,6 +408,7 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/disable", app.DisableUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/enable", app.EnableUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/delete", app.DeleteUserSubmit)
+	mux.HandleFunc("POST /admin/users/{id}/reset-link", app.CreateResetLinkSubmit)
 
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)

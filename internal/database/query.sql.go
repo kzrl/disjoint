@@ -98,6 +98,22 @@ func (q *Queries) ConsumeInvite(ctx context.Context, arg ConsumeInviteParams) (i
 	return result.RowsAffected()
 }
 
+const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
+UPDATE password_reset_tokens
+SET used_at = CURRENT_TIMESTAMP
+WHERE token_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+RETURNING user_id
+`
+
+// Single use: marks the token used and returns its user atomically, so two
+// concurrent submissions cannot both set a password.
+func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, consumePasswordResetToken, tokenHash)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const countAttachmentsByPostID = `-- name: CountAttachmentsByPostID :one
 SELECT COUNT(*) FROM attachments WHERE post_id = ?
 `
@@ -310,6 +326,28 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 		&i.ExpiresAt,
 	)
 	return i, err
+}
+
+const createPasswordResetToken = `-- name: CreatePasswordResetToken :exec
+INSERT INTO password_reset_tokens (token_hash, user_id, created_by, expires_at)
+VALUES (?, ?, ?, ?)
+`
+
+type CreatePasswordResetTokenParams struct {
+	TokenHash string
+	UserID    int64
+	CreatedBy sql.NullInt64
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) error {
+	_, err := q.db.ExecContext(ctx, createPasswordResetToken,
+		arg.TokenHash,
+		arg.UserID,
+		arg.CreatedBy,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const createPendingUser = `-- name: CreatePendingUser :one
@@ -552,6 +590,16 @@ func (q *Queries) DeleteEmoji(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteExpiredPasswordResetTokens = `-- name: DeleteExpiredPasswordResetTokens :exec
+DELETE FROM password_reset_tokens
+WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL
+`
+
+func (q *Queries) DeleteExpiredPasswordResetTokens(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredPasswordResetTokens)
+	return err
+}
+
 const deleteExpiredPendingUsers = `-- name: DeleteExpiredPendingUsers :execrows
 DELETE FROM users
 WHERE pending_until IS NOT NULL AND pending_until < CURRENT_TIMESTAMP
@@ -581,6 +629,15 @@ DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP
 
 func (q *Queries) DeleteExpiredWebAuthnCeremonies(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredWebAuthnCeremonies)
+	return err
+}
+
+const deletePasswordResetTokensForUser = `-- name: DeletePasswordResetTokensForUser :exec
+DELETE FROM password_reset_tokens WHERE user_id = ?
+`
+
+func (q *Queries) DeletePasswordResetTokensForUser(ctx context.Context, userID int64) error {
+	_, err := q.db.ExecContext(ctx, deletePasswordResetTokensForUser, userID)
 	return err
 }
 
@@ -820,6 +877,19 @@ func (q *Queries) GetInviteByCode(ctx context.Context, code string) (Invite, err
 		&i.ExpiresAt,
 	)
 	return i, err
+}
+
+const getPasswordResetToken = `-- name: GetPasswordResetToken :one
+SELECT user_id FROM password_reset_tokens
+WHERE token_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+`
+
+// Validation for the GET form: exists, unused, unexpired. Never consumes.
+func (q *Queries) GetPasswordResetToken(ctx context.Context, tokenHash string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getPasswordResetToken, tokenHash)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
 }
 
 const getPostByID = `-- name: GetPostByID :one

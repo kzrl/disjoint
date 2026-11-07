@@ -825,3 +825,27 @@ RETURNING user_id, kind, session_data, context;
 
 -- name: DeleteExpiredWebAuthnCeremonies :exec
 DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP;
+
+-- name: CreatePasswordResetToken :exec
+INSERT INTO password_reset_tokens (token_hash, user_id, created_by, expires_at)
+VALUES (?, ?, ?, ?);
+
+-- name: DeletePasswordResetTokensForUser :exec
+DELETE FROM password_reset_tokens WHERE user_id = ?;
+
+-- name: GetPasswordResetToken :one
+-- Validation for the GET form: exists, unused, unexpired. Never consumes.
+SELECT user_id FROM password_reset_tokens
+WHERE token_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP;
+
+-- name: ConsumePasswordResetToken :one
+-- Single use: marks the token used and returns its user atomically, so two
+-- concurrent submissions cannot both set a password.
+UPDATE password_reset_tokens
+SET used_at = CURRENT_TIMESTAMP
+WHERE token_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+RETURNING user_id;
+
+-- name: DeleteExpiredPasswordResetTokens :exec
+DELETE FROM password_reset_tokens
+WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL;

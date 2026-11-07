@@ -60,6 +60,11 @@ func (w *Worker) CleanupOnce(ctx context.Context) error {
 		return err
 	}
 
+	// Expired or already-used password reset links are dead weight.
+	if err := w.queries.DeleteExpiredPasswordResetTokens(ctx); err != nil {
+		return err
+	}
+
 	// 1. Collect the attachment files that belong to expired threads.
 	attachments, err := w.queries.GetAttachmentsForExpiredThreads(ctx)
 	if err != nil {

@@ -1,0 +1,45 @@
+{{define "content"}}
+<div class="auth-wrapper">
+  <div class="has-text-centered mb-5">
+    <h1 class="logo">disjoint<span>_</span></h1>
+    {{if .Invalid}}
+    <p class="muted">Password reset</p>
+    {{else}}
+    <p class="muted">Set a new password for <strong>{{.Username}}</strong></p>
+    {{end}}
+  </div>
+
+  {{if .Invalid}}
+  <div class="box has-text-centered">
+    <p class="muted mb-4">This reset link is invalid, has expired, or has already been used.</p>
+    <p class="muted mb-4">Ask an administrator for a new one.</p>
+    <a href="/login" class="button is-secondary">Back to sign in</a>
+  </div>
+  {{else}}
+  <div class="box">
+    <form method="POST" action="/reset">
+      <input type="hidden" name="token" value="{{.Token}}">
+      <div class="field">
+        <label for="new_password" class="label">New password</label>
+        <div class="control">
+          <input type="password" id="new_password" name="new_password" class="input"
+                 minlength="8" autocomplete="new-password" required autofocus>
+        </div>
+        <p class="help">At least 8 characters.</p>
+      </div>
+      <div class="field">
+        <label for="confirm_password" class="label">Confirm new password</label>
+        <div class="control">
+          <input type="password" id="confirm_password" name="confirm_password" class="input"
+                 minlength="8" autocomplete="new-password" required>
+        </div>
+      </div>
+      <button type="submit" class="button is-primary is-fullwidth mt-2">Set password</button>
+    </form>
+    <p class="is-size-7 muted mt-3">
+      Setting a new password signs out every device. The link works once and expires after one hour.
+    </p>
+  </div>
+  {{end}}
+</div>
+{{end}}

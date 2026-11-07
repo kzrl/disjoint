@@ -50,6 +50,15 @@ type Notification struct {
 	ReadAt      sql.NullTime
 }
 
+type PasswordResetToken struct {
+	TokenHash string
+	UserID    int64
+	CreatedBy sql.NullInt64
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UsedAt    sql.NullTime
+}
+
 type Post struct {
 	ID        int64
 	ThreadID  int64

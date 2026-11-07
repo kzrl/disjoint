@@ -68,6 +68,7 @@ func main() {
 		log.Fatalf("[disjoint] Passkey initialization failed: %v", err)
 	}
 	app.SetPasskeyService(passkeyService)
+	app.SetBaseURL(getEnv("PUBLIC_BASE_URL", ""))
 	log.Printf("[disjoint] Passkeys enabled (RP ID %s, origins %v)", passkeyConfig.RPID, passkeyConfig.RPOrigins)
 
 	addr := host + ":" + port
