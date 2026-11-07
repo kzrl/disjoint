@@ -2365,10 +2365,14 @@ func TestCustomEmojiUploads(t *testing.T) {
 		t.Fatalf("expected 303 to /login for guest, got %d %q", rr.Code, rr.Header().Get("Location"))
 	}
 	page := getPage(cookie)
-	for _, name := range []string{":joy:", ":party:", "Community Emoji", "Add Emoji"} {
+	// Copy-independent: the page lists built-ins and offers the upload form.
+	for _, name := range []string{":joy:", ":party:", "Add Emoji"} {
 		if !strings.Contains(page, name) {
 			t.Errorf("emoji page missing %q", name)
 		}
+	}
+	if !strings.Contains(page, `action="/emojis"`) || !strings.Contains(page, "multipart/form-data") {
+		t.Errorf("emoji page missing the upload form")
 	}
 	if got := strings.Count(page, "built-in"); got != 12 {
 		t.Errorf("expected 12 built-in tiles, got %d", got)
