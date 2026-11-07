@@ -1,0 +1,12 @@
+{{define "view_switch"}}
+<nav class="tabs is-toggle is-toggle-rounded is-fullwidth" aria-label="Front page view">
+  <ul>
+    <li{{if eq .View "threads"}} class="is-active"{{end}}>
+      <a href="/"{{if eq .View "threads"}} aria-current="page"{{end}}>Threads</a>
+    </li>
+    <li{{if eq .View "gallery"}} class="is-active"{{end}}>
+      <a href="/gallery"{{if eq .View "gallery"}} aria-current="page"{{end}}>Gallery</a>
+    </li>
+  </ul>
+</nav>
+{{end}}
