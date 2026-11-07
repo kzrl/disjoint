@@ -52,8 +52,14 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 // CleanupOnce performs a single pass of identifying and deleting expired
-// threads and their files.
+// threads and their files, plus abandoned passkey-signup accounts.
 func (w *Worker) CleanupOnce(ctx context.Context) error {
+	// Abandoned passkey signups hold a username and nothing else; the
+	// credential ceremony is already expired by the time this fires.
+	if _, err := w.queries.DeleteExpiredPendingUsers(ctx); err != nil {
+		return err
+	}
+
 	// 1. Collect the attachment files that belong to expired threads.
 	attachments, err := w.queries.GetAttachmentsForExpiredThreads(ctx)
 	if err != nil {

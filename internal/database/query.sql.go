@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+const activatePendingUser = `-- name: ActivatePendingUser :execrows
+UPDATE users
+SET pending_until = NULL, password_set = 0
+WHERE id = ? AND pending_until IS NOT NULL
+`
+
+// Clears the pending marker only if it is still set (0 rows = already swept or
+// activated), so a slow ceremony cannot revive a deleted account.
+func (q *Queries) ActivatePendingUser(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, activatePendingUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const addReaction = `-- name: AddReaction :execrows
 INSERT OR IGNORE INTO reactions (post_id, user_id, emoji_id) VALUES (?, ?, ?)
 `
@@ -156,9 +172,11 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, userID int64) (i
 }
 
 const countUsers = `-- name: CountUsers :one
-SELECT COUNT(*) FROM users
+SELECT COUNT(*) FROM users WHERE pending_until IS NULL
 `
 
+// Pending passkey-signup rows are not accounts yet; a half-finished signup
+// must not satisfy the first-run check.
 func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countUsers)
 	var count int64
@@ -294,6 +312,40 @@ func (q *Queries) CreateInvite(ctx context.Context, arg CreateInviteParams) (Inv
 	return i, err
 }
 
+const createPendingUser = `-- name: CreatePendingUser :one
+INSERT INTO users (username, password_hash, password_set, pending_until)
+VALUES (?, ?, 0, ?)
+RETURNING id, username, password_hash, is_admin, is_disabled, password_set, pending_until, created_at, bio, avatar_path, avatar_nonce
+`
+
+type CreatePendingUserParams struct {
+	Username     string
+	PasswordHash string
+	PendingUntil sql.NullTime
+}
+
+// A passkey-signup account exists before the authenticator answers, because
+// WebAuthn options need a user handle. pending_until makes it invisible and
+// unauthenticatable; the worker deletes it if the ceremony is abandoned.
+func (q *Queries) CreatePendingUser(ctx context.Context, arg CreatePendingUserParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, createPendingUser, arg.Username, arg.PasswordHash, arg.PendingUntil)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.IsDisabled,
+		&i.PasswordSet,
+		&i.PendingUntil,
+		&i.CreatedAt,
+		&i.Bio,
+		&i.AvatarPath,
+		&i.AvatarNonce,
+	)
+	return i, err
+}
+
 const createPost = `-- name: CreatePost :one
 INSERT INTO posts (
     thread_id,
@@ -394,7 +446,7 @@ INSERT INTO users (
     password_hash
 ) VALUES (
     ?, ?
-) RETURNING id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce
+) RETURNING id, username, password_hash, is_admin, is_disabled, password_set, pending_until, created_at, bio, avatar_path, avatar_nonce
 `
 
 type CreateUserParams struct {
@@ -411,6 +463,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordHash,
 		&i.IsAdmin,
 		&i.IsDisabled,
+		&i.PasswordSet,
+		&i.PendingUntil,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -420,8 +474,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createWebAuthnCeremony = `-- name: CreateWebAuthnCeremony :exec
-INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, expires_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, context, expires_at)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type CreateWebAuthnCeremonyParams struct {
@@ -429,6 +483,7 @@ type CreateWebAuthnCeremonyParams struct {
 	UserID      sql.NullInt64
 	Kind        string
 	SessionData []byte
+	Context     string
 	ExpiresAt   time.Time
 }
 
@@ -438,6 +493,7 @@ func (q *Queries) CreateWebAuthnCeremony(ctx context.Context, arg CreateWebAuthn
 		arg.UserID,
 		arg.Kind,
 		arg.SessionData,
+		arg.Context,
 		arg.ExpiresAt,
 	)
 	return err
@@ -496,6 +552,19 @@ func (q *Queries) DeleteEmoji(ctx context.Context, id int64) error {
 	return err
 }
 
+const deleteExpiredPendingUsers = `-- name: DeleteExpiredPendingUsers :execrows
+DELETE FROM users
+WHERE pending_until IS NOT NULL AND pending_until < CURRENT_TIMESTAMP
+`
+
+func (q *Queries) DeleteExpiredPendingUsers(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredPendingUsers)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteExpiredThreads = `-- name: DeleteExpiredThreads :exec
 DELETE FROM threads
 WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
@@ -513,6 +582,18 @@ DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP
 func (q *Queries) DeleteExpiredWebAuthnCeremonies(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredWebAuthnCeremonies)
 	return err
+}
+
+const deletePendingUser = `-- name: DeletePendingUser :execrows
+DELETE FROM users WHERE id = ? AND pending_until IS NOT NULL
+`
+
+func (q *Queries) DeletePendingUser(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deletePendingUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deletePost = `-- name: DeletePost :exec
@@ -860,7 +941,7 @@ func (q *Queries) GetThreadByID(ctx context.Context, id int64) (GetThreadByIDRow
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users
+SELECT id, username, password_hash, is_admin, is_disabled, password_set, pending_until, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE id = ? LIMIT 1
 `
 
@@ -873,6 +954,8 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.PasswordHash,
 		&i.IsAdmin,
 		&i.IsDisabled,
+		&i.PasswordSet,
+		&i.PendingUntil,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -882,7 +965,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users
+SELECT id, username, password_hash, is_admin, is_disabled, password_set, pending_until, created_at, bio, avatar_path, avatar_nonce FROM users
 WHERE username = ? LIMIT 1
 `
 
@@ -895,6 +978,8 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.PasswordHash,
 		&i.IsAdmin,
 		&i.IsDisabled,
+		&i.PasswordSet,
+		&i.PendingUntil,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -904,7 +989,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 }
 
 const getUserByUsernameFold = `-- name: GetUserByUsernameFold :one
-SELECT id, username, password_hash, is_admin, is_disabled, created_at, bio, avatar_path, avatar_nonce FROM users WHERE username = ? COLLATE NOCASE LIMIT 1
+SELECT id, username, password_hash, is_admin, is_disabled, password_set, pending_until, created_at, bio, avatar_path, avatar_nonce FROM users WHERE username = ? COLLATE NOCASE LIMIT 1
 `
 
 // Case-insensitive lookup used only for registration uniqueness. Login stays
@@ -919,6 +1004,8 @@ func (q *Queries) GetUserByUsernameFold(ctx context.Context, username string) (U
 		&i.PasswordHash,
 		&i.IsAdmin,
 		&i.IsDisabled,
+		&i.PasswordSet,
+		&i.PendingUntil,
 		&i.CreatedAt,
 		&i.Bio,
 		&i.AvatarPath,
@@ -1608,6 +1695,7 @@ FROM users u
 LEFT JOIN user_presence p ON p.user_id = u.id
 WHERE u.username LIKE ? ESCAPE '\'
   AND u.is_disabled = 0
+  AND u.pending_until IS NULL
 ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
 LIMIT 10
 `
@@ -1654,6 +1742,7 @@ SELECT
 FROM user_presence p
 JOIN users u ON u.id = p.user_id
 WHERE p.last_seen_at >= datetime('now', '-5 minutes')
+  AND u.pending_until IS NULL
 ORDER BY p.last_seen_at DESC
 `
 
@@ -2166,7 +2255,10 @@ func (q *Queries) ListUserIDsByUsernames(ctx context.Context, usernames []string
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, is_admin, is_disabled, created_at FROM users ORDER BY id ASC
+SELECT id, username, is_admin, is_disabled, created_at
+FROM users
+WHERE pending_until IS NULL
+ORDER BY id ASC
 `
 
 type ListUsersRow struct {
@@ -2548,6 +2640,21 @@ func (q *Queries) SetUserAvatarNonce(ctx context.Context, arg SetUserAvatarNonce
 	return err
 }
 
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = ?, password_set = 1 WHERE id = ?
+`
+
+type SetUserPasswordParams struct {
+	PasswordHash string
+	ID           int64
+}
+
+// Used by the passkey-only "set a password" flow (after a fresh assertion).
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, setUserPassword, arg.PasswordHash, arg.ID)
+	return err
+}
+
 const sumUserStorageBytes = `-- name: SumUserStorageBytes :one
 SELECT
     COALESCE((
@@ -2576,7 +2683,7 @@ func (q *Queries) SumUserStorageBytes(ctx context.Context, userID int64) (int64,
 const takeWebAuthnCeremony = `-- name: TakeWebAuthnCeremony :one
 DELETE FROM webauthn_ceremonies
 WHERE id = ? AND kind = ? AND expires_at > CURRENT_TIMESTAMP
-RETURNING user_id, kind, session_data
+RETURNING user_id, kind, session_data, context
 `
 
 type TakeWebAuthnCeremonyParams struct {
@@ -2588,6 +2695,7 @@ type TakeWebAuthnCeremonyRow struct {
 	UserID      sql.NullInt64
 	Kind        string
 	SessionData []byte
+	Context     string
 }
 
 // Single use: the row is deleted and returned atomically, so a replayed or
@@ -2595,7 +2703,12 @@ type TakeWebAuthnCeremonyRow struct {
 func (q *Queries) TakeWebAuthnCeremony(ctx context.Context, arg TakeWebAuthnCeremonyParams) (TakeWebAuthnCeremonyRow, error) {
 	row := q.db.QueryRowContext(ctx, takeWebAuthnCeremony, arg.ID, arg.Kind)
 	var i TakeWebAuthnCeremonyRow
-	err := row.Scan(&i.UserID, &i.Kind, &i.SessionData)
+	err := row.Scan(
+		&i.UserID,
+		&i.Kind,
+		&i.SessionData,
+		&i.Context,
+	)
 	return i, err
 }
 

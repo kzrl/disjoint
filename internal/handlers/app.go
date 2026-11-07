@@ -437,8 +437,12 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /account/passkeys/finish", app.PasskeyRegisterFinish)
 	mux.HandleFunc("POST /account/passkeys/{id}/delete", app.PasskeyDelete)
 	mux.HandleFunc("POST /account/passkeys/{id}/name", app.PasskeyRename)
+	mux.HandleFunc("POST /account/password/passkey/begin", app.PasskeySetPasswordBegin)
+	mux.HandleFunc("POST /account/password/passkey/finish", app.PasskeySetPasswordFinish)
 	mux.Handle("POST /login/passkey/begin", authLimited(http.HandlerFunc(app.PasskeyLoginBegin)))
 	mux.Handle("POST /login/passkey/finish", authLimited(http.HandlerFunc(app.PasskeyLoginFinish)))
+	mux.Handle("POST /register/passkey/begin", authLimited(http.HandlerFunc(app.PasskeySignupBegin)))
+	mux.Handle("POST /register/passkey/finish", authLimited(http.HandlerFunc(app.PasskeySignupFinish)))
 	mux.HandleFunc("POST /account/password", app.ChangePasswordSubmit)
 	mux.HandleFunc("POST /account/sign-out-everywhere", app.SignOutEverywhereSubmit)
 

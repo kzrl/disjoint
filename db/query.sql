@@ -2,7 +2,9 @@
 SELECT id FROM users ORDER BY id ASC LIMIT 1;
 
 -- name: CountUsers :one
-SELECT COUNT(*) FROM users;
+-- Pending passkey-signup rows are not accounts yet; a half-finished signup
+-- must not satisfy the first-run check.
+SELECT COUNT(*) FROM users WHERE pending_until IS NULL;
 
 -- name: CreateUser :one
 INSERT INTO users (
@@ -373,6 +375,32 @@ UPDATE users SET is_admin = 0 WHERE id = ?;
 DELETE FROM users
 WHERE id = ?;
 
+-- name: CreatePendingUser :one
+-- A passkey-signup account exists before the authenticator answers, because
+-- WebAuthn options need a user handle. pending_until makes it invisible and
+-- unauthenticatable; the worker deletes it if the ceremony is abandoned.
+INSERT INTO users (username, password_hash, password_set, pending_until)
+VALUES (?, ?, 0, ?)
+RETURNING *;
+
+-- name: ActivatePendingUser :execrows
+-- Clears the pending marker only if it is still set (0 rows = already swept or
+-- activated), so a slow ceremony cannot revive a deleted account.
+UPDATE users
+SET pending_until = NULL, password_set = 0
+WHERE id = ? AND pending_until IS NOT NULL;
+
+-- name: DeletePendingUser :execrows
+DELETE FROM users WHERE id = ? AND pending_until IS NOT NULL;
+
+-- name: DeleteExpiredPendingUsers :execrows
+DELETE FROM users
+WHERE pending_until IS NOT NULL AND pending_until < CURRENT_TIMESTAMP;
+
+-- name: SetUserPassword :exec
+-- Used by the passkey-only "set a password" flow (after a fresh assertion).
+UPDATE users SET password_hash = ?, password_set = 1 WHERE id = ?;
+
 -- name: ListAttachmentsByUser :many
 -- Every attachment whose row disappears when this user is deleted: the
 -- user's own posts, plus every post in a thread the user started (deleting
@@ -398,7 +426,10 @@ DELETE FROM emojis
 WHERE created_by = ? AND source = 'custom';
 
 -- name: ListUsers :many
-SELECT id, username, is_admin, is_disabled, created_at FROM users ORDER BY id ASC;
+SELECT id, username, is_admin, is_disabled, created_at
+FROM users
+WHERE pending_until IS NULL
+ORDER BY id ASC;
 
 -- name: DisableUser :execrows
 -- Suspends a non-admin account. Guarded in SQL so a promote racing with a
@@ -423,6 +454,7 @@ FROM users u
 LEFT JOIN user_presence p ON p.user_id = u.id
 WHERE u.username LIKE ? ESCAPE '\'
   AND u.is_disabled = 0
+  AND u.pending_until IS NULL
 ORDER BY (p.last_seen_at IS NULL) ASC, p.last_seen_at DESC, u.username ASC
 LIMIT 10;
 
@@ -500,6 +532,7 @@ SELECT
 FROM user_presence p
 JOIN users u ON u.id = p.user_id
 WHERE p.last_seen_at >= datetime('now', '-5 minutes')
+  AND u.pending_until IS NULL
 ORDER BY p.last_seen_at DESC;
 
 -- name: GetUserPresence :one
@@ -780,15 +813,15 @@ DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?;
 SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?;
 
 -- name: CreateWebAuthnCeremony :exec
-INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, expires_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO webauthn_ceremonies (id, user_id, kind, session_data, context, expires_at)
+VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: TakeWebAuthnCeremony :one
 -- Single use: the row is deleted and returned atomically, so a replayed or
 -- concurrent finish call gets no ceremony.
 DELETE FROM webauthn_ceremonies
 WHERE id = ? AND kind = ? AND expires_at > CURRENT_TIMESTAMP
-RETURNING user_id, kind, session_data;
+RETURNING user_id, kind, session_data, context;
 
 -- name: DeleteExpiredWebAuthnCeremonies :exec
 DELETE FROM webauthn_ceremonies WHERE expires_at <= CURRENT_TIMESTAMP;

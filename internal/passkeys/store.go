@@ -24,11 +24,20 @@ type CeremonyKind string
 const (
 	CeremonyRegister CeremonyKind = "register"
 	CeremonyLogin    CeremonyKind = "login"
+	// CeremonySignup creates the account itself (passkey-only signup).
+	CeremonySignup CeremonyKind = "signup"
+	// CeremonyReauth proves a passkey from a signed-in session before a
+	// passkey-only account may set a password.
+	CeremonyReauth CeremonyKind = "reauth"
 	// ceremonyTTL is how long a challenge stays usable. Short on purpose: the
 	// user is expected to touch the authenticator immediately.
 	ceremonyTTL = 5 * time.Minute
 	// maxCredentialsPerUser bounds rows and confusion per account.
 	MaxCredentialsPerUser = 10
+	// pendingAccountTTL is how long a half-finished passkey signup keeps its
+	// username. Deliberately longer than ceremonyTTL so a slow authenticator is
+	// never raced by the sweeper.
+	pendingAccountTTL = 10 * time.Minute
 	// maxCredentialNameLength bounds the user-facing label.
 	maxCredentialNameLength = 40
 )
@@ -44,6 +53,16 @@ var (
 	ErrCredentialNotFound = errors.New("passkey not found")
 	// ErrSignCountRegression indicates a possible cloned authenticator.
 	ErrSignCountRegression = errors.New("passkey signature counter regressed")
+	// ErrInviteInvalid is returned for a missing, used, or expired invite.
+	ErrInviteInvalid = errors.New("invite is invalid or already used")
+	// ErrUsernameTaken covers both active and pending accounts.
+	ErrUsernameTaken = errors.New("username is already taken")
+	// ErrPendingAccount is returned when a ceremony targets a signup that has
+	// not finished (or was swept).
+	ErrPendingAccount = errors.New("account is not active")
+	// ErrNoCredentials is returned when re-authentication is requested for an
+	// account with no registered passkey.
+	ErrNoCredentials = errors.New("no passkeys registered")
 )
 
 // Store owns persistence for passkeys: credentials plus the short-lived
@@ -63,7 +82,7 @@ func NewStore(q *database.Queries, now func() time.Time) *Store {
 }
 
 // CreateCeremony stores sessionData under a fresh random id and returns it.
-func (s *Store) CreateCeremony(ctx context.Context, kind CeremonyKind, userID sql.NullInt64, sessionData *webauthn.SessionData) (string, error) {
+func (s *Store) CreateCeremony(ctx context.Context, kind CeremonyKind, userID sql.NullInt64, sessionData *webauthn.SessionData, ceremonyContext string) (string, error) {
 	id, err := randomToken()
 	if err != nil {
 		return "", err
@@ -77,6 +96,7 @@ func (s *Store) CreateCeremony(ctx context.Context, kind CeremonyKind, userID sq
 		UserID:      userID,
 		Kind:        string(kind),
 		SessionData: payload,
+		Context:     ceremonyContext,
 		ExpiresAt:   s.now().UTC().Add(ceremonyTTL).Round(0),
 	}); err != nil {
 		return "", fmt.Errorf("store ceremony: %w", err)
@@ -85,25 +105,25 @@ func (s *Store) CreateCeremony(ctx context.Context, kind CeremonyKind, userID sq
 }
 
 // TakeCeremony consumes a ceremony exactly once and decodes its session data.
-func (s *Store) TakeCeremony(ctx context.Context, kind CeremonyKind, id string) (*webauthn.SessionData, sql.NullInt64, error) {
+func (s *Store) TakeCeremony(ctx context.Context, kind CeremonyKind, id string) (*webauthn.SessionData, sql.NullInt64, string, error) {
 	if id == "" {
-		return nil, sql.NullInt64{}, ErrCeremony
+		return nil, sql.NullInt64{}, "", ErrCeremony
 	}
 	row, err := s.q.TakeWebAuthnCeremony(ctx, database.TakeWebAuthnCeremonyParams{
 		ID:   id,
 		Kind: string(kind),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, sql.NullInt64{}, ErrCeremony
+		return nil, sql.NullInt64{}, "", ErrCeremony
 	}
 	if err != nil {
-		return nil, sql.NullInt64{}, fmt.Errorf("take ceremony: %w", err)
+		return nil, sql.NullInt64{}, "", fmt.Errorf("take ceremony: %w", err)
 	}
 	var session webauthn.SessionData
 	if err := json.Unmarshal(row.SessionData, &session); err != nil {
-		return nil, sql.NullInt64{}, fmt.Errorf("decode ceremony: %w", err)
+		return nil, sql.NullInt64{}, "", fmt.Errorf("decode ceremony: %w", err)
 	}
-	return &session, row.UserID, nil
+	return &session, row.UserID, row.Context, nil
 }
 
 // PruneCeremonies drops expired rows; best-effort, called on every begin.

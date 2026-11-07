@@ -338,7 +338,12 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 				},
 			}); err == nil {
 				if user, err := m.queries.GetUserByID(ctx, userID); err == nil {
-					if user.IsDisabled == 1 {
+					if user.PendingUntil.Valid {
+						// A half-finished passkey signup has no sessions; if a
+						// cookie somehow points at one, treat it as anonymous.
+						_ = m.queries.DeleteSession(ctx, tokenHash)
+						auth.ClearSessionCookie(w, auth.SecureCookie(r))
+					} else if user.IsDisabled == 1 {
 						// The account was suspended while this session lived. The
 						// disable handler already purges sessions, but a concurrent
 						// request may have replayed this token: drop the row and the
@@ -367,7 +372,8 @@ func (m *Middleware) FirstRunAndAuth(next http.Handler) http.Handler {
 
 		// 3. Access Control
 		isPublicRoute := path == "/login" || path == "/register" ||
-			strings.HasPrefix(path, "/login/passkey/")
+			strings.HasPrefix(path, "/login/passkey/") ||
+			strings.HasPrefix(path, "/register/passkey/")
 
 		if currentUser == nil {
 			if isPublicRoute {

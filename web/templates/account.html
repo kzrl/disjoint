@@ -8,6 +8,7 @@
     </ul>
   </nav>
 
+  {{if .HasPassword}}
   <div class="box mb-5">
     <h1 class="title is-4 mb-2">Change password</h1>
     <p class="is-size-7 muted mb-4">
@@ -41,6 +42,35 @@
       <button type="submit" class="button is-primary">Change password</button>
     </form>
   </div>
+  {{else}}
+  <div class="box mb-5" id="set-password-box">
+    <h1 class="title is-4 mb-2">Set a password</h1>
+    <p class="is-size-7 muted mb-4">
+      This account signs in with a passkey only. Setting a password adds a second
+      way in &mdash; useful as a backup if you lose your devices. You will confirm
+      with your passkey first.
+    </p>
+    <form id="set-password-form">
+      <div class="field">
+        <label for="set_password" class="label is-size-7">New password</label>
+        <div class="control">
+          <input type="password" id="set_password" class="input" minlength="8"
+                 autocomplete="new-password" required>
+        </div>
+        <p class="help">At least 8 characters.</p>
+      </div>
+      <div class="field">
+        <label for="set_password_confirm" class="label is-size-7">Confirm new password</label>
+        <div class="control">
+          <input type="password" id="set_password_confirm" class="input" minlength="8"
+                 autocomplete="new-password" required>
+        </div>
+      </div>
+      <button type="submit" class="button is-primary" id="set-password-btn">Set password</button>
+      <p class="is-size-7 mt-2" id="set-password-status" role="status" aria-live="polite" hidden></p>
+    </form>
+  </div>
+  {{end}}
 
   {{if .PasskeysEnabled}}
   <div class="box" id="passkeys-box">
@@ -82,14 +112,21 @@
     {{end}}
 
     <form id="add-passkey-form">
+      {{if .HasPassword}}
       <div class="field">
         <label for="passkey_password" class="label is-size-7">Confirm your password to add a passkey</label>
         <div class="control">
           <input type="password" id="passkey_password" class="input" autocomplete="current-password" required>
         </div>
       </div>
+      {{else}}
+      <p class="is-size-7 muted mb-3">
+        This account has no password. Your existing passkey (Face ID, Touch ID, or
+        security key) is confirmed as part of creating the new one.
+      </p>
+      {{end}}
       <button type="submit" class="button is-primary" id="add-passkey-btn">Add passkey</button>
-      <p class="help">You will tap twice: once to confirm your password, then again to create the passkey with Face ID, Touch ID, or your security key.</p>
+      <p class="help">You will tap twice: once to prepare the passkey, then again to create it with Face ID, Touch ID, or your security key.</p>
     </form>
     <p class="is-size-7 mt-2" id="passkey-status" role="status" aria-live="polite" hidden></p>
     <noscript>
@@ -111,4 +148,4 @@
 </div>
 {{end}}
 
-{{define "scripts"}}<script src="/static/passkeys.js?v=3" defer></script>{{end}}
+{{define "scripts"}}<script src="/static/passkeys.js?v=4" defer></script>{{end}}

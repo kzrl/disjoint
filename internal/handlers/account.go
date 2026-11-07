@@ -12,6 +12,11 @@ import (
 // session revocation. Profile editing lives on the public user card.
 func (app *App) AccountPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{}
+	if user := middleware.UserFromContext(r.Context()); user != nil {
+		// Passkey-only accounts get "Set a password" (gated by an assertion)
+		// instead of the change-password form.
+		data["HasPassword"] = user.PasswordSet == 1
+	}
 	// Passkey rows are only loaded when WebAuthn is configured; the template
 	// hides the section otherwise.
 	if app.passkeys != nil {

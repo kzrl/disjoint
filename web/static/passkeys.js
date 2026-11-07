@@ -275,15 +275,16 @@
         return;
       }
 
-      // Phase 1: confirm the password and fetch the ceremony options.
-      if (!passwordInput || passwordInput.value === "") {
+      // Phase 1: confirm the password (password accounts) and fetch the
+      // ceremony options. Passkey-only accounts have no password field.
+      if (passwordInput && passwordInput.value === "") {
         status(statusEl, "Enter your current password first.", "error");
-        if (passwordInput) passwordInput.focus();
+        passwordInput.focus();
         return;
       }
       button.disabled = true;
-      status(statusEl, "Checking your password…", "ok");
-      postJSON("/account/passkeys/begin", { password: passwordInput.value })
+      status(statusEl, passwordInput ? "Checking your password…" : "Preparing passkey…", "ok");
+      postJSON("/account/passkeys/begin", passwordInput ? { password: passwordInput.value } : {})
         .then(function (data) {
           pending = { publicKey: data.publicKey, token: data.token, at: now() };
           button.textContent = "Create passkey";
@@ -298,10 +299,182 @@
     });
   }
 
+  // --- Passkey signup (invite page) --------------------------------------
+
+  function bindSignup() {
+    var form = document.getElementById("passkey-signup-form");
+    if (!form) return;
+    var usernameInput = document.getElementById("passkey_signup_username");
+    var codeInput = document.getElementById("passkey-signup-code");
+    var button = document.getElementById("passkey-signup-btn");
+    var statusEl = document.getElementById("passkey-signup-status");
+
+    if (!supported() || window.isSecureContext === false) {
+      button.disabled = true;
+      status(statusEl, "This browser cannot create passkeys. Use the password form instead.", "error");
+      return;
+    }
+
+    var pending = null;
+    var pendingValid = function () {
+      return pending && pending.publicKey && (now() - pending.at) < PENDING_TTL_MS;
+    };
+
+    function finish(cred) {
+      status(statusEl, "Creating your account…", "ok");
+      button.disabled = true;
+      postJSON("/register/passkey/finish", encodeRegistration(cred))
+        .then(function (data) {
+          window.location.assign(data.redirect || "/account");
+        })
+        .catch(function (err) {
+          pending = null;
+          button.disabled = false;
+          button.textContent = "Create account with a passkey";
+          status(statusEl, messageFor(err), "error");
+        });
+    }
+
+    button.addEventListener("click", function () {
+      // Phase 2: create() synchronously inside the tap (Safari requirement).
+      if (pendingValid()) {
+        var options = decodeCreationOptions(pending);
+        status(statusEl, "Confirm with Face ID, Touch ID, or your security key…", "ok");
+        button.disabled = true;
+        var p;
+        try {
+          p = navigator.credentials.create({ publicKey: options });
+        } catch (err) {
+          pending = null;
+          button.disabled = false;
+          button.textContent = "Create account with a passkey";
+          status(statusEl, messageFor(err), "error");
+          return;
+        }
+        p.then(finish).catch(function (err) {
+          pending = null;
+          button.disabled = false;
+          button.textContent = "Create account with a passkey";
+          status(statusEl, messageFor(err), "error");
+        });
+        return;
+      }
+
+      // Phase 1: validate the invite + username and fetch the options.
+      var username = (usernameInput && usernameInput.value || "").trim();
+      if (!/^[A-Za-z0-9]{3,32}$/.test(username)) {
+        status(statusEl, "Username must be 3-32 letters/digits only.", "error");
+        if (usernameInput) usernameInput.focus();
+        return;
+      }
+      button.disabled = true;
+      status(statusEl, "Checking your invite…", "ok");
+      postJSON("/register/passkey/begin", { code: codeInput ? codeInput.value : "", username: username })
+        .then(function (data) {
+          pending = { publicKey: data.publicKey, token: data.token, at: now() };
+          button.textContent = "Create account now";
+          button.disabled = false;
+          status(statusEl, "Invite accepted. Tap “Create account now” to finish.", "ok");
+        })
+        .catch(function (err) {
+          button.disabled = false;
+          status(statusEl, messageFor(err), "error");
+        });
+    });
+  }
+
+  // --- Set a password (passkey-only accounts) ----------------------------
+
+  function bindSetPassword() {
+    var form = document.getElementById("set-password-form");
+    if (!form) return;
+    var passwordInput = document.getElementById("set_password");
+    var confirmInput = document.getElementById("set_password_confirm");
+    var button = document.getElementById("set-password-btn");
+    var statusEl = document.getElementById("set-password-status");
+
+    if (!supported()) {
+      form.hidden = true;
+      status(statusEl, "This browser cannot verify your passkey. Use a browser with passkey support.", "error");
+      return;
+    }
+
+    var pending = null;
+    var pendingValid = function () {
+      return pending && pending.publicKey && (now() - pending.at) < PENDING_TTL_MS;
+    };
+
+    function submitWithAssertion(cred) {
+      status(statusEl, "Saving password…", "ok");
+      var body = encodeAssertion(cred);
+      body.new_password = passwordInput.value;
+      postJSON("/account/password/passkey/finish", body)
+        .then(function (data) {
+          window.location.assign(data.redirect || "/account");
+        })
+        .catch(function (err) {
+          pending = null;
+          button.disabled = false;
+          button.textContent = "Set password";
+          status(statusEl, messageFor(err), "error");
+        });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (!passwordInput || !confirmInput) return;
+      if (passwordInput.value.length < 8) {
+        status(statusEl, "Password must be at least 8 characters.", "error");
+        return;
+      }
+      if (passwordInput.value !== confirmInput.value) {
+        status(statusEl, "New password and confirmation do not match.", "error");
+        return;
+      }
+
+      if (pendingValid()) {
+        var options = decodeRequestOptions(pending);
+        status(statusEl, "Confirm with your passkey…", "ok");
+        button.disabled = true;
+        var p;
+        try {
+          p = navigator.credentials.get({ publicKey: options });
+        } catch (err) {
+          pending = null;
+          button.disabled = false;
+          status(statusEl, messageFor(err), "error");
+          return;
+        }
+        p.then(submitWithAssertion).catch(function (err) {
+          pending = null;
+          button.disabled = false;
+          status(statusEl, messageFor(err), "error");
+        });
+        return;
+      }
+
+      button.disabled = true;
+      status(statusEl, "Preparing passkey verification…", "ok");
+      postJSON("/account/password/passkey/begin", {})
+        .then(function (data) {
+          pending = { publicKey: data.publicKey, token: data.token, at: now() };
+          button.disabled = false;
+          button.textContent = "Confirm and set password";
+          status(statusEl, "Tap again to confirm with your passkey.", "ok");
+        })
+        .catch(function (err) {
+          button.disabled = false;
+          status(statusEl, messageFor(err), "error");
+        });
+    });
+  }
+
   function init() {
     try {
       bindLogin();
       bindAccount();
+      bindSignup();
+      bindSetPassword();
     } catch (err) {
       // Never leave the user with a silent, dead button.
       var el = document.getElementById("passkey-status") ||

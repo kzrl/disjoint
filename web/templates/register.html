@@ -24,6 +24,28 @@
       </div>
       <button type="submit" class="button is-primary is-fullwidth mt-2">Create Account</button>
     </form>
+
+    <div class="has-text-centered my-4"><span class="is-size-7 muted">or</span></div>
+
+    <form id="passkey-signup-form">
+      <input type="hidden" id="passkey-signup-code" value="{{.Code}}">
+      <div class="field">
+        <label for="passkey_signup_username" class="label">Username</label>
+        <div class="control">
+          <input type="text" id="passkey_signup_username" class="input" minlength="3" maxlength="32"
+                 required autocomplete="username">
+        </div>
+        <p class="help">At least 3 characters, letters and digits only.</p>
+      </div>
+      <button type="button" class="button is-secondary is-fullwidth" id="passkey-signup-btn">
+        Create account with a passkey
+      </button>
+      <p class="help">
+        No password. You will sign in with this device (or another passkey you add later);
+        an admin cannot recover the account for you if you lose every device.
+      </p>
+      <p class="is-size-7 mt-2" id="passkey-signup-status" role="status" aria-live="polite" hidden></p>
+    </form>
   </div>
 
   <div class="has-text-centered is-size-7 muted">
@@ -31,3 +53,5 @@
   </div>
 </div>
 {{end}}
+
+{{define "scripts"}}<script src="/static/passkeys.js?v=4" defer></script>{{end}}

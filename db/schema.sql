@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0,
     is_disabled INTEGER NOT NULL DEFAULT 0,
+    password_set INTEGER NOT NULL DEFAULT 1,
+    pending_until DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     bio TEXT,
     avatar_path TEXT,
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS emojis (
 );
 
 CREATE INDEX IF NOT EXISTS idx_emojis_name ON emojis(name);
+CREATE INDEX IF NOT EXISTS idx_users_pending ON users(pending_until);
 
 CREATE TABLE IF NOT EXISTS reactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,8 +165,9 @@ CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user ON webauthn_credentials
 CREATE TABLE IF NOT EXISTS webauthn_ceremonies (
     id           TEXT PRIMARY KEY,
     user_id      INTEGER,
-    kind         TEXT NOT NULL,
-    session_data BLOB NOT NULL,
+    kind         TEXT NOT NULL,               -- 'register' | 'login' | 'reauth' | 'signup'
+    session_data BLOB NOT NULL,               -- JSON of webauthn.SessionData
+    context      TEXT NOT NULL DEFAULT '',    -- signup: JSON {"invite":"..."}
     created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at   DATETIME NOT NULL
 );

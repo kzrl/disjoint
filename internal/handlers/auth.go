@@ -145,6 +145,19 @@ func (app *App) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
+	// A half-finished passkey signup is not an account yet.
+	if user.PendingUntil.Valid {
+		setFlash(w, r, "flash_error", "Invalid username or password.")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	// Passkey-only accounts have a random, unusable hash: refuse before any
+	// comparison so no password can ever match.
+	if user.PasswordSet == 0 {
+		setFlash(w, r, "flash_error", "This account signs in with a passkey. Use the passkey button.")
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
 
 	if !auth.CheckPassword(user.PasswordHash, password) {
 		setFlash(w, r, "flash_error", "Invalid username or password.")

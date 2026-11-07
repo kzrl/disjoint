@@ -98,6 +98,8 @@ type User struct {
 	PasswordHash string
 	IsAdmin      int64
 	IsDisabled   int64
+	PasswordSet  int64
+	PendingUntil sql.NullTime
 	CreatedAt    sql.NullTime
 	Bio          sql.NullString
 	AvatarPath   sql.NullString
@@ -114,6 +116,7 @@ type WebauthnCeremony struct {
 	UserID      sql.NullInt64
 	Kind        string
 	SessionData []byte
+	Context     string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
 }
