@@ -2996,6 +2996,28 @@ main.container,
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
+/* Composer preview: a bordered panel under the textarea. It is filled by
+   HTMX after the author opens the toggle; empty panels stay hidden via
+   Bulma's .is-hidden. */
+.composer-preview {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--bulma-border);
+  border-radius: var(--bulma-radius);
+  background-color: var(--bulma-scheme-main-ter);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.composer-preview .content {
+  margin-bottom: 0;
+}
+
+.composer-preview.htmx-request {
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
 /* Pending form submissions: dim the submit button and show a spinner. htmx
    adds .htmx-request to the form for the request's lifetime. */
 form.htmx-request button[type="submit"] {

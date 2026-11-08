@@ -524,6 +524,26 @@
     });
   }
 
+  // Composer preview: a [data-preview-toggle="#id"] button shows/hides the
+  // panel it points at and asks HTMX to refresh the panel only when opening.
+  // The panel carries hx-post="/preview" + hx-trigger="preview", so closing
+  // never wastes a render. Delegated so it also works on swapped content.
+  function bindComposerPreview() {
+    document.addEventListener('click', function (event) {
+      var btn = event.target.closest ? event.target.closest('[data-preview-toggle]') : null;
+      if (!btn) return;
+      var panel = document.querySelector(btn.getAttribute('data-preview-toggle'));
+      if (!panel) return;
+
+      var opening = panel.classList.contains('is-hidden');
+      panel.classList.toggle('is-hidden', !opening);
+      btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      btn.textContent = opening ? 'Hide preview' : 'Preview';
+
+      if (opening && window.htmx) window.htmx.trigger(panel, 'preview');
+    });
+  }
+
   // Quote insertion: one delegated listener on #posts-container so it also
   // works on post cards appended by HTMX. The blockquote string built here is
   // pinned by TestQuoteBlockquoteFormat in internal/markdown. Moved out of
@@ -619,6 +639,7 @@
     bindNavbar();
     bindConfirmSubmit();
     bindToggleForms();
+    bindComposerPreview();
     bindQuoteButton();
     bindHtmxLifecycle();
   }

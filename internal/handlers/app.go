@@ -28,6 +28,7 @@ type App struct {
 	staticFS        fs.FS
 	templates       map[string]*template.Template
 	postPartialTmpl *template.Template
+	previewTmpl     *template.Template
 	reactionBarTmpl *template.Template
 	inboxBellTmpl   *template.Template
 	newPostsTmpl    *template.Template
@@ -42,6 +43,8 @@ type App struct {
 	uploadLimiter *middleware.RateLimiter
 	// apiLimiter bounds search, autocomplete, and reaction requests per user.
 	apiLimiter *middleware.RateLimiter
+	// previewLimiter bounds Markdown preview renders per user.
+	previewLimiter *middleware.RateLimiter
 	// passwordLimiter bounds current-password brute force from a stolen session.
 	passwordLimiter *middleware.RateLimiter
 	// thumbLimiter bounds CPU/disk work from thumbnail requests.
@@ -67,6 +70,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		contentLimiter:  middleware.NewRateLimiter(30, 5*time.Minute),
 		uploadLimiter:   middleware.NewRateLimiter(30, 5*time.Minute),
 		apiLimiter:      middleware.NewRateLimiter(300, 5*time.Minute),
+		previewLimiter:  middleware.NewRateLimiter(120, 5*time.Minute),
 		passwordLimiter: middleware.NewRateLimiter(5, 15*time.Minute),
 		thumbLimiter:    middleware.NewRateLimiter(1200, 5*time.Minute),
 	}
@@ -227,7 +231,7 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 		// (and post_partial.html); parsed into every set so the define resolves.
 		// reaction_bar.html is parsed into every set: post_card includes the
 		// reaction bar, and post_card is included in every set.
-		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/thread_rows.html", "templates/view_switch.html", "templates/on_air.html", "templates/"+page)
+		tmpl, err := template.New("layout.html").Funcs(funcMap).ParseFS(web.Files, "templates/layout.html", "templates/link_card.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/inbox_bell.html", "templates/new_posts.html", "templates/thread_rows.html", "templates/view_switch.html", "templates/on_air.html", "templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse template %s: %w", page, err)
 		}
@@ -235,11 +239,19 @@ func NewApp(db *sql.DB, queries *database.Queries, uploadDir string) (*App, erro
 	}
 
 	// Parse post partial for HTMX reply responses
-	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/post_card.html", "templates/reaction_bar.html", "templates/post_partial.html")
+	postPartialTmpl, err := template.New("post_partial.html").Funcs(funcMap).ParseFS(web.Files, "templates/link_card.html", "templates/post_card.html", "templates/reaction_bar.html", "templates/post_partial.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse post_partial template: %w", err)
 	}
 	app.postPartialTmpl = postPartialTmpl
+
+	// Parse the Markdown preview fragment on its own. It shares the link-card
+	// partial with post_card, so a preview and a published post cannot drift.
+	previewTmpl, err := template.New("preview.html").Funcs(funcMap).ParseFS(web.Files, "templates/link_card.html", "templates/preview.html")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse preview template: %w", err)
+	}
+	app.previewTmpl = previewTmpl
 
 	// Parse the reaction bar partial for reaction-toggle responses
 	reactionBarTmpl, err := template.New("reaction_bar.html").Funcs(funcMap).ParseFS(web.Files, "templates/reaction_bar.html")
@@ -413,6 +425,10 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/enable", app.EnableUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/delete", app.DeleteUserSubmit)
 	mux.HandleFunc("POST /admin/users/{id}/reset-link", app.CreateResetLinkSubmit)
+
+	// Markdown preview for the composers (read-only; renders the same pipeline
+	// and link card as a published post).
+	mux.HandleFunc("POST /preview", app.PreviewSubmit)
 
 	// Image wall (read-only view over image attachments on live threads)
 	mux.HandleFunc("GET /gallery", app.GalleryPage)

@@ -35,6 +35,15 @@
       </div>
 
       <div class="field">
+        <button type="button" class="button is-small is-secondary"
+                data-preview-toggle="#preview-new-thread"
+                aria-controls="preview-new-thread" aria-expanded="false">Preview</button>
+        <div id="preview-new-thread" class="composer-preview is-hidden" aria-live="polite"
+             hx-post="/preview" hx-trigger="preview" hx-target="this"
+             hx-swap="innerHTML" hx-params="body,url" hx-sync="this:replace"></div>
+      </div>
+
+      <div class="field">
         <label for="expiration" class="label">Thread Lifespan / Expiration</label>
         <div class="control">
           <div class="select">

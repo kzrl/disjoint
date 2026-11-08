@@ -1,0 +1,17 @@
+{{define "preview"}}
+<div class="preview-render">
+  <div class="is-size-7 is-uppercase muted mb-2">Preview</div>
+  {{if .Error}}
+    <p class="notification is-danger is-light is-small mb-3" role="alert">{{.Error}}</p>
+  {{end}}
+  {{if .Body}}
+    <div class="content is-medium">{{renderMarkdown .Body}}</div>
+  {{end}}
+  {{if .Url}}
+    {{template "link_card" .}}
+  {{end}}
+  {{if and (not .Body) (not .Url) (not .Error)}}
+    <p class="muted is-size-7 mb-0">Nothing to preview yet.</p>
+  {{end}}
+</div>
+{{end}}
