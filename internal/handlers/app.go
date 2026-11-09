@@ -441,8 +441,9 @@ func (app *App) Routes() http.Handler {
 	mux.HandleFunc("POST /emojis", app.CreateEmojiSubmit)
 	mux.HandleFunc("POST /emojis/{id}/delete", app.DeleteEmojiSubmit)
 
-	// Front page & threads
+	// Home (gallery by default), thread list, and threads
 	mux.HandleFunc("GET /", app.IndexPage)
+	mux.HandleFunc("GET /threads", app.ThreadsPage)
 	mux.HandleFunc("GET /search", app.SearchPage)
 	mux.HandleFunc("GET /threads/new", app.NewThreadPage)
 	mux.HandleFunc("POST /threads/new", app.CreateThreadSubmit)

@@ -11,7 +11,7 @@ import (
 	"disjoint/internal/database"
 )
 
-// The front page badges threads whose opening post carries a first-class link,
+// The thread list badges threads whose opening post carries a first-class link,
 // so a reader can spot linked threads without opening them.
 func TestFrontPageLinkBadge(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
@@ -55,8 +55,8 @@ func TestFrontPageLinkBadge(t *testing.T) {
 		return rr.Body.String()
 	}
 
-	// Both the plain front page and the search view use the same row builder.
-	for _, target := range []string{"/", "/?q=Thread"} {
+	// Both the plain thread list and the search view use the same row builder.
+	for _, target := range []string{"/threads", "/threads?q=Thread"} {
 		page := get(target)
 		if !strings.Contains(page, `class="board-link-icon"`) {
 			t.Errorf("%s: missing the link badge", target)

@@ -841,7 +841,7 @@ func TestExpiringThreadsAndWorkerCleanup(t *testing.T) {
 }
 
 // TestFrontPageExpiryBadge pins the clutter rule: the TTL badge only appears
-// on front-page rows whose thread expires within the urgency window; threads
+// on thread-list rows whose thread expires within the urgency window; threads
 // with days left show no badge at all.
 func TestFrontPageExpiryBadge(t *testing.T) {
 	app, db, queries, _ := setupTestApp(t)
@@ -891,18 +891,18 @@ func TestFrontPageExpiryBadge(t *testing.T) {
 	newThread("urgent thread", time.Now().Add(5*time.Hour))
 	newThread("long-lived thread", time.Now().Add(72*time.Hour))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/threads", nil)
 	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token, Path: "/"})
 	rr := httptest.NewRecorder()
 	app.Routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("expected front page 200, got %d", rr.Code)
+		t.Fatalf("expected home page 200, got %d", rr.Code)
 	}
 	page := rr.Body.String()
 
 	for _, title := range []string{"urgent thread", "long-lived thread"} {
 		if !strings.Contains(page, title) {
-			t.Fatalf("front page missing %q", title)
+			t.Fatalf("thread list missing %q", title)
 		}
 	}
 	if c := strings.Count(page, "&#x23F3;"); c != 1 {
@@ -948,7 +948,7 @@ func TestFooterBuildCommit(t *testing.T) {
 	rr := httptest.NewRecorder()
 	app.Routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("expected front page 200, got %d", rr.Code)
+		t.Fatalf("expected home page 200, got %d", rr.Code)
 	}
 	if strings.Contains(rr.Body.String(), "github.com/kzrl/disjoint/commit/") {
 		t.Errorf("footer must not show a commit link for the default dev build")
@@ -960,7 +960,7 @@ func TestFooterBuildCommit(t *testing.T) {
 	rr = httptest.NewRecorder()
 	app.Routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("expected front page 200, got %d", rr.Code)
+		t.Fatalf("expected home page 200, got %d", rr.Code)
 	}
 	want := `<a class="is-size-7" href="https://github.com/kzrl/disjoint/commit/abc1234" title="View this build's commit">abc1234</a>`
 	if !strings.Contains(rr.Body.String(), want) {
@@ -2903,7 +2903,7 @@ func TestFrontPageReactions(t *testing.T) {
 
 	getFront := func(c *http.Cookie) string {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/threads", nil)
 		if c != nil {
 			req.AddCookie(c)
 		}
@@ -2915,21 +2915,21 @@ func TestFrontPageReactions(t *testing.T) {
 		return rr.Body.String()
 	}
 
-	// 1. ally's front page: thread A's row carries both of her chips
+	// 1. ally's thread list: thread A's row carries both of her chips
 	//    (active), the grouped joy count, and a full picker; thread B's
 	//    row has a bare bar.
 	page := getFront(allyCookie)
 	if got := strings.Count(page, `class="reaction-chip is-active"`); got != 2 {
-		t.Errorf("expected 2 active chips on the front page, got %d", got)
+		t.Errorf("expected 2 active chips on the thread list, got %d", got)
 	}
 	if !strings.Contains(page, `title="Reacted by: fp_ally, fp_bob (you)"`) {
-		t.Errorf("front-page joy chip tooltip should list both reactants")
+		t.Errorf("thread-list joy chip tooltip should list both reactants")
 	}
 	if !strings.Contains(page, `<img class="emoji-img" src="/uploads/fp-custom.png"`) {
 		t.Errorf("custom reaction chip missing <img>")
 	}
 	if !strings.Contains(page, `hx-post="/posts/`+strconv.FormatInt(postA.ID, 10)+`/reactions"`) {
-		t.Errorf("front-page chips missing hx-post to the opening post")
+		t.Errorf("thread-list chips missing hx-post to the opening post")
 	}
 	// Both rows carry a picker (thread B has no chips but can still react).
 	if got := strings.Count(page, `class="emoji-picker is-hidden"`); got != 2 {
@@ -2945,10 +2945,10 @@ func TestFrontPageReactions(t *testing.T) {
 		t.Errorf("expected 1 active chip for bob, got %d", got)
 	}
 	if !strings.Contains(page, `title="Reacted by: fp_ally, fp_bob (you)"`) {
-		t.Errorf("bob's front-page view should list the same reactants with himself marked")
+		t.Errorf("bob's thread-list view should list the same reactants with himself marked")
 	}
 
-	// 3. Toggling from the front page uses the same endpoint and returns
+	// 3. Toggling from the thread list uses the same endpoint and returns
 	//    the bar for the swap.
 	form := url.Values{"emoji_id": {strconv.FormatInt(custom.ID, 10)}}
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/posts/%d/reactions", postA.ID),
@@ -2959,7 +2959,7 @@ func TestFrontPageReactions(t *testing.T) {
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `class="reaction-bar"`) {
-		t.Errorf("toggle from the front page failed: %d %s", rr.Code, rr.Body.String())
+		t.Errorf("toggle from the thread list failed: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -3046,7 +3046,7 @@ func TestFrontPageImageStrips(t *testing.T) {
 		t.Fatalf("expected reply 200, got %d, body: %s", rr.Code, rr.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/threads", nil)
 	req.AddCookie(authCookie)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -3074,13 +3074,13 @@ func TestFrontPageImageStrips(t *testing.T) {
 	// Non-image attachments and reply images are never in a strip.
 	for _, unwanted := range []string{"notes.txt", "reply.png"} {
 		if strings.Contains(page, `alt="`+unwanted+`"`) {
-			t.Errorf("front-page strip must not contain %s", unwanted)
+			t.Errorf("thread-list strip must not contain %s", unwanted)
 		}
 	}
 	// Thread B's row (bounded by the board-row divs) has no strip at all.
 	titleIdx := strings.Index(page, "strip b")
 	if titleIdx < 0 {
-		t.Fatal("thread B missing from the front page")
+		t.Fatal("thread B missing from the thread list")
 	}
 	rowStart := strings.LastIndex(page[:titleIdx], `<div class="board-row">`)
 	rowEnd := strings.Index(page[titleIdx:], `<div class="board-row">`)
@@ -3163,7 +3163,7 @@ func TestPostURLField(t *testing.T) {
 			t.Errorf("invalid url %q: expected redirect back to /threads/new, got %d %q", bad, rr.Code, rr.Header().Get("Location"))
 		}
 	}
-	frontReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	frontReq := httptest.NewRequest(http.MethodGet, "/threads", nil)
 	frontReq.AddCookie(allyCookie)
 	frontRR := httptest.NewRecorder()
 	router.ServeHTTP(frontRR, frontReq)
@@ -3543,8 +3543,8 @@ func TestThreadTitleEditing(t *testing.T) {
 		t.Errorf("title not trimmed+stored: %q", got.Title)
 	}
 
-	// 2. New title renders on the thread page and the front page.
-	for _, path := range []string{fmt.Sprintf("/threads/%d", thread.ID), "/"} {
+	// 2. New title renders on the thread page and the thread list.
+	for _, path := range []string{fmt.Sprintf("/threads/%d", thread.ID), "/threads"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(authorCookie)
 		rr = httptest.NewRecorder()
@@ -4068,7 +4068,7 @@ func TestUnreadThreadIndicators(t *testing.T) {
 
 	unreadDots := func(cookie *http.Cookie) int {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/threads", nil)
 		if cookie != nil {
 			req.AddCookie(cookie)
 		}
@@ -5294,13 +5294,13 @@ func TestThumbnailTemplates(t *testing.T) {
 		}
 	}
 
-	// The front-page strip uses the small variant (tiles are ~144px).
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	// The thread-list strip uses the small variant (tiles are ~144px).
+	req = httptest.NewRequest(http.MethodGet, "/threads", nil)
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if !strings.Contains(rr.Body.String(), `src="/thumbs/`+storagePath+`?w=320"`) {
-		t.Errorf("front-page strip should request the 320px variant")
+		t.Errorf("thread-list strip should request the 320px variant")
 	}
 }
 
@@ -5421,15 +5421,15 @@ func TestLightboxNavigationMarkup(t *testing.T) {
 
 	// The dialog lives in the shared layout, so it is present on other pages
 	// too; navigation is simply inactive outside a group.
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/threads", nil)
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	front := rr.Body.String()
 	if !strings.Contains(front, `id="lightbox"`) {
-		t.Errorf("front page should still carry the shared dialog")
+		t.Errorf("thread list should still carry the shared dialog")
 	}
 	if strings.Contains(front, "data-lightbox-group") {
-		t.Errorf("the front page is not a lightbox group; its strip links to the thread")
+		t.Errorf("the thread list is not a lightbox group; its strip links to the thread")
 	}
 }

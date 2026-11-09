@@ -12,15 +12,15 @@ Built with Go, SQLite, sqlc, HTMX, and Bulma.
 
 ## Some of the features
 
-- **Front Page**: Every thread lives on the front page, sorted by creation date (newest first). No weird algorithms designed to steal your attention.
+- **Gallery Home**: The front page is the community image wall — every image on a live thread, newest first.
+
+- **Threads**: `/threads` lists every thread, sorted by creation date (newest first). No weird algorithms designed to steal your attention.
 
 - **Expiring Threads (TTL)**: Set lifespans for threads (24h, 3d, 7d, 30d, or Never). Every new comment pushes the deadline out by the chosen lifespan, so active discussions continue and old posts disappear.
 
 - **Composer Preview**: Preview Markdown and the optional link card before posting from the new-thread, reply, and edit forms.
 
 - **Image Viewer**: Click any image in a thread to browse every image in that thread — on-screen arrows, ←/→ and Home/End, or a horizontal swipe on touch.
-
-- **Image Gallery**: `/gallery` collects every image on threads.
 
 - **@User Mentions**: `@username` tokens in posts (and bios) render as links to that user's card.
 

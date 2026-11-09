@@ -35,11 +35,11 @@
       {{if or (gt .Page 1) .HasNext}}
       <div class="pagination-wrap py-3 px-4 has-text-centered">
         {{if gt .Page 1}}
-          <a class="button is-secondary is-small" href="/gallery?page={{sub .Page 1}}">&larr; Prev</a>
+          <a class="button is-secondary is-small" href="{{.Base}}?page={{sub .Page 1}}">&larr; Prev</a>
         {{end}}
         {{if gt .Page 1}}<span class="is-size-7 muted px-2">Page {{.Page}}</span>{{end}}
         {{if .HasNext}}
-          <a class="button is-secondary is-small" href="/gallery?page={{add .Page 1}}">Next &rarr;</a>
+          <a class="button is-secondary is-small" href="{{.Base}}?page={{add .Page 1}}">Next &rarr;</a>
         {{end}}
       </div>
       {{end}}

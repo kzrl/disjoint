@@ -18,7 +18,7 @@
       <div class="forum-section py-6 has-text-centered">
         {{if .Query}}
           <p class="muted mb-4">No threads match “{{.Query}}”.</p>
-          <a href="/" class="button is-secondary">Show all threads</a>
+          <a href="/threads" class="button is-secondary">Show all threads</a>
         {{else}}
           <p class="muted mb-4">It's quiet in here. Be the first to break the silence.</p>
           {{if .CurrentUser}}

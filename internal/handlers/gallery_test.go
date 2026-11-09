@@ -79,7 +79,7 @@ func TestGalleryRequiresLoginAndEmptyState(t *testing.T) {
 	cookie := authCookieFor(t, queries, user.ID)
 
 	// Guests are redirected to login (the first-run check is already satisfied).
-	req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
@@ -87,7 +87,7 @@ func TestGalleryRequiresLoginAndEmptyState(t *testing.T) {
 	}
 
 	// An empty wall has a dedicated empty state and no grid.
-	req = httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -101,7 +101,7 @@ func TestGalleryRequiresLoginAndEmptyState(t *testing.T) {
 	if strings.Contains(body, `class="gallery-grid"`) {
 		t.Error("empty gallery must not render the grid")
 	}
-	if !strings.Contains(body, `href="/gallery" class="navbar-item">Gallery`) {
+	if !strings.Contains(body, `href="/" class="navbar-item">Gallery`) {
 		t.Error("navbar missing Gallery link")
 	}
 	if !strings.Contains(body, `class="on-air-user"`) || !strings.Contains(body, user.Username) {
@@ -128,35 +128,44 @@ func TestFrontPageViewToggle(t *testing.T) {
 		return rr.Body.String()
 	}
 
-	threads := get("/")
-	if !strings.Contains(threads, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
-		t.Error("front page missing Bulma tabs switch")
+	gallery := get("/")
+	if !strings.Contains(gallery, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
+		t.Error("gallery home missing Bulma tabs switch")
 	}
-	if !strings.Contains(threads, `aria-label="Front page view"`) {
-		t.Error("front page switch missing accessible label")
+	if !strings.Contains(gallery, `aria-label="Front page view"`) {
+		t.Error("gallery home switch missing accessible label")
 	}
-	if !strings.Contains(threads, `<a href="/" aria-current="page">Threads</a>`) {
-		t.Error("front page should mark Threads as the active view")
+	if !strings.Contains(gallery, `<a href="/" aria-current="page">Gallery</a>`) {
+		t.Error("index should mark Gallery as the active view by default")
 	}
-	if !strings.Contains(threads, `<a href="/gallery">Gallery</a>`) {
-		t.Error("front page switch missing Gallery link")
+	if !strings.Contains(gallery, `<a href="/threads">Threads</a>`) {
+		t.Error("gallery home switch missing Threads link")
 	}
-	if strings.Contains(threads, `<a href="/gallery" aria-current="page">`) {
-		t.Error("front page must not mark Gallery as active")
+	if strings.Contains(gallery, `<a href="/threads" aria-current="page">`) {
+		t.Error("gallery home must not mark Threads as active")
 	}
 
-	gallery := get("/gallery")
-	if !strings.Contains(gallery, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
-		t.Error("gallery missing Bulma tabs switch")
+	threads := get("/threads")
+	if !strings.Contains(threads, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
+		t.Error("thread list missing Bulma tabs switch")
 	}
-	if !strings.Contains(gallery, `<a href="/gallery" aria-current="page">Gallery</a>`) {
-		t.Error("gallery should mark Gallery as the active view")
+	if !strings.Contains(threads, `<a href="/threads" aria-current="page">Threads</a>`) {
+		t.Error("thread list should mark Threads as the active view")
 	}
-	if !strings.Contains(gallery, `<a href="/">Threads</a>`) {
-		t.Error("gallery switch missing Threads link")
+	if !strings.Contains(threads, `<a href="/">Gallery</a>`) {
+		t.Error("thread list switch missing Gallery link")
 	}
-	if strings.Contains(gallery, `<a href="/" aria-current="page">`) {
-		t.Error("gallery must not mark Threads as active")
+	if strings.Contains(threads, `<a href="/" aria-current="page">`) {
+		t.Error("thread list must not mark Gallery as active")
+	}
+
+	// The old gallery URL is a permanent redirect to the canonical home.
+	req := httptest.NewRequest(http.MethodGet, "/gallery?page=3", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusMovedPermanently || rr.Header().Get("Location") != "/?page=3" {
+		t.Fatalf("GET /gallery?page=3 = %d to %q, want 301 to /?page=3", rr.Code, rr.Header().Get("Location"))
 	}
 }
 
@@ -182,7 +191,7 @@ func TestGalleryListsOpeningAndReplyImages(t *testing.T) {
 	galleryAttachment(t, queries, uploadDir, opening.ID, "document.pdf", "application/pdf")
 	galleryAttachment(t, queries, uploadDir, opening.ID, "clip.mp4", "video/mp4")
 
-	req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -242,7 +251,7 @@ func TestGalleryExcludesExpiredThreadsAndWorkerPurge(t *testing.T) {
 
 	get := func() string {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(cookie)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
@@ -300,12 +309,12 @@ func TestGalleryPagination(t *testing.T) {
 
 	get := func(page int) string {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/gallery?page=%d", page), nil)
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/?page=%d", page), nil)
 		req.AddCookie(cookie)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
-			t.Fatalf("GET /gallery?page=%d = %d", page, rr.Code)
+			t.Fatalf("GET /?page=%d = %d", page, rr.Code)
 		}
 		return rr.Body.String()
 	}
@@ -314,7 +323,7 @@ func TestGalleryPagination(t *testing.T) {
 	if got := strings.Count(first, `class="gallery-tile"`); got != 48 {
 		t.Errorf("page 1 tiles = %d, want 48", got)
 	}
-	if !strings.Contains(first, `href="/gallery?page=2"`) {
+	if !strings.Contains(first, `href="/?page=2"`) {
 		t.Error("page 1 missing Next link")
 	}
 
@@ -322,10 +331,10 @@ func TestGalleryPagination(t *testing.T) {
 	if got := strings.Count(second, `class="gallery-tile"`); got != 1 {
 		t.Errorf("page 2 tiles = %d, want 1", got)
 	}
-	if !strings.Contains(second, `href="/gallery?page=1"`) {
+	if !strings.Contains(second, `href="/?page=1"`) {
 		t.Error("page 2 missing Prev link")
 	}
-	if strings.Contains(second, `href="/gallery?page=3"`) {
+	if strings.Contains(second, `href="/?page=3"`) {
 		t.Error("page 2 must not offer Next for the last page")
 	}
 
@@ -370,7 +379,7 @@ func TestGalleryReactions(t *testing.T) {
 
 	get := func(cookie *http.Cookie) string {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "/gallery", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(cookie)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
@@ -562,7 +571,7 @@ func TestThreadPageImageReactions(t *testing.T) {
 	}
 
 	// The gallery shows the same reaction.
-	req = httptest.NewRequest(http.MethodGet, "/gallery", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(reactorCookie)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)

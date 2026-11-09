@@ -29,10 +29,21 @@ type GalleryImage struct {
 	Emojis    []database.ListAllEmojisRow
 }
 
-// GalleryPage renders every image attachment on a live thread, newest upload
-// first. Reply images are included on purpose: the front-page strip only
-// previews opening posts, while this is the browsing surface.
+// GalleryPage keeps the old /gallery URL working by redirecting it to the
+// canonical home, preserving pagination.
 func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
+	target := "/"
+	if raw := r.URL.RawQuery; raw != "" {
+		target += "?" + raw
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+// renderGallery renders every image attachment on a live thread, newest upload
+// first. Reply images are included on purpose: the thread-list strip only
+// previews opening posts, while this is the browsing surface. base is the
+// canonical URL used by pagination (e.g. "/" for the home).
+func (app *App) renderGallery(w http.ResponseWriter, r *http.Request, base string) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -84,6 +95,7 @@ func (app *App) GalleryPage(w http.ResponseWriter, r *http.Request) {
 		"Online":  online,
 		"Page":    page,
 		"HasNext": len(rows) == galleryPageSize,
+		"Base":    base,
 		"View":    "gallery",
 	}, "Gallery")
 }

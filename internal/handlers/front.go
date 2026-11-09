@@ -213,10 +213,25 @@ func (app *App) loadThreadItems(ctx context.Context, viewer *database.User, page
 	return items, len(rows) == frontPagePageSize, nil
 }
 
-// IndexPage renders the global front page: all non-expired threads sorted
-// by created date (newest first), each with a preview of its most recent
-// comment. Replaces the old per-board index.
+// IndexPage renders the canonical home: the image wall. The thread list lives
+// at /threads. A ?q= on / still renders the thread results page so old
+// front-page search URLs keep working.
 func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("q")) != "" {
+		app.threadsPage(w, r)
+		return
+	}
+	app.renderGallery(w, r, "/")
+}
+
+// ThreadsPage renders the global thread list: all non-expired threads sorted
+// by created date (newest first), each with a preview of its most recent
+// comment.
+func (app *App) ThreadsPage(w http.ResponseWriter, r *http.Request) {
+	app.threadsPage(w, r)
+}
+
+func (app *App) threadsPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Defense-in-depth: the middleware normally guarantees this, but the
@@ -265,9 +280,9 @@ func (app *App) IndexPage(w http.ResponseWriter, r *http.Request) {
 		"Page":    page,
 		"HasNext": hasNext,
 		"Query":   query,
-		"Base":    "/",
+		"Base":    "/threads",
 		"View":    "threads",
-	}, "Front Page")
+	}, "Threads")
 }
 
 // SearchPage renders the dedicated search view. It reuses the front page's
