@@ -144,6 +144,12 @@ func TestFrontPageViewToggle(t *testing.T) {
 	if strings.Contains(gallery, `<a href="/threads" aria-current="page">`) {
 		t.Error("gallery home must not mark Threads as active")
 	}
+	switchStart := strings.Index(gallery, `aria-label="Front page view"`)
+	switchEnd := strings.Index(gallery[switchStart:], "</nav>")
+	switchHTML := gallery[switchStart : switchStart+switchEnd]
+	if strings.Index(switchHTML, ">Gallery</a>") > strings.Index(switchHTML, ">Threads</a>") {
+		t.Error("view switch should show Gallery before Threads")
+	}
 
 	threads := get("/threads")
 	if !strings.Contains(threads, `class="tabs is-toggle is-toggle-rounded is-fullwidth"`) {
