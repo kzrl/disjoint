@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Disjoint
 # Stage 1: Build static binary
-FROM golang:1.27.3-alpine AS builder
+FROM golang:1.27.4-alpine AS builder
 
 WORKDIR /src
 
